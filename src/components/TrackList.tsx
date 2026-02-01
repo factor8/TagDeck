@@ -591,7 +591,11 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
                                         onClick={() => onSelect(row.original)}
                                         style={{ 
                                             borderBottom: '1px solid var(--bg-secondary)',
-                                            background: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                            background: isSelected 
+                                                ? 'rgba(59, 130, 246, 0.15)' 
+                                                : virtualRow.index % 2 === 1 
+                                                    ? 'rgba(255, 255, 255, 0.02)'
+                                                    : 'transparent',
                                             color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)',
                                             cursor: 'pointer'
                                         }}
@@ -599,7 +603,7 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
                                             if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
                                         }}
                                         onMouseLeave={(e) => {
-                                            if (!isSelected) e.currentTarget.style.background = 'transparent';
+                                            if (!isSelected) e.currentTarget.style.background = virtualRow.index % 2 === 1 ? 'rgba(255, 255, 255, 0.02)' : 'transparent';
                                         }}
                                     >
                                         {row.getVisibleCells().map(cell => (

@@ -187,12 +187,16 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
             color: selectedPlaylistId === null ? '#fff' : 'var(--text-primary)',
             display: 'flex',
             alignItems: 'center',
-            gap: '8px'
+            gap: '6px'
           }}
         >
           <div style={{ width: 14 }} /> 
           <ListMusic size={16} /> 
-          <span>All Tracks</span>
+          <span style={{ 
+              whiteSpace: 'nowrap', 
+              overflow: 'hidden', 
+              textOverflow: 'ellipsis'
+          }}>All Tracks</span>
         </div>
         
         <div style={{ 
