@@ -193,6 +193,34 @@ export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds,
         });
     }, [tracks, searchTerm, allowedTrackIds]);
 
+    // Select All Shortcut
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+                e.preventDefault();
+                const allIds = new Set(filteredTracks.map(t => t.id));
+                // Only select if we have tracks
+                if (allIds.size > 0) {
+                    // Maintain the last selected track if it's in the list, otherwise pick the first one
+                    let primaryId = lastSelectedTrackId;
+                    let primaryTrack = null;
+
+                    if (!primaryId || !allIds.has(primaryId)) {
+                        primaryId = filteredTracks[0].id;
+                        primaryTrack = filteredTracks[0];
+                    } else {
+                        primaryTrack = filteredTracks.find(t => t.id === primaryId) || filteredTracks[0];
+                    }
+
+                    onSelectionChange(allIds, primaryId, primaryTrack);
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [filteredTracks, lastSelectedTrackId, onSelectionChange]);
+
     // Persistence Helper
     const loadState = <T,>(key: string, defaultVal: T): T => {
         try {
@@ -640,7 +668,9 @@ export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds,
                                                     ? 'rgba(255, 255, 255, 0.02)'
                                                     : 'transparent',
                                             color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)',
-                                            cursor: 'pointer'
+                                            cursor: 'pointer',
+                                            userSelect: 'none',
+                                            WebkitUserSelect: 'none'
                                         }}
                                         onMouseEnter={(e) => {
                                             if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';

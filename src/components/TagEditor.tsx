@@ -180,14 +180,29 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
 
                 if (idsToUpdate.length === 0) return;
 
-                // Fire and forget batch update
-                invoke('batch_add_tag', { ids: idsToUpdate, tag: val })
+                // Determine Toggle Mode:
+                // If current primary track HAS the tag -> REMOVE from ALL
+                // If current primary track DOES NOT have the tag -> ADD to ALL
+                
+                // Case-insensitive check against current state representing primary track
+                const isPresent = tags.some(t => t.toLowerCase() === val.toLowerCase());
+                
+                const command = isPresent ? 'batch_remove_tag' : 'batch_add_tag';
+                
+                console.log(`Executing ${command} on ${idsToUpdate.length} tracks for tag: ${val}`);
+
+                invoke(command, { ids: idsToUpdate, tag: val })
                     .then(() => {
-                         // Optimistic update if single track
-                         if (idsToUpdate.length === 1 && track) {
+                         // Optimistic update for Primary Track (UI feedback)
+                         if (track) {
                              setTags(prev => {
-                                 const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
-                                 return exists ? prev : [...prev, val];
+                                 if (isPresent) {
+                                     // Remove
+                                     return prev.filter(t => t.toLowerCase() !== val.toLowerCase());
+                                 } else {
+                                     // Add
+                                     return [...prev, val];
+                                 }
                              });
                          }
                          onUpdate();

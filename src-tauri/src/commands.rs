@@ -215,6 +215,82 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
 }
 
 #[tauri::command]
+pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState>) -> Result<(), String> {
+    let raw_tag = tag.trim();
+    if raw_tag.is_empty() {
+        return Ok(());
+    }
+    
+    // Lock briefly to get tracks
+    let mut tracks_to_update = Vec::new();
+    {
+        let db_mutex = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        for id in &ids {
+            if let Ok(Some(track)) = db_mutex.get_track(*id) {
+                tracks_to_update.push(track);
+            }
+        }
+    } // Drop lock
+
+    for mut track in tracks_to_update {
+        // Parse Comments
+        let current_comment = track.comment_raw.clone().unwrap_or_default();
+        let (user_comment, tag_block) = if let Some(idx) = current_comment.find(" && ") {
+            (&current_comment[..idx], &current_comment[idx + 4..])
+        } else {
+            (current_comment.as_str(), "")
+        };
+
+        // Filter OUT the tag
+        let mut tags: Vec<String> = tag_block.split(';')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        
+        let initial_len = tags.len();
+        tags.retain(|t| t.to_lowercase() != raw_tag.to_lowercase());
+        
+        // If changed
+        if tags.len() != initial_len {
+            // Reconstruct
+            let new_tag_block = tags.join("; ");
+            let new_full_comment = if !new_tag_block.is_empty() {
+                if user_comment.is_empty() {
+                     format!(" && {}", new_tag_block)
+                } else {
+                     format!("{} && {}", user_comment, new_tag_block)
+                }
+            } else {
+                user_comment.to_string()
+            };
+
+            // WRITE
+            if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
+                println!("Failed to write file {}: {}", track.id, e);
+                continue; 
+            }
+
+            // DB
+            track.comment_raw = Some(new_full_comment.clone());
+            {
+                if let Ok(db) = state.db.lock() {
+                    let _ = db.update_track(&track);
+                }
+            }
+
+            // Music.app
+             if !track.persistent_id.is_empty() {
+                 let _ = update_track_comment(&track.persistent_id, &new_full_comment);
+             } else {
+                 let _ = touch_file(&track.file_path);
+             }
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn import_from_music_app(state: State<'_, AppState>) -> Result<usize, String> {
     println!("Importing from Music.app...");
 
