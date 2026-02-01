@@ -111,15 +111,9 @@ pub async fn write_tags(
         .db
         .lock()
         .map_err(|_| "Failed to lock DB".to_string())?;
-    // We need a way to get a single track. For now, let's reuse get_all or add a get_track.
-    // Optimization: Just add get_track_by_id to DB.
-
-    // For now, let's iterate (hacky but works for small test).
-    // REAL fix: Add get_track to DB.
-    let tracks = db.get_all_tracks().map_err(|e| e.to_string())?;
-    let track = tracks
-        .into_iter()
-        .find(|t| t.id == id)
+    
+    // Using get_track now that it exists
+    let mut track = db.get_track(id).map_err(|e| e.to_string())?
         .ok_or("Track not found")?;
 
     // 2. Write to File
@@ -135,22 +129,87 @@ pub async fn write_tags(
          println!("Warning: Failed to update track in Music: {}", e);
     }
 
-    // 3. Update DB (partial update)
-    // We strictly assume new_tags is the FULL comment field content.
-    // We do NOT update grouping anymore as requested.
-    // But we need to update comment_raw.
+    // 3. Update DB
+    track.comment_raw = Some(new_tags);
+    db.update_track(&track).map_err(|e| e.to_string())?;
 
-    // We should probably leave grouping_raw AS IS in the DB,
-    // but the current update_track_metadata requires both.
+    Ok(())
+}
 
-    // Let's modify DB to allow partial update or just pass the existing grouping if we knew it?
-    // Current helper: update_track_metadata(id, comment, grouping)
-    // We don't have the OLD grouping here unless we query it again or modify the helper.
-    // Hack: Just pass empty string? No, that might wipe it in the UI table (though it's backup).
-    // Better: Update the DB helper to ONLY update comment.
+#[tauri::command]
+pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState>) -> Result<(), String> {
+    let raw_tag = tag.trim();
+    if raw_tag.is_empty() {
+        return Ok(());
+    }
 
-    db.update_track_metadata(id, &new_tags)
-        .map_err(|e| e.to_string())?;
+    let db_mutex = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    
+    // Collect tracks to avoid holding lock too long if we needed to, but here we need lock for update anyway
+    // Or we iterate one by one. For safety/simplicity let's get all tracks first.
+    let mut tracks_to_update = Vec::new();
+
+    for id in &ids {
+        if let Ok(Some(track)) = db_mutex.get_track(*id) {
+             tracks_to_update.push(track);
+        }
+    }
+    // Drop lock to perform file IO
+    drop(db_mutex); 
+
+    for mut track in tracks_to_update {
+        let current_comment = track.comment_raw.clone().unwrap_or_default();
+        let (user_comment, tag_block) = if let Some(idx) = current_comment.find(" && ") {
+            (&current_comment[..idx], &current_comment[idx + 4..])
+        } else {
+            (current_comment.as_str(), "")
+        };
+
+        // Check if exists
+        let mut tags: Vec<String> = tag_block.split(';')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+
+        // Case insensitive check
+        if !tags.iter().any(|t| t.to_lowercase() == raw_tag.to_lowercase()) {
+            tags.push(raw_tag.to_string());
+            
+            // Reconstruct
+            let new_tag_block = tags.join("; ");
+            let new_full_comment = if !new_tag_block.is_empty() {
+                if user_comment.is_empty() {
+                     format!(" && {}", new_tag_block)
+                } else {
+                     format!("{} && {}", user_comment, new_tag_block)
+                }
+            } else {
+                user_comment.to_string()
+            };
+
+            // WRITE
+            // 1. File
+             if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
+                 println!("Failed to write file {}: {}", track.id, e);
+                 continue; 
+             }
+
+            // 2. DB (re-lock)
+            track.comment_raw = Some(new_full_comment.clone());
+            {
+                if let Ok(db) = state.db.lock() {
+                    let _ = db.update_track(&track);
+                }
+            }
+
+            // 3. Music.app
+             if !track.persistent_id.is_empty() {
+                 let _ = update_track_comment(&track.persistent_id, &new_full_comment);
+             } else {
+                 let _ = touch_file(&track.file_path);
+             }
+        }
+    }
 
     Ok(())
 }

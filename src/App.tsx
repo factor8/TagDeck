@@ -14,6 +14,8 @@ import { Track } from './types';
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
+  const [lastSelectedTrackId, setLastSelectedTrackId] = useState<number | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -52,13 +54,22 @@ function App() {
     setRefreshTrigger(prev => prev + 1);
   };
   
-  const handleTrackSelect = (track: Track) => {
-    setSelectedTrack(track);
-    // Parse tags to highlight them in the deck
-    if (track.comment_raw) {
-        const splitIndex = track.comment_raw.indexOf(' && ');
+  const handleSelectionChange = (ids: Set<number>, lastId: number | null, primaryTrack: Track | null) => {
+    setSelectedTrackIds(ids);
+    setLastSelectedTrackId(lastId);
+    setSelectedTrack(primaryTrack);
+
+    // If nothing selected, clear
+    if (ids.size === 0 || !primaryTrack) {
+        setCurrentTags([]);
+        return;
+    }
+
+    // Populate tags from primary track
+    if (primaryTrack.comment_raw) {
+        const splitIndex = primaryTrack.comment_raw.indexOf(' && ');
         if (splitIndex !== -1) {
-            const tagBlock = track.comment_raw.substring(splitIndex + 4);
+            const tagBlock = primaryTrack.comment_raw.substring(splitIndex + 4);
             setCurrentTags(tagBlock.split(';').map(t => t.trim()).filter(t => t.length > 0));
         } else {
             setCurrentTags([]);
@@ -206,11 +217,12 @@ function App() {
             flexDirection: 'column'
             }}>
             <TrackList 
-                refreshTrigger={refreshTrigger} 
-                onSelect={handleTrackSelect}
-                selectedTrackId={selectedTrack ? selectedTrack.id : null}
-                searchTerm={searchTerm}
-                playlistId={selectedPlaylistId}
+              playlistId={selectedPlaylistId}
+              refreshTrigger={refreshTrigger}
+              onSelectionChange={handleSelectionChange}
+              selectedTrackIds={selectedTrackIds}
+              lastSelectedTrackId={lastSelectedTrackId}
+              searchTerm={searchTerm}
             />
             </div>
         </Panel>
@@ -238,8 +250,9 @@ function App() {
             {/* Editor Panel (Fixed at top of sidebar) */}
             {selectedTrack ? (
                 <TagEditor 
-                        track={selectedTrack} 
-                        onUpdate={handleRefresh} 
+                    track={selectedTrack} 
+                    onUpdate={handleRefresh} 
+                    selectedTrackIds={selectedTrackIds}
                 />
             ) : (
                 <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>

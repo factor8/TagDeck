@@ -1,6 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::Path;
+use crate::models::{Track, Playlist};
 
 const DB_SCHEMA: &str = r#"
     CREATE TABLE IF NOT EXISTS tracks (
@@ -106,6 +107,58 @@ impl Database {
                 track.date_added,
                 track.bpm
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_track(&self, id: i64) -> Result<Option<Track>> {
+        let mut stmt = self.conn.prepare("SELECT * FROM tracks WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+
+        if let Some(row) = rows.next()? {
+            Ok(Some(Track {
+                id: row.get(0)?,
+                persistent_id: row.get(1)?,
+                file_path: row.get(2)?,
+                artist: row.get(3)?,
+                title: row.get(4)?,
+                album: row.get(5)?,
+                comment_raw: row.get(6)?,
+                grouping_raw: row.get(7)?,
+                duration_secs: row.get(8)?,
+                format: row.get(9)?,
+                size_bytes: row.get(10)?,
+                bit_rate: row.get(11)?,
+                modified_date: row.get(12)?,
+                rating: row.get(13)?,
+                date_added: row.get(14)?,
+                bpm: row.get(15)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn update_track(&self, track: &Track) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET
+                comment_raw = ?1,
+                grouping_raw = ?2,
+                modified_date = ?3
+             WHERE id = ?4",
+             params![
+                 track.comment_raw,
+                 track.grouping_raw,
+                 // update modified time? Maybe let's keep it as file modify time.
+                 // Actually passing current time is better to signal change?
+                 // But wait, modified_date in struct usually reflects file mtime.
+                 // Let's create a new time?
+                 // For now, re-use what's in the track, assuming caller updated it or we don't care.
+                 // Actually, if we write to file, mtime changes. We should probably update it.
+                 // But let's just stick with what we have.
+                 track.modified_date,
+                 track.id
+             ]
         )?;
         Ok(())
     }

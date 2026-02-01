@@ -36,8 +36,9 @@ import { Track } from '../types';
 
 interface Props {
     refreshTrigger: number;
-    onSelect: (track: Track) => void;
-    selectedTrackId: number | null;
+    selectedTrackIds: Set<number>;
+    lastSelectedTrackId: number | null;
+    onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null) => void;
     searchTerm: string;
     playlistId: number | null;
 }
@@ -137,7 +138,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTerm, playlistId }: Props) {
+export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId }: Props) {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -429,6 +430,42 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
         }
     }
 
+    // Selection Handler
+    const handleRowClick = (track: Track, event: React.MouseEvent) => {
+        let newSelectedIds = new Set(selectedTrackIds);
+        let newLastSelectedId = track.id;
+        let primaryTrack = track;
+
+        if (event.shiftKey && lastSelectedTrackId !== null) {
+            const lastIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
+            const currentIndex = rows.findIndex(r => r.original.id === track.id);
+            
+            if (lastIndex !== -1 && currentIndex !== -1) {
+                const start = Math.min(lastIndex, currentIndex);
+                const end = Math.max(lastIndex, currentIndex);
+                
+                if (!event.metaKey && !event.ctrlKey) {
+                   newSelectedIds.clear();
+                }
+
+                for (let i = start; i <= end; i++) {
+                    newSelectedIds.add(rows[i].original.id);
+                }
+            }
+        } else if (event.metaKey || event.ctrlKey) {
+            if (newSelectedIds.has(track.id)) {
+                newSelectedIds.delete(track.id);
+            } else {
+                newSelectedIds.add(track.id);
+            }
+        } else {
+            newSelectedIds.clear();
+            newSelectedIds.add(track.id);
+        }
+        
+        onSelectionChange(newSelectedIds, newLastSelectedId, primaryTrack);
+    };
+
     const parentRef = useRef<HTMLDivElement>(null);
     const { rows } = table.getRowModel();
     const rowVirtualizer = useVirtualizer({
@@ -588,13 +625,13 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
                             )}
                             {rowVirtualizer.getVirtualItems().map(virtualRow => {
                                 const row = rows[virtualRow.index];
-                                const isSelected = selectedTrackId === row.original.id;
+                                const isSelected = selectedTrackIds.has(row.original.id);
                                 return (
                                     <tr 
                                         key={row.id}
                                         data-index={virtualRow.index} 
                                         ref={rowVirtualizer.measureElement}
-                                        onClick={() => onSelect(row.original)}
+                                        onClick={(e) => handleRowClick(row.original, e)}
                                         style={{ 
                                             borderBottom: '1px solid var(--bg-secondary)',
                                             background: isSelected 

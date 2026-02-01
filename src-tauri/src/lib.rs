@@ -44,6 +44,7 @@ pub fn run() {
             commands::get_global_tags,
             commands::show_in_finder,
             commands::write_tags,
+            commands::batch_add_tag,
             commands::import_from_music_app,
             commands::get_playlists,
             commands::get_playlist_track_ids
