@@ -8,9 +8,28 @@ import {
     createColumnHelper,
     SortingState,
     VisibilityState,
-    ColumnDef
+    ColumnDef,
+    Header,
+    Table
 } from '@tanstack/react-table';
-import { Folder, ArrowUp, ArrowDown, Settings } from 'lucide-react';
+import { 
+    DndContext, 
+    closestCenter, 
+    KeyboardSensor, 
+    PointerSensor, 
+    useSensor, 
+    useSensors, 
+    DragEndEvent 
+} from '@dnd-kit/core';
+import { 
+    arrayMove, 
+    SortableContext, 
+    sortableKeyboardCoordinates, 
+    horizontalListSortingStrategy, 
+    useSortable 
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { Folder, ArrowUp, ArrowDown, Settings, GripVertical } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -38,6 +57,81 @@ const formatDate = (timestamp: number) => {
     return new Date(timestamp * 1000).toLocaleDateString();
 };
 
+const DraggableTableHeader = ({ header, table }: { header: Header<Track, unknown>, table: Table<Track> }) => {
+    const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
+        id: header.column.id,
+    });
+
+    const style: React.CSSProperties = {
+        opacity: isDragging ? 0.8 : 1,
+        position: 'relative',
+        transform: CSS.Translate.toString(transform),
+        transition,
+        width: header.getSize(),
+        zIndex: isDragging ? 1 : 0,
+        padding: '12px 10px',
+        textAlign: 'left',
+        borderBottom: '1px solid var(--border-color)',
+        borderRight: '1px solid var(--border-color)',
+        color: 'var(--text-secondary)',
+        fontSize: '12px',
+        textTransform: 'uppercase',
+        letterSpacing: '0.05em',
+        fontWeight: 600,
+        backgroundColor: 'var(--bg-primary)', // Ensure opacity doesn't show row below
+        userSelect: 'none',
+        cursor: isDragging ? 'grabbing' : 'default',
+    };
+
+    return (
+        <th ref={setNodeRef} style={style}>
+            <div style={{ display: 'flex', alignItems: 'center', height: '100%', gap: '6px' }}>
+                {/* Drag Handle */}
+                <span {...attributes} {...listeners} style={{ cursor: 'grab', opacity: 0.5, marginLeft: '-4px' }}>
+                     <GripVertical size={12} />
+                </span>
+
+                {header.isPlaceholder ? null : (
+                    <div 
+                        onClick={header.column.getToggleSortingHandler()}
+                        style={{ 
+                            cursor: header.column.getCanSort() ? 'pointer' : 'default',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            flex: 1
+                        }}
+                    >
+                        {flexRender(header.column.columnDef.header, header.getContext())}
+                        {{
+                            asc: <ArrowUp size={12} />,
+                            desc: <ArrowDown size={12} />,
+                        }[header.column.getIsSorted() as string] ?? null}
+                    </div>
+                )}
+            </div>
+            {/* Resizer */}
+            <div
+                onMouseDown={header.getResizeHandler()}
+                onTouchStart={header.getResizeHandler()}
+                className={`resizer ${
+                    header.column.getIsResizing() ? 'isResizing' : ''
+                }`}
+                style={{
+                    position: 'absolute',
+                    right: 0,
+                    top: 0,
+                    height: '100%',
+                    width: '5px',
+                    background: 'transparent',
+                    cursor: 'col-resize',
+                    zIndex: 10
+                }}
+            />
+        </th>
+    );
+};
+
 export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [loading, setLoading] = useState(false);
@@ -49,8 +143,13 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
         format: false,
         size_bytes: false,
         modified_date: false,
-        grouping_raw: false
+        grouping_raw: false,
+        bit_rate: false
     });
+    const [columnOrder, setColumnOrder] = useState<string[]>([
+        'artist', 'title', 'album', 'comment', 'tags', 
+        'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'actions'
+    ]);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     useEffect(() => {
@@ -73,21 +172,23 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
 
     const columns = useMemo<ColumnDef<Track, any>[]>(() => [
         columnHelper.accessor('artist', {
+            id: 'artist',
             header: 'Artist',
             cell: info => info.getValue(),
             size: 150,
         }),
         columnHelper.accessor('title', {
+            id: 'title',
             header: 'Title',
             cell: info => info.getValue(),
             size: 200,
         }),
         columnHelper.accessor('album', {
+            id: 'album',
             header: 'Album',
             cell: info => info.getValue(),
             size: 150,
         }),
-        // Comment is split into User Comment and Tags
         columnHelper.accessor('comment_raw', {
             id: 'comment',
             header: 'Comment',
@@ -129,21 +230,31 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
             }
         }),
         columnHelper.accessor('duration_secs', {
+            id: 'duration_secs',
             header: 'Time',
             cell: info => formatDuration(info.getValue()),
             size: 60,
         }),
         columnHelper.accessor('format', {
+            id: 'format',
             header: 'Format',
             cell: info => info.getValue(),
+            size: 60,
+        }),
+        columnHelper.accessor('bit_rate', {
+            id: 'bit_rate',
+            header: 'Bitrate',
+            cell: info => info.getValue() ? `${info.getValue()} kbps` : '',
             size: 80,
         }),
         columnHelper.accessor('size_bytes', {
+            id: 'size_bytes',
             header: 'Size',
             cell: info => formatSize(info.getValue()),
             size: 80,
         }),
         columnHelper.accessor('modified_date', {
+            id: 'modified_date',
             header: 'Modified',
             cell: info => formatDate(info.getValue()),
             size: 100,
@@ -199,13 +310,38 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
         state: {
             sorting,
             columnVisibility,
+            columnOrder,
         },
         columnResizeMode: 'onChange',
         onSortingChange: setSorting,
         onColumnVisibilityChange: setColumnVisibility,
+        onColumnOrderChange: setColumnOrder,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
     });
+
+    // Drag and Drop Sensors
+    const sensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                distance: 2, // Require slight movement to start drag, allowing clicks
+            },
+        }),
+        useSensor(KeyboardSensor, {
+            coordinateGetter: sortableKeyboardCoordinates,
+        })
+    );
+
+    function handleDragEnd(event: DragEndEvent) {
+        const { active, over } = event;
+        if (active && over && active.id !== over.id) {
+            setColumnOrder((order) => {
+                const oldIndex = order.indexOf(active.id as string);
+                const newIndex = order.indexOf(over.id as string);
+                return arrayMove(order, oldIndex, newIndex);
+            });
+        }
+    }
 
     return (
         <div style={{ width: '100%', fontSize: '13px', position: 'relative' }}>
@@ -273,116 +409,86 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                 </>
             )}
             
-            <table style={{ 
-                width: table.getTotalSize(), 
-                minWidth: '100%',
-                borderCollapse: 'separate', 
-                borderSpacing: 0,
-                tableLayout: 'fixed' 
-            }}>
-                <thead style={{ 
-                    position: 'sticky', 
-                    top: 0, 
-                    background: 'var(--bg-primary)', 
-                    zIndex: 10,
-                }}>
-                    {table.getHeaderGroups().map(headerGroup => (
-                        <tr key={headerGroup.id}>
-                            {headerGroup.headers.map(header => (
-                                <th 
-                                    key={header.id} 
-                                    style={{ 
-                                        width: header.getSize(),
-                                        padding: '12px 10px', 
-                                        textAlign: 'left',
-                                        borderBottom: '1px solid var(--border-color)',
-                                        borderRight: '1px solid var(--border-color)',
-                                        color: 'var(--text-secondary)',
-                                        fontSize: '12px',
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.05em',
-                                        fontWeight: 600,
-                                        position: 'relative',
-                                        userSelect: 'none'
-                                    }}
-                                >
-                                    {header.isPlaceholder ? null : (
-                                        <div 
-                                            onClick={header.column.getToggleSortingHandler()}
-                                            style={{ 
-                                                cursor: header.column.getCanSort() ? 'pointer' : 'default',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '4px'
-                                            }}
-                                        >
-                                            {flexRender(header.column.columnDef.header, header.getContext())}
-                                            {{
-                                                asc: <ArrowUp size={12} />,
-                                                desc: <ArrowDown size={12} />,
-                                            }[header.column.getIsSorted() as string] ?? null}
-                                        </div>
-                                    )}
-                                    {/* Resizer */}
-                                    <div
-                                        onMouseDown={header.getResizeHandler()}
-                                        onTouchStart={header.getResizeHandler()}
-                                        className={`resizer ${
-                                            header.column.getIsResizing() ? 'isResizing' : ''
-                                        }`}
-                                    />
-                                </th>
+            <DndContext 
+                collisionDetection={closestCenter} 
+                onDragEnd={handleDragEnd} 
+                sensors={sensors}
+            >
+                <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                    <table style={{ 
+                        width: table.getTotalSize(), 
+                        minWidth: '100%',
+                        borderCollapse: 'separate', 
+                        borderSpacing: 0,
+                        tableLayout: 'fixed' 
+                    }}>
+                        <thead style={{ 
+                            position: 'sticky', 
+                            top: 0, 
+                            zIndex: 10,
+                        }}>
+                             {table.getHeaderGroups().map(headerGroup => (
+                                <tr key={headerGroup.id}>
+                                    <SortableContext 
+                                        items={columnOrder} 
+                                        strategy={horizontalListSortingStrategy}
+                                    >
+                                        {headerGroup.headers.map(header => (
+                                            <DraggableTableHeader key={header.id} header={header} table={table} />
+                                        ))}
+                                    </SortableContext>
+                                </tr>
                             ))}
-                        </tr>
-                    ))}
-                </thead>
-                <tbody>
-                    {table.getRowModel().rows.map(row => {
-                        const isSelected = selectedTrackId === row.original.id;
-                        return (
-                            <tr 
-                                key={row.id}
-                                onClick={() => onSelect(row.original)}
-                                style={{ 
-                                    borderBottom: '1px solid var(--bg-secondary)',
-                                    background: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
-                                    color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)',
-                                    cursor: 'pointer',
-                                    transition: 'background 0.1s ease'
-                                }}
-                                onMouseEnter={(e) => {
-                                    if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
-                                }}
-                                onMouseLeave={(e) => {
-                                    if (!isSelected) e.currentTarget.style.background = 'transparent';
-                                }}
-                            >
-                                {row.getVisibleCells().map(cell => (
-                                    <td 
-                                        key={cell.id} 
+                        </thead>
+                        <tbody>
+                            {table.getRowModel().rows.map(row => {
+                                const isSelected = selectedTrackId === row.original.id;
+                                return (
+                                    <tr 
+                                        key={row.id}
+                                        onClick={() => onSelect(row.original)}
                                         style={{ 
-                                            padding: '8px 10px',
-                                            overflow: 'hidden',
-                                            textOverflow: 'ellipsis',
-                                            whiteSpace: 'nowrap'
+                                            borderBottom: '1px solid var(--bg-secondary)',
+                                            background: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
+                                            color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)',
+                                            cursor: 'pointer',
+                                            transition: 'background 0.1s ease'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            if (!isSelected) e.currentTarget.style.background = 'transparent';
                                         }}
                                     >
-                                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                        {row.getVisibleCells().map(cell => (
+                                            <td 
+                                                key={cell.id} 
+                                                style={{ 
+                                                    padding: '8px 10px',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap'
+                                                }}
+                                            >
+                                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                            </td>
+                                        ))}
+                                    </tr>
+                                );
+                            })}
+                            {tracks.length === 0 && !loading && (
+                                <tr>
+                                    <td colSpan={columns.length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                        <div style={{ fontSize: '16px', marginBottom: '8px' }}>Library is empty</div>
+                                        <div style={{ fontSize: '13px', opacity: 0.7 }}>Import an iTunes XML file to get started</div>
                                     </td>
-                                ))}
-                            </tr>
-                        );
-                    })}
-                    {tracks.length === 0 && !loading && (
-                        <tr>
-                            <td colSpan={columns.length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                                <div style={{ fontSize: '16px', marginBottom: '8px' }}>Library is empty</div>
-                                <div style={{ fontSize: '13px', opacity: 0.7 }}>Import an iTunes XML file to get started</div>
-                            </td>
-                        </tr>
-                    )}
-                </tbody>
-            </table>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </DndContext>
         </div>
     );
 }

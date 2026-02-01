@@ -70,6 +70,10 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             .get("Size")
             .and_then(|v| v.as_unsigned_integer())
             .unwrap_or(0);
+        let bit_rate = track_info
+            .get("Bit Rate")
+            .and_then(|v| v.as_unsigned_integer())
+            .unwrap_or(0);
         // plist::Date usually behaves like SystemTime or implements into
         let modified_date = track_info
             .get("Date Modified")
@@ -101,6 +105,7 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             duration_secs: (total_time_ms as f64) / 1000.0,
             format,
             size_bytes: size as i64,
+            bit_rate: bit_rate as i64,
             modified_date: modified_timestamp,
         };
 

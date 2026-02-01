@@ -15,6 +15,7 @@ const DB_SCHEMA: &str = r#"
         duration_secs REAL,
         format TEXT,
         size_bytes INTEGER,
+        bit_rate INTEGER,
         modified_date INTEGER
     );
 
@@ -48,6 +49,13 @@ impl Database {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch(DB_SCHEMA)?;
+        
+        // Migration: Attempt to add bit_rate column for existing databases
+        // Valid for SQLite to ignore if column exists via check or we suppress error, 
+        // but rusqlite execute will return error if column exists. 
+        // We'll just suppress it for this prototype stage.
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bit_rate INTEGER DEFAULT 0", []);
+        
         Ok(Self { conn })
     }
 
@@ -56,8 +64,8 @@ impl Database {
             "INSERT OR REPLACE INTO tracks (
                 persistent_id, file_path, artist, title, album, 
                 comment_raw, grouping_raw, duration_secs, format, 
-                size_bytes, modified_date
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                size_bytes, bit_rate, modified_date
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 track.persistent_id,
                 track.file_path,
@@ -69,6 +77,7 @@ impl Database {
                 track.duration_secs,
                 track.format,
                 track.size_bytes,
+                track.bit_rate,
                 track.modified_date
             ],
         )?;
@@ -86,7 +95,7 @@ impl Database {
     pub fn get_all_tracks(&self) -> Result<Vec<crate::models::Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 
-             comment_raw, grouping_raw, duration_secs, format, size_bytes, modified_date 
+             comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date 
              FROM tracks LIMIT 100", // Limit for safety during dev
         )?;
 
@@ -103,7 +112,8 @@ impl Database {
                 duration_secs: row.get(8)?,
                 format: row.get(9)?,
                 size_bytes: row.get(10)?,
-                modified_date: row.get(11)?,
+                bit_rate: row.get(11)?,
+                modified_date: row.get(12)?,
             })
         })?;
 

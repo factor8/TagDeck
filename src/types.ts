@@ -10,5 +10,6 @@ export interface Track {
     duration_secs: number;
     format: string;
     size_bytes: number;
+    bit_rate: number;
     modified_date: number;
 }

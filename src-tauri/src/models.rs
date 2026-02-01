@@ -13,6 +13,7 @@ pub struct Track {
     pub duration_secs: f64,
     pub format: String,
     pub size_bytes: i64,
+    pub bit_rate: i64,
     pub modified_date: i64, // Unix timestamp
 }
 
