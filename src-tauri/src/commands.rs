@@ -2,6 +2,7 @@ use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::write_metadata as write_tags_to_file;
+use crate::apple_music::{update_track_comment, touch_file};
 use crate::models::Track;
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
@@ -123,6 +124,16 @@ pub async fn write_tags(
 
     // 2. Write to File
     write_tags_to_file(&track.file_path, &new_tags).map_err(|e| e.to_string())?;
+
+    // 2a. Touch file (for Rekordbox/Finder to notice change)
+    if let Err(e) = touch_file(&track.file_path) {
+        println!("Warning: Failed to touch file: {}", e);
+    }
+    
+    // 2b. Update in Music.app (via AppleScript) - Direct Metadata Update
+    if let Err(e) = update_track_comment(&track.persistent_id, &new_tags) {
+         println!("Warning: Failed to update track in Music: {}", e);
+    }
 
     // 3. Update DB (partial update)
     // We strictly assume new_tags is the FULL comment field content.

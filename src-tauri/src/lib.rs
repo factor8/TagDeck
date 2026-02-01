@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod apple_music;
 pub mod db;
 pub mod library_parser;
 pub mod system_library;
