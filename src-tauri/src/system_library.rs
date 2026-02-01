@@ -19,6 +19,8 @@ struct ExternalTrack {
     pub size_bytes: i64,
     pub bit_rate: i64,
     pub modified_date: i64,
+    pub rating: i64,
+    pub date_added: i64,
 }
 
 impl ExternalTrack {
@@ -37,6 +39,8 @@ impl ExternalTrack {
             size_bytes: self.size_bytes,
             bit_rate: self.bit_rate,
             modified_date: self.modified_date,
+            rating: self.rating,
+            date_added: self.date_added,
         }
     }
 }

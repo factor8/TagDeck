@@ -12,4 +12,6 @@ export interface Track {
     size_bytes: number;
     bit_rate: number;
     modified_date: number;
+    rating: number;
+    date_added: number;
 }

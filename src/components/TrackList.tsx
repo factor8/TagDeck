@@ -60,6 +60,12 @@ const formatDate = (timestamp: number) => {
     return new Date(timestamp * 1000).toLocaleDateString();
 };
 
+const formatRating = (rating: number) => {
+    if (!rating) return '';
+    const stars = Math.round(rating / 20);
+    return '★'.repeat(stars) + '☆'.repeat(5 - stars);
+};
+
 const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, table: Table<Track> }) => {
     const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
         id: header.column.id,
@@ -164,28 +170,30 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
     };
 
     // Table State
-    const [sorting, setSorting] = useState<SortingState>(() => loadState('table_sorting', []));
-    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => loadState('table_visibility', {
+    const [sorting, setSorting] = useState<SortingState>(() => loadState('table_sorting_v2', []));
+    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => loadState('table_visibility_v2', {
         album: false,
         format: false,
         size_bytes: false,
         modified_date: false,
         grouping_raw: false,
-        bit_rate: false
+        bit_rate: false,
+        date_added: false,
+        rating: true
     }));
-    const [columnOrder, setColumnOrder] = useState<string[]>(() => loadState('table_order', [
+    const [columnOrder, setColumnOrder] = useState<string[]>(() => loadState('table_order_v2', [
         'artist', 'title', 'album', 'comment', 'tags', 
-        'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'actions'
+        'rating', 'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'date_added', 'actions'
     ]));
-    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing', {}));
+    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing_v2', {}));
     
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     // Persistence Effects
-    useEffect(() => { localStorage.setItem('table_sorting', JSON.stringify(sorting)); }, [sorting]);
-    useEffect(() => { localStorage.setItem('table_visibility', JSON.stringify(columnVisibility)); }, [columnVisibility]);
-    useEffect(() => { localStorage.setItem('table_order', JSON.stringify(columnOrder)); }, [columnOrder]);
-    useEffect(() => { localStorage.setItem('table_sizing', JSON.stringify(columnSizing)); }, [columnSizing]);
+    useEffect(() => { localStorage.setItem('table_sorting_v2', JSON.stringify(sorting)); }, [sorting]);
+    useEffect(() => { localStorage.setItem('table_visibility_v2', JSON.stringify(columnVisibility)); }, [columnVisibility]);
+    useEffect(() => { localStorage.setItem('table_order_v2', JSON.stringify(columnOrder)); }, [columnOrder]);
+    useEffect(() => { localStorage.setItem('table_sizing_v2', JSON.stringify(columnSizing)); }, [columnSizing]);
 
     useEffect(() => {
         loadTracks();
@@ -270,6 +278,12 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
             cell: info => formatDuration(info.getValue()),
             size: 60,
         }),
+        columnHelper.accessor('rating', {
+            id: 'rating',
+            header: 'Rating',
+            cell: info => <span style={{ color: 'var(--accent-color)', letterSpacing: '2px' }}>{formatRating(info.getValue())}</span>,
+            size: 100,
+        }),
         columnHelper.accessor('format', {
             id: 'format',
             header: 'Format',
@@ -294,21 +308,16 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
             cell: info => formatDate(info.getValue()),
             size: 100,
         }),
+        columnHelper.accessor('date_added', {
+            id: 'date_added',
+            header: 'Date Added',
+            cell: info => formatDate(info.getValue()),
+            size: 100,
+        }),
         columnHelper.display({
             id: 'actions',
             size: 40,
-            header: () => (
-                <div style={{ textAlign: 'center' }}>
-                    <Settings 
-                        size={14} 
-                        style={{ cursor: 'pointer', opacity: 0.7 }} 
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            setIsMenuOpen(!isMenuOpen);
-                        }}
-                    />
-                </div>
-            ),
+            header: () => null,
             cell: ({ row }) => (
                 <div style={{ textAlign: 'center' }}>
                     <button
@@ -391,6 +400,41 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
 
     return (
         <div style={{ width: '100%', height: '100%', fontSize: '13px', position: 'relative', display: 'flex', flexDirection: 'column' }}>
+            {/* Pinned Settings Gear */}
+            <div 
+                onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(!isMenuOpen);
+                }}
+                style={{
+                    position: 'absolute',
+                    top: 0,
+                    right: 0,
+                    height: '41px', // Match header height roughly (border included)
+                    width: '40px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 20,
+                    background: 'var(--bg-primary)', 
+                    borderBottom: '1px solid var(--border-color)',
+                    borderLeft: '1px solid var(--border-color)',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)'
+                }}
+                onMouseEnter={e => {
+                     e.currentTarget.style.color = 'var(--text-primary)';
+                     e.currentTarget.style.background = 'var(--bg-tertiary)';
+                }}
+                onMouseLeave={e => {
+                     e.currentTarget.style.color = 'var(--text-secondary)';
+                     e.currentTarget.style.background = 'var(--bg-primary)';
+                }}
+                title="Table Settings"
+            >
+                <Settings size={16} />
+            </div>
+
             {loading && (
                 <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center' }}>
                     Loading library...

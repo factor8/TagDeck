@@ -16,7 +16,9 @@ const DB_SCHEMA: &str = r#"
         format TEXT,
         size_bytes INTEGER,
         bit_rate INTEGER,
-        modified_date INTEGER
+        modified_date INTEGER,
+        rating INTEGER,
+        date_added INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS playlists (
@@ -50,11 +52,10 @@ impl Database {
         let conn = Connection::open(path)?;
         conn.execute_batch(DB_SCHEMA)?;
         
-        // Migration: Attempt to add bit_rate column for existing databases
-        // Valid for SQLite to ignore if column exists via check or we suppress error, 
-        // but rusqlite execute will return error if column exists. 
-        // We'll just suppress it for this prototype stage.
+        // Migration: Attempt to add columns for existing databases
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bit_rate INTEGER DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN rating INTEGER DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN date_added INTEGER DEFAULT 0", []);
         
         Ok(Self { conn })
     }
@@ -64,8 +65,8 @@ impl Database {
             "INSERT OR REPLACE INTO tracks (
                 persistent_id, file_path, artist, title, album, 
                 comment_raw, grouping_raw, duration_secs, format, 
-                size_bytes, bit_rate, modified_date
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                size_bytes, bit_rate, modified_date, rating, date_added
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 track.persistent_id,
                 track.file_path,
@@ -78,7 +79,9 @@ impl Database {
                 track.format,
                 track.size_bytes,
                 track.bit_rate,
-                track.modified_date
+                track.modified_date,
+                track.rating,
+                track.date_added
             ],
         )?;
         Ok(())
@@ -95,8 +98,9 @@ impl Database {
     pub fn get_all_tracks(&self) -> Result<Vec<crate::models::Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 
-             comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date 
-             FROM tracks", // Removed LIMIT
+             comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
+             rating, date_added
+             FROM tracks", 
         )?;
 
         let track_iter = stmt.query_map([], |row| {
@@ -114,6 +118,8 @@ impl Database {
                 size_bytes: row.get(10)?,
                 bit_rate: row.get(11)?,
                 modified_date: row.get(12)?,
+                rating: row.get(13)?,
+                date_added: row.get(14)?,
             })
         })?;
 

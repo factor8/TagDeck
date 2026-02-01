@@ -15,6 +15,8 @@ pub struct Track {
     pub size_bytes: i64,
     pub bit_rate: i64,
     pub modified_date: i64, // Unix timestamp
+    pub rating: i64, // 0-100
+    pub date_added: i64, // Unix timestamp
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
