@@ -86,6 +86,22 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let rating = track_info
+            .get("Rating")
+            .and_then(|v| v.as_unsigned_integer())
+            .unwrap_or(0);
+
+        let date_added = track_info
+            .get("Date Added")
+            .and_then(|v| v.as_date())
+            .map(|d| d.clone().into())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        let date_added_timestamp = date_added
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
         // Simple format detection from extension
         let format = location
             .split('.')
@@ -107,6 +123,8 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             size_bytes: size as i64,
             bit_rate: bit_rate as i64,
             modified_date: modified_timestamp,
+            rating: rating as i64,
+            date_added: date_added_timestamp,
         };
 
         tracks.push(track);
