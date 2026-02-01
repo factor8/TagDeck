@@ -25,6 +25,8 @@ pub struct Playlist {
     pub id: i64,               // Database ID
     pub persistent_id: String, // From iTunes XML
     pub name: String,
+    pub is_folder: bool,
+    pub track_ids: Option<Vec<String>>, // Persistent IDs of tracks
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

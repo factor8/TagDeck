@@ -4,6 +4,14 @@ import iTunesLibrary
 // Standard output wrapper for JSON
 struct LibraryExport: Encodable {
     let tracks: [ExportTrack]
+    let playlists: [ExportPlaylist]
+}
+
+struct ExportPlaylist: Encodable {
+    let persistent_id: String
+    let name: String
+    let is_folder: Bool
+    let track_ids: [String]
 }
 
 struct ExportTrack: Encodable {
@@ -96,11 +104,39 @@ func main() {
             exportTracks.append(track)
         }
         
+        // Collect Playlists
+        var exportPlaylists: [ExportPlaylist] = []
+        let allPlaylists = library.allPlaylists
+        
+        for playlist in allPlaylists {
+            // Skip master library to avoid duplication
+            if playlist.isMaster { continue }
+            
+            let pidNumber = playlist.persistentID.uint64Value
+            let pidString = String(format: "%016llX", pidNumber)
+            
+            // Get track Persistent IDs for this playlist
+            // ITLibPlaylist.items -> [ITLibMediaItem]
+            let trackIds = playlist.items.map { item in
+                String(format: "%016llX", item.persistentID.uint64Value)
+            }
+            
+            let isFolder = (playlist.kind == .folder)
+            
+            exportPlaylists.append(ExportPlaylist(
+                persistent_id: pidString,
+                name: playlist.name,
+                is_folder: isFolder,
+                track_ids: trackIds
+            ))
+        }
+
         // Output JSON
+        let exportData = LibraryExport(tracks: exportTracks, playlists: exportPlaylists)
         let encoder = JSONEncoder()
         // encoder.outputFormatting = .prettyPrinted // Compact matches Rust better
         
-        let data = try encoder.encode(exportTracks)
+        let data = try encoder.encode(exportData)
         if let jsonString = String(data: data, encoding: .utf8) {
             print(jsonString)
         }

@@ -516,12 +516,13 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
                     style={{ 
                         overflow: 'auto', 
                         width: '100%',
-                        height: '100%'
+                        height: '100%',
+                        position: 'relative' // Ensure container is positioned for absolute children if any
                     }}
                 >
                     <table style={{ 
                         width: table.getTotalSize(), 
-                        minWidth: '100%',
+                        minWidth: '100%', // Allow it to grow if content is small
                         borderCollapse: 'separate', 
                         borderSpacing: 0,
                         tableLayout: 'fixed' 

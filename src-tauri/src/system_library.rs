@@ -3,7 +3,21 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::models::Track;
+use crate::models::{Track, Playlist};
+
+#[derive(Debug, Deserialize)]
+struct ExternalPlaylist {
+    pub persistent_id: String,
+    pub name: String,
+    pub is_folder: bool,
+    pub track_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LibraryExport {
+    tracks: Vec<ExternalTrack>,
+    playlists: Vec<ExternalPlaylist>,
+}
 
 #[derive(Debug, Deserialize)]
 struct ExternalTrack {
@@ -47,7 +61,7 @@ impl ExternalTrack {
     }
 }
 
-pub fn fetch_system_library() -> Result<Vec<Track>> {
+pub fn fetch_system_library() -> Result<(Vec<Track>, Vec<Playlist>)> {
     // Attempt to locate the binary relative to the current working directory
     // This assumes running from the project root (e.g. `npm run tauri dev`)
     let relative_path = Path::new("src-tauri/bin/fetch-library");
@@ -86,13 +100,24 @@ pub fn fetch_system_library() -> Result<Vec<Track>> {
     let json_str = String::from_utf8(output.stdout)
         .context("Failed to parse binary output as UTF-8")?;
 
-    let external_tracks: Vec<ExternalTrack> = serde_json::from_str(&json_str)
+    let library_export: LibraryExport = serde_json::from_str(&json_str)
         .context("Failed to parse JSON output from fetch-library")?;
 
-    let tracks = external_tracks
+    let tracks = library_export.tracks
         .into_iter()
         .map(|t| t.into_track())
         .collect();
 
-    Ok(tracks)
+    let playlists = library_export.playlists
+        .into_iter()
+        .map(|p| Playlist {
+            id: 0,
+            persistent_id: p.persistent_id,
+            name: p.name,
+            is_folder: p.is_folder,
+            track_ids: Some(p.track_ids),
+        })
+        .collect();
+
+    Ok((tracks, playlists))
 }
