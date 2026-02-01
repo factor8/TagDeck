@@ -176,14 +176,24 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
         }
 
         if (!searchTerm) return result;
-        const lowerSearch = searchTerm.toLowerCase();
+        
+        // Split search terms by whitespace
+        const terms = searchTerm.toLowerCase().split(/\s+/).filter(t => t.length > 0);
+        if (terms.length === 0) return result;
+
         return result.filter(track => {
-            return (
-                (track.title && track.title.toLowerCase().includes(lowerSearch)) ||
-                (track.artist && track.artist.toLowerCase().includes(lowerSearch)) ||
-                (track.album && track.album.toLowerCase().includes(lowerSearch)) ||
-                (track.comment_raw && track.comment_raw.toLowerCase().includes(lowerSearch))
-            );
+            // Combine all searchable text into one string
+            const haystack = [
+                track.title, 
+                track.artist, 
+                track.album, 
+                track.comment_raw,
+                track.grouping_raw,
+                track.bpm ? track.bpm.toString() : ''
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            // All terms must be present in the haystack
+            return terms.every(term => haystack.includes(term));
         });
     }, [tracks, searchTerm, allowedTrackIds]);
 
