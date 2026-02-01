@@ -171,7 +171,7 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
 
     // Table State
     const [sorting, setSorting] = useState<SortingState>(() => loadState('table_sorting_v2', []));
-    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => loadState('table_visibility_v2', {
+    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => loadState('table_visibility_v3', {
         album: false,
         format: false,
         size_bytes: false,
@@ -179,21 +179,22 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
         grouping_raw: false,
         bit_rate: false,
         date_added: false,
+        bpm: false,
         rating: true
     }));
-    const [columnOrder, setColumnOrder] = useState<string[]>(() => loadState('table_order_v2', [
-        'artist', 'title', 'album', 'comment', 'tags', 
+    const [columnOrder, setColumnOrder] = useState<string[]>(() => loadState('table_order_v3', [
+        'artist', 'title', 'album', 'bpm', 'comment', 'tags', 
         'rating', 'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'date_added', 'actions'
     ]));
-    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing_v2', {}));
+    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing_v3', {}));
     
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     // Persistence Effects
     useEffect(() => { localStorage.setItem('table_sorting_v2', JSON.stringify(sorting)); }, [sorting]);
-    useEffect(() => { localStorage.setItem('table_visibility_v2', JSON.stringify(columnVisibility)); }, [columnVisibility]);
-    useEffect(() => { localStorage.setItem('table_order_v2', JSON.stringify(columnOrder)); }, [columnOrder]);
-    useEffect(() => { localStorage.setItem('table_sizing_v2', JSON.stringify(columnSizing)); }, [columnSizing]);
+    useEffect(() => { localStorage.setItem('table_visibility_v3', JSON.stringify(columnVisibility)); }, [columnVisibility]);
+    useEffect(() => { localStorage.setItem('table_order_v3', JSON.stringify(columnOrder)); }, [columnOrder]);
+    useEffect(() => { localStorage.setItem('table_sizing_v3', JSON.stringify(columnSizing)); }, [columnSizing]);
 
     useEffect(() => {
         loadTracks();
@@ -283,6 +284,12 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
             header: 'Rating',
             cell: info => <span style={{ color: 'var(--accent-color)', letterSpacing: '2px' }}>{formatRating(info.getValue())}</span>,
             size: 100,
+        }),
+        columnHelper.accessor('bpm', {
+            id: 'bpm',
+            header: 'BPM',
+            cell: info => info.getValue() || '',
+            size: 60,
         }),
         columnHelper.accessor('format', {
             id: 'format',

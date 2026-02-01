@@ -14,4 +14,5 @@ export interface Track {
     modified_date: number;
     rating: number;
     date_added: number;
+    bpm: number;
 }

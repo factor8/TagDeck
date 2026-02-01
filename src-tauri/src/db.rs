@@ -18,7 +18,8 @@ const DB_SCHEMA: &str = r#"
         bit_rate INTEGER,
         modified_date INTEGER,
         rating INTEGER,
-        date_added INTEGER
+        date_added INTEGER,
+        bpm INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS playlists (
@@ -56,6 +57,7 @@ impl Database {
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bit_rate INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN rating INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN date_added INTEGER DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bpm INTEGER DEFAULT 0", []);
         
         Ok(Self { conn })
     }
@@ -65,8 +67,8 @@ impl Database {
             "INSERT OR REPLACE INTO tracks (
                 persistent_id, file_path, artist, title, album, 
                 comment_raw, grouping_raw, duration_secs, format, 
-                size_bytes, bit_rate, modified_date, rating, date_added
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                size_bytes, bit_rate, modified_date, rating, date_added, bpm
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 track.persistent_id,
                 track.file_path,
@@ -81,7 +83,8 @@ impl Database {
                 track.bit_rate,
                 track.modified_date,
                 track.rating,
-                track.date_added
+                track.date_added,
+                track.bpm
             ],
         )?;
         Ok(())
@@ -99,7 +102,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added
+             rating, date_added, bpm
              FROM tracks", 
         )?;
 
@@ -120,6 +123,7 @@ impl Database {
                 modified_date: row.get(12)?,
                 rating: row.get(13)?,
                 date_added: row.get(14)?,
+                bpm: row.get(15)?,
             })
         })?;
 

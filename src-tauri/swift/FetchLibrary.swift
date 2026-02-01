@@ -21,6 +21,7 @@ struct ExportTrack: Encodable {
     let modified_date: Int64
     let rating: Int
     let date_added: Int64
+    let bpm: Int
 }
 
 func main() {
@@ -54,6 +55,7 @@ func main() {
             let bitrate = Int64(item.bitrate)
             let rating = item.rating
             let dateAdded = item.addedDate?.timeIntervalSince1970 ?? 0
+            let bpm = item.beatsPerMinute
             
             // Date Modified
             // ITLibMediaItem does not expose modificationDate, so we read it from the file system
@@ -87,7 +89,8 @@ func main() {
                 bit_rate: bitrate,
                 modified_date: Int64(modDate),
                 rating: item.rating,
-                date_added: Int64(dateAdded)
+                date_added: Int64(dateAdded),
+                bpm: bpm
             )
             
             exportTracks.append(track)

@@ -21,6 +21,7 @@ struct ExternalTrack {
     pub modified_date: i64,
     pub rating: i64,
     pub date_added: i64,
+    pub bpm: i64,
 }
 
 impl ExternalTrack {
@@ -41,6 +42,7 @@ impl ExternalTrack {
             modified_date: self.modified_date,
             rating: self.rating,
             date_added: self.date_added,
+            bpm: self.bpm,
         }
     }
 }

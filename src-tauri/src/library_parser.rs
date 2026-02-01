@@ -102,6 +102,11 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             .unwrap_or_default()
             .as_secs() as i64;
 
+        let bpm = track_info
+            .get("BPM")
+            .and_then(|v| v.as_unsigned_integer())
+            .unwrap_or(0);
+
         // Simple format detection from extension
         let format = location
             .split('.')
@@ -125,6 +130,7 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             modified_date: modified_timestamp,
             rating: rating as i64,
             date_added: date_added_timestamp,
+            bpm: bpm as i64,
         };
 
         tracks.push(track);
