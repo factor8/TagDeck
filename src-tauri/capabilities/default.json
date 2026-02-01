@@ -14,20 +14,25 @@
       "identifier": "fs:allow-read",
       "allow": [
         { "path": "/Users/factor8/Documents/GitHub/TagDeck/**" },
-        { "path": "/Users/factor8/Documents/GitHub/TagDeck/**/*" }
+        { "path": "/Users/factor8/Documents/GitHub/TagDeck/**/*" },
+        { "path": "/Users/factor8/**" },
+        { "path": "/Users/factor8/**/*" }
       ]
     },
     {
       "identifier": "fs:allow-read-file",
       "allow": [
         { "path": "/Users/factor8/Documents/GitHub/TagDeck/**" },
-        { "path": "/Users/factor8/Documents/GitHub/TagDeck/**/*" }
+        { "path": "/Users/factor8/Documents/GitHub/TagDeck/**/*" },
+        { "path": "/Users/factor8/**" },
+        { "path": "/Users/factor8/**/*" }
       ]
     },
     {
       "identifier": "fs:allow-stat",
       "allow": [
-        { "path": "/Users/factor8/Documents/GitHub/TagDeck/**" }
+        { "path": "/Users/factor8/Documents/GitHub/TagDeck/**" },
+        { "path": "/Users/factor8/**" }
       ]
     }
   ]

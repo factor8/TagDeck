@@ -14,21 +14,11 @@ export function Player({ track }: Props) {
         if (!track) return;
 
         const loadAudio = async () => {
-            try {
-                // Try reading file directly first to debug permissions
-                // This converts the file to a Blob URL, bypassing potential asset:// protocol issues
-                const contents = await readFile(track.file_path);
-                const blob = new Blob([contents], { type: 'audio/mpeg' }); // Adjust mime type if needed
-                const blobUrl = URL.createObjectURL(blob);
-                console.log('FS Read Success, using Blob URL');
-                setAudioSrc(blobUrl);
-            } catch (err) {
-                console.error('FS Read Failed:', err);
-                // Fallback to asset URL if FS fails (likely permission issue for both)
-                const assetUrl = convertFileSrc(track.file_path);
-                console.log('Falling back to Asset URL:', assetUrl);
-                setAudioSrc(assetUrl);
-            }
+            // Priority 1: Use Asset Protocol (Streaming, Efficient)
+            // Now that capabilities are fixed, this should work for local files
+            const assetUrl = convertFileSrc(track.file_path);
+            console.log('Setting Audio Src (Asset):', assetUrl);
+            setAudioSrc(assetUrl);
         };
 
         loadAudio();
@@ -60,6 +50,26 @@ export function Player({ track }: Props) {
                     const audio = e.currentTarget;
                     console.error('Audio Error:', audio.error);
                     console.error('Source:', audio.src);
+                    
+                    // Fallback to Blob if Asset URL fails (Error 4)
+                    if (audio.src && !audio.src.startsWith('blob:')) {
+                        console.log('Attempting Blob fallback...');
+                        readFile(track.file_path)
+                            .then(contents => {
+                                const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
+                                               track.format === 'm4a' ? 'audio/mp4' : 
+                                               track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+                                const blob = new Blob([contents], { type: mimeType });
+                                const blobUrl = URL.createObjectURL(blob);
+                                setAudioSrc(blobUrl);
+                            })
+                            .catch(err => {
+                                console.error('Fallback failed:', err);
+                                alert(`Playback Error: ${audio.error?.message || 'Unknown error'} (Code ${audio.error?.code})`);
+                            });
+                        return;
+                    }
+                    
                     alert(`Playback Error: ${audio.error?.message || 'Unknown error'} (Code ${audio.error?.code})\nSrc: ${audio.src}`);
                 }}
                 style={{ flex: 1, margin: '0 20px', maxWidth: '600px', height: '40px', filter: 'invert(1) hue-rotate(180deg)' }} 
