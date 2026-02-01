@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 
 tests/*
+# Build artifacts
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
