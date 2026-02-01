@@ -31,7 +31,7 @@ import {
     useSortable 
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, GripVertical } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -79,7 +79,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
         transition,
         width: header.getSize(),
         zIndex: isDragging ? 1 : 0,
-        padding: '12px 10px',
+        padding: '4px 10px',
         textAlign: 'left',
         borderBottom: '1px solid var(--border-color)',
         borderRight: '1px solid var(--border-color)',
@@ -90,17 +90,12 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
         fontWeight: 600,
         backgroundColor: 'var(--bg-primary)', // Ensure opacity doesn't show row below
         userSelect: 'none',
-        cursor: isDragging ? 'grabbing' : 'default',
+        cursor: 'grab',
     };
 
     return (
-        <th ref={setNodeRef} style={style}>
+        <th ref={setNodeRef} style={style} {...attributes} {...listeners}>
             <div style={{ display: 'flex', alignItems: 'center', height: '100%', gap: '6px' }}>
-                {/* Drag Handle */}
-                <span {...attributes} {...listeners} style={{ cursor: 'grab', opacity: 0.5, marginLeft: '-4px' }}>
-                     <GripVertical size={12} />
-                </span>
-
                 {header.isPlaceholder ? null : (
                     <div 
                         onClick={header.column.getToggleSortingHandler()}
