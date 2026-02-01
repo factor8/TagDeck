@@ -98,6 +98,11 @@ input:focus, textarea:focus {
   border-color: var(--accent-color);
 }
 
+@keyframes fadeIn {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
 /* Table Resizer */
 .resizer {
   position: absolute;

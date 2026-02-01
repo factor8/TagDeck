@@ -9,8 +9,17 @@ interface Props {
 
 export function Player({ track }: Props) {
     const [audioSrc, setAudioSrc] = useState<string>('');
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
+        if (error) {
+            const timer = setTimeout(() => setError(null), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [error]);
+
+    useEffect(() => {
+        setError(null); // Clear error on track change
         if (!track) return;
 
         const loadAudio = async () => {
@@ -65,17 +74,39 @@ export function Player({ track }: Props) {
                             })
                             .catch(err => {
                                 console.error('Fallback failed:', err);
-                                alert(`Playback Error: ${audio.error?.message || 'Unknown error'} (Code ${audio.error?.code})`);
+                                setError(`Playback Error: ${audio.error?.message || 'Unknown error'} (Code ${audio.error?.code})`);
                             });
                         return;
                     }
                     
-                    alert(`Playback Error: ${audio.error?.message || 'Unknown error'} (Code ${audio.error?.code})\nSrc: ${audio.src}`);
+                    setError(`Playback Error: ${audio.error?.message || 'Unknown error'} (Code ${audio.error?.code})`);
                 }}
                 style={{ flex: 1, margin: '0 20px', maxWidth: '600px', height: '40px', filter: 'invert(1) hue-rotate(180deg)' }} 
             />
             {/* Spacer for right side balance or future controls like volume/playlist */}
             <div style={{ width: '200px' }}></div> 
+
+            {/* Error Toast */}
+            {error && (
+                <div style={{
+                    position: 'absolute',
+                    bottom: '90px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'var(--error-color)',
+                    color: 'white',
+                    padding: '8px 16px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                    animation: 'fadeIn 0.3s ease-out',
+                    zIndex: 200,
+                    maxWidth: '80%',
+                    textAlign: 'center'
+                }}>
+                    {error}
+                </div>
+            )}
         </div>
     );
 }
