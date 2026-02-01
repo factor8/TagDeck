@@ -45,19 +45,27 @@ Enable a DJ to:
 ## Metadata Storage Specification
 
 ### Target Field
-- **Primary:** Grouping  
-- (Future optional mirror: Comment)
+- **Primary:** Comment (ID3v2 `COMM` frame)
+- **Secondary:** Grouping (ID3v2 `TIT1` / `Content Group Description`) (Backup purposes)
 
 ### On-Disk Format (LOCKED)
-Female Vocals; Piano; Evening Vibes
+`{Original User Comment / Key Info} && {Tag1}; {Tag2}; {Tag3}`
 
+**Example:**
+`3A - Energy 5 && Uplifting; Female Vocals; Atmospheric`
 
 ### Rationale
-- Fully searchable in Apple Music
-- Fully searchable in Rekordbox / CDJs
-- Spaces preserved (no `_`, no `-`)
-- Semicolons visually separate but do not affect search
-- Matches how DJs actually type queries on hardware
+- **Compatibility:** Comment field is universally readable by iTunes/Apple Music, Rekordbox, Serato, Traktop, and Finder.
+- **Data Preservation:** The "Left Side" of the delimiter (` && `) preserves existing metadata from tools like Mixed In Key or user notes.
+- **Searchability:** Fully searchable in Apple Music and CDJs.
+- **Safety:** Separating machine-managed tags from user comments prevents accidental data loss.
+
+### Processing Logic
+1. **Read:** Parse the Comment field. Split by ` && `.
+2. **Write:**
+   - Preserve text *before* ` && ` (or the whole text if no delimiter exists).
+   - Overwrite text *after* ` && ` with the current set of active tags.
+
 
 ---
 
@@ -158,13 +166,13 @@ Female Vocals; Piano; Evening Vibes
 **On Save**
 1. Read current file metadata
 2. Compute tag diff
-3. Write updated Grouping string
+3. Write updated Comment string
 4. Re-read file to verify
 5. Store undo snapshot
 
 **Undo**
 - Session-level undo (per track)
-- Stores previous Grouping string
+- Stores previous Comment string
 
 **Acceptance Criteria**
 - No partial writes
@@ -176,7 +184,7 @@ Female Vocals; Piano; Evening Vibes
 ### 6. Batch Tagging
 - Multi-select tracks
 - Apply/remove tags across selection
-- Preview effective Grouping string per track
+- Preview effective Comment string per track
 
 **Acceptance Criteria**
 - Batch operations are atomic per track
@@ -190,10 +198,8 @@ Female Vocals; Piano; Evening Vibes
 - AAC / ALAC (.m4a)
 
 **Risk Note**
-AIFF Grouping behavior must be validated early against Apple Music + Rekordbox.  
-If unreliable, fallback is:
-- Grouping primary
-- Optional mirrored Comment (configurable)
+AIFF Comment behavior has been validated against Apple Music + Rekordbox.
+Grouping is secondary and less reliable in some older players.
 
 ---
 
@@ -207,7 +213,8 @@ If unreliable, fallback is:
 - artist
 - title
 - album
-- grouping_raw
+- comment_raw
+- grouping_raw (backup)
 - duration
 - format
 
@@ -237,12 +244,12 @@ If unreliable, fallback is:
 # Build Plan (Agent-Ready)
 
 ## Phase 0 — Risk Burn-Down (MANDATORY)
-**Goal:** verify AIFF + Grouping interoperability
+**Goal:** verify AIFF + Comment interoperability
 
 Tasks:
-- Write Grouping to MP3 → verify Apple Music + Rekordbox
-- Write Grouping to AIFF → verify both
-- Document edge cases
+- [x] Write Comment to MP3 → verify Apple Music + Rekordbox
+- [x] Write Comment to AIFF → verify both
+- [x] Document edge cases (SyncStrategy.md)
 
 Exit Criteria:
 - Clear confirmation or fallback decision
