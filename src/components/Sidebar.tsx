@@ -134,6 +134,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   {node.is_folder ? <Folder size={16} fill={isSelected ? "currentColor" : "var(--text-secondary)"} color={isSelected ? "currentColor" : "var(--text-secondary)"} /> : <ListMusic size={16} />}
                   
                   <span style={{ 
+                      fontSize: '13px',
+                      fontWeight: 400,
+                      lineHeight: '20px',
                       whiteSpace: 'nowrap', 
                       overflow: 'hidden', 
                       textOverflow: 'ellipsis'
@@ -193,6 +196,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           <div style={{ width: 14 }} /> 
           <ListMusic size={16} /> 
           <span style={{ 
+              fontSize: '13px',
+              fontWeight: 400,
+              lineHeight: '20px',
               whiteSpace: 'nowrap', 
               overflow: 'hidden', 
               textOverflow: 'ellipsis'
