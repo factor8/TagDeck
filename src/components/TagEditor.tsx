@@ -119,12 +119,13 @@ export function TagEditor({ track, onUpdate }: Props) {
             // Capitalize first letter
             const val = rawVal.charAt(0).toUpperCase() + rawVal.slice(1);
             
-            // Case-insensitive duplicate check
-            const exists = tags.some(t => t.toLowerCase() === val.toLowerCase());
+            setTags(prev => {
+                // Case-insensitive duplicate check using the latest state
+                const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
+                if (exists) return prev;
+                return [...prev, val];
+            });
             
-            if (!exists) {
-                setTags(prev => [...prev, val]);
-            }
             if (!valOverride) setTagInput('');
         }
     };
