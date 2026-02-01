@@ -71,6 +71,34 @@ pub async fn get_global_tags(state: State<'_, AppState>) -> Result<Vec<String>, 
 }
 
 #[tauri::command]
+pub fn show_in_finder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to reveal file: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to reveal file: {}", e))?;
+    }
+    // simple fallback for linux/other
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // just open directory
+         let _ = open::that(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(&path)));
+    }
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn write_tags(
     id: i64,
     new_tags: String,

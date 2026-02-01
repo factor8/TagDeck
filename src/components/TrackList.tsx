@@ -43,6 +43,7 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                         <th style={{ padding: '12px 20px', fontWeight: 600 }}>Title</th>
                         <th style={{ padding: '12px 20px', fontWeight: 600 }}>Comment</th>
                         <th style={{ padding: '12px 20px', fontWeight: 600 }}>Tags</th>
+                        <th style={{ width: '40px' }}></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -101,12 +102,34 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                                         ))}
                                     </div>
                                 </td>
+                                <td style={{ padding: '10px 20px', textAlign: 'right' }}>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            invoke('show_in_finder', { path: track.file_path });
+                                        }}
+                                        title="Show in Finder"
+                                        style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            color: 'var(--text-secondary)',
+                                            fontSize: '14px',
+                                            opacity: 0.5,
+                                            padding: '4px'
+                                        }}
+                                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                                        onMouseLeave={e => e.currentTarget.style.opacity = '0.5'}
+                                    >
+                                        📂
+                                    </button>
+                                </td>
                             </tr>
                         );
                     })}
                     {tracks.length === 0 && !loading && (
                         <tr>
-                            <td colSpan={4} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                            <td colSpan={5} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                 <div style={{ fontSize: '16px', marginBottom: '8px' }}>Library is empty</div>
                                 <div style={{ fontSize: '13px', opacity: 0.7 }}>Import an iTunes XML file to get started</div>
                             </td>

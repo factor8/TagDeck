@@ -40,6 +40,7 @@ pub fn run() {
             commands::import_library,
             commands::get_tracks,
             commands::get_global_tags,
+            commands::show_in_finder,
             commands::write_tags
         ])
         .run(tauri::generate_context!())

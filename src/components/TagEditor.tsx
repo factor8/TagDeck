@@ -109,14 +109,35 @@ export function TagEditor({ track, onUpdate }: Props) {
         }
     };
     
-    const addTag = () => {
-        const val = tagInput.trim();
-        if (val && !tags.includes(val)) {
-            setTags(prev => [...prev, val]);
-            setTagInput('');
-        } else if (val && tags.includes(val)) {
-             setTagInput(''); // Duplicate, just clear
+    const addTag = (valOverride?: string) => {
+        const val = (valOverride || tagInput).trim();
+        if (val) {
+            if (!tags.includes(val)) {
+                setTags(prev => [...prev, val]);
+            }
+            if (!valOverride) setTagInput('');
         }
+    };
+
+    const handleTagInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const val = e.target.value;
+        
+        // Delimiter checking: semicolon, comma
+        if (val.includes(';') || val.includes(',')) {
+            const parts = val.split(/[;,]/);
+            parts.forEach(p => addTag(p));
+            setTagInput('');
+            return;
+        }
+
+        // Double space delimiter
+        if (val.endsWith('  ')) {
+            addTag(val.trim());
+            setTagInput('');
+            return;
+        }
+
+        setTagInput(val);
     };
 
     if (!track) return null;
@@ -124,32 +145,30 @@ export function TagEditor({ track, onUpdate }: Props) {
     return (
         <div style={styles.container}>
             <div style={styles.header}>
-                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>Quick Tag</h3>
-                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>⌘+Enter to save</span>
+                <h3 style={{ margin: 0, fontSize: '12px', fontWeight: 600 }}>QUICK TAG</h3>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>⌘+Enter to save</span>
             </div>
             
             {/* User Comment Section */}
-            <div style={{ padding: '10px 0 5px 0' }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>COMMENT</label>
+            <div style={{ padding: '0px 0 5px 0' }}>
                 <input 
                     type="text"
                     value={userComment}
                     onChange={e => setUserComment(e.target.value)}
                     style={styles.input}
-                    placeholder="My personal notes..."
+                    placeholder="Comment..."
                     onKeyDown={e => { if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSave(); }}
                 />
             </div>
 
             {/* Tags Section */}
-            <div style={{ padding: '5px 0 10px 0' }}>
-                <label style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px', display: 'block' }}>TAGS ( ; )</label>
+            <div style={{ padding: '0px 0 5px 0' }}>
                 <div style={styles.tagContainer} onClick={() => document.getElementById('tag-input')?.focus()}>
                     {tags.map((tag, i) => (
                         <div key={i} style={styles.pill}>
                             {tag}
                             <span 
-                                style={{ marginLeft: '6px', cursor: 'pointer', opacity: 0.7 }}
+                                style={{ marginLeft: '4px', cursor: 'pointer', opacity: 0.6 }}
                                 onClick={(e) => { e.stopPropagation(); setTags(tags.filter((_, idx) => idx !== i)); }}
                             >×</span>
                         </div>
@@ -158,16 +177,16 @@ export function TagEditor({ track, onUpdate }: Props) {
                         id="tag-input"
                         type="text"
                         value={tagInput}
-                        onChange={e => setTagInput(e.target.value)}
+                        onChange={handleTagInputChange}
                         onKeyDown={handleTagInputKeyDown}
                         style={styles.ghostInput}
-                        placeholder={tags.length === 0 ? "Add tag..." : ""}
+                        placeholder={tags.length === 0 ? "Add tags..." : ""}
                     />
                 </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '5px' }}>
-                <button onClick={handleSave} disabled={saving} className="btn btn-primary" style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0px' }}>
+                <button onClick={handleSave} disabled={saving} className="btn btn-primary" style={{ width: '100%', fontSize: '12px', padding: '6px' }}>
                     {saving ? 'Saving...' : 'Save Changes'}
                 </button>
             </div>
@@ -180,48 +199,48 @@ const styles = {
         background: 'var(--bg-secondary)',
         color: 'var(--text-primary)',
         borderBottom: '1px solid var(--border-color)',
-        padding: '15px',
+        padding: '10px',
         boxSizing: 'border-box' as const,
         display: 'flex',
         flexDirection: 'column' as const,
-        gap: '10px'
+        gap: '6px'
     },
     header: {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: '10px',
-        paddingBottom: '5px',
+        marginBottom: '4px',
+        paddingBottom: '4px',
         borderBottom: '1px solid var(--border-color)'
     },
     input: {
         width: '100%',
-        padding: '8px',
+        padding: '6px 8px',
         borderRadius: '4px',
         border: '1px solid var(--bg-tertiary)',
         background: 'var(--bg-primary)',
         color: 'var(--text-primary)',
-        fontSize: '13px',
+        fontSize: '12px',
         outline: 'none',
-        marginBottom: '5px'
+        marginBottom: '2px'
     },
     tagContainer: {
         display: 'flex',
         flexWrap: 'wrap' as const,
-        gap: '6px',
-        padding: '8px',
+        gap: '4px',
+        padding: '6px',
         borderRadius: '4px',
         border: '1px solid var(--bg-tertiary)',
         background: 'var(--bg-primary)',
-        minHeight: '80px',
+        minHeight: '60px',
         cursor: 'text'
     },
     pill: {
         background: 'rgba(59, 130, 246, 0.2)', // Accent transparent
         color: 'var(--accent-color)',
-        padding: '4px 8px',
-        borderRadius: '12px',
-        fontSize: '12px',
+        padding: '2px 8px',
+        borderRadius: '10px',
+        fontSize: '11px',
         display: 'flex',
         alignItems: 'center',
         border: '1px solid rgba(59, 130, 246, 0.3)'
@@ -230,10 +249,10 @@ const styles = {
         border: 'none',
         background: 'transparent',
         color: 'var(--text-primary)',
-        fontSize: '13px',
+        fontSize: '12px',
         outline: 'none',
         flex: 1,
-        minWidth: '60px'
+        minWidth: '50px'
     },
     // We use .btn class now
     button: {} 
