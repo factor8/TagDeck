@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod db;
 pub mod library_parser;
+pub mod system_library;
 pub mod metadata;
 pub mod models;
 
@@ -41,7 +42,8 @@ pub fn run() {
             commands::get_tracks,
             commands::get_global_tags,
             commands::show_in_finder,
-            commands::write_tags
+            commands::write_tags,
+            commands::import_from_music_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

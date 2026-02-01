@@ -10,7 +10,7 @@ export function LibraryImporter({ onImportComplete }: Props) {
     const [importing, setImporting] = useState(false);
     const [status, setStatus] = useState('');
 
-    const handleImport = async () => {
+    const handleXMLImport = async () => {
         try {
             const selected = await open({
                 multiple: false,
@@ -22,12 +22,9 @@ export function LibraryImporter({ onImportComplete }: Props) {
 
             if (selected && typeof selected === 'string') {
                 setImporting(true);
-                setStatus('Parsing library...');
-                
-                // Invoke Rust command
+                setStatus('Parsing XML...');
                 const count = await invoke('import_library', { xmlPath: selected });
-                
-                setStatus(`Imported ${count} tracks successfully!`);
+                setStatus(`Imported ${count} tracks from XML!`);
                 onImportComplete();
             }
         } catch (err: any) {
@@ -38,11 +35,29 @@ export function LibraryImporter({ onImportComplete }: Props) {
         }
     };
 
+    const handleMusicAppImport = async () => {
+        setImporting(true);
+        setStatus('Syncing with Music.app...');
+        try {
+            const count = await invoke('import_from_music_app');
+            setStatus(`Synced ${count} tracks!`);
+            onImportComplete();
+        } catch (err: any) {
+             console.error(err);
+             setStatus(`Error: ${err.toString()}`);
+        } finally {
+            setImporting(false);
+        }
+    };
+
     return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             {status && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{status}</span>}
-            <button onClick={handleImport} disabled={importing} className="btn btn-primary" style={{ fontSize: '13px', padding: '6px 12px' }}>
-                {importing ? 'Importing...' : 'Import XML'}
+            <button onClick={handleMusicAppImport} disabled={importing} className="btn btn-primary" style={{ fontSize: '13px', padding: '6px 12px', background: 'var(--accent-hover)' }}>
+                {importing ? 'Syncing...' : 'Sync Music.app'}
+            </button>
+            <button onClick={handleXMLImport} disabled={importing} className="btn" style={{ fontSize: '13px', padding: '6px 12px', background: 'var(--bg-tertiary)' }}>
+                Import XML
             </button>
         </div>
     );

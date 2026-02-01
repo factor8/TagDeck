@@ -1,5 +1,6 @@
 use crate::db::Database;
 use crate::library_parser::parse_library;
+use crate::system_library::fetch_system_library;
 use crate::metadata::write_metadata as write_tags_to_file;
 use crate::models::Track;
 use std::sync::Mutex;
@@ -141,4 +142,26 @@ pub async fn write_tags(
         .map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn import_from_music_app(state: State<'_, AppState>) -> Result<usize, String> {
+    println!("Importing from Music.app...");
+
+    // 1. Fetch from Sidecar
+    let tracks = fetch_system_library().map_err(|e| e.to_string())?;
+    let count = tracks.len();
+    println!("Found {} tracks from Music.app", count);
+
+    // 2. Insert into DB
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| "Failed to lock DB".to_string())?;
+
+    for track in tracks {
+        db.insert_track(&track).map_err(|e| e.to_string())?;
+    }
+
+    Ok(count)
 }
