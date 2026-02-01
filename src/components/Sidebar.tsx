@@ -121,7 +121,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               >
                   {node.is_folder ? (
                       <div 
-                        style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}
+                        style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', minWidth: 14, flexShrink: 0 }}
                         onClick={(e) => {
                             e.stopPropagation();
                             toggleFolder(node.persistent_id);
@@ -129,11 +129,21 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                       >
                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </div>
-                  ) : <div style={{ width: 14 }}></div>}
+                  ) : <div style={{ width: 14, minWidth: 14, flexShrink: 0 }}></div>}
                   
-                  {node.is_folder ? <Folder size={16} fill={isSelected ? "currentColor" : "var(--text-secondary)"} color={isSelected ? "currentColor" : "var(--text-secondary)"} /> : <ListMusic size={16} />}
+                  {node.is_folder ? (
+                     <Folder size={16} 
+                        style={{ minWidth: 16, flexShrink: 0 }}
+                        fill={isSelected ? "currentColor" : "var(--text-secondary)"} 
+                        color={isSelected ? "currentColor" : "var(--text-secondary)"} 
+                     />
+                  ) : (
+                     <ListMusic size={16} style={{ minWidth: 16, flexShrink: 0 }} />
+                  )}
                   
                   <span style={{ 
+                      flex: 1,
+                      minWidth: 0,
                       fontSize: '13px',
                       fontWeight: 400,
                       lineHeight: '20px',
@@ -193,9 +203,11 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
             gap: '6px'
           }}
         >
-          <div style={{ width: 14 }} /> 
-          <ListMusic size={16} /> 
+          <div style={{ width: 14, minWidth: 14, flexShrink: 0 }} /> 
+          <ListMusic size={16} style={{ minWidth: 16, flexShrink: 0 }} /> 
           <span style={{ 
+              flex: 1,
+              minWidth: 0,
               fontSize: '13px',
               fontWeight: 400,
               lineHeight: '20px',
