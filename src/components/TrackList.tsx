@@ -58,7 +58,7 @@ const formatDate = (timestamp: number) => {
     return new Date(timestamp * 1000).toLocaleDateString();
 };
 
-const DraggableTableHeader = ({ header, table }: { header: Header<Track, unknown>, table: Table<Track> }) => {
+const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, table: Table<Track> }) => {
     const { attributes, isDragging, listeners, setNodeRef, transform, transition } = useSortable({
         id: header.column.id,
     });
