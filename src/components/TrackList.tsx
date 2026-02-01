@@ -544,7 +544,8 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
                     style={{ 
                         overflow: 'auto', 
                         width: '100%',
-                        height: '100%',
+                        flex: 1,
+                        minHeight: 0,
                         position: 'relative' // Ensure container is positioned for absolute children if any
                     }}
                 >

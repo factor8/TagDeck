@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tagdeck",
+  "productName": "TagDeck",
   "version": "0.1.0",
   "identifier": "com.factor8.tagdeck",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "tagdeck",
+        "title": "TagDeck",
         "width": 1280,
         "height": 800
       }
