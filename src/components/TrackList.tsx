@@ -8,6 +8,7 @@ import {
     createColumnHelper,
     SortingState,
     VisibilityState,
+    ColumnSizingState,
     ColumnDef,
     Header,
     Table
@@ -136,21 +137,39 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
     const [tracks, setTracks] = useState<Track[]>([]);
     const [loading, setLoading] = useState(false);
     
+    // Persistence Helper
+    const loadState = <T,>(key: string, defaultVal: T): T => {
+        try {
+            const saved = localStorage.getItem(key);
+            return saved ? JSON.parse(saved) : defaultVal;
+        } catch {
+            return defaultVal;
+        }
+    };
+
     // Table State
-    const [sorting, setSorting] = useState<SortingState>([]);
-    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
+    const [sorting, setSorting] = useState<SortingState>(() => loadState('table_sorting', []));
+    const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => loadState('table_visibility', {
         album: false,
         format: false,
         size_bytes: false,
         modified_date: false,
         grouping_raw: false,
         bit_rate: false
-    });
-    const [columnOrder, setColumnOrder] = useState<string[]>([
+    }));
+    const [columnOrder, setColumnOrder] = useState<string[]>(() => loadState('table_order', [
         'artist', 'title', 'album', 'comment', 'tags', 
         'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'actions'
-    ]);
+    ]));
+    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing', {}));
+    
     const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+    // Persistence Effects
+    useEffect(() => { localStorage.setItem('table_sorting', JSON.stringify(sorting)); }, [sorting]);
+    useEffect(() => { localStorage.setItem('table_visibility', JSON.stringify(columnVisibility)); }, [columnVisibility]);
+    useEffect(() => { localStorage.setItem('table_order', JSON.stringify(columnOrder)); }, [columnOrder]);
+    useEffect(() => { localStorage.setItem('table_sizing', JSON.stringify(columnSizing)); }, [columnSizing]);
 
     useEffect(() => {
         loadTracks();
@@ -311,11 +330,13 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
             sorting,
             columnVisibility,
             columnOrder,
+            columnSizing,
         },
         columnResizeMode: 'onChange',
         onSortingChange: setSorting,
         onColumnVisibilityChange: setColumnVisibility,
         onColumnOrderChange: setColumnOrder,
+        onColumnSizingChange: setColumnSizing,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
     });
