@@ -81,11 +81,15 @@ export function TagEditor({ track, onUpdate }: Props) {
     // Listen for tags from the Deck
     useEffect(() => {
         const handleAddTag = (e: any) => {
-            const newTag = e.detail;
-            if (newTag) {
-                // Check against current tags state
-                if (!tags.includes(newTag)) {
-                     const updatedTags = [...tags, newTag];
+            const rawTag = e.detail;
+            if (rawTag) {
+                const val = rawTag.trim().charAt(0).toUpperCase() + rawTag.trim().slice(1);
+                
+                // Case-insensitive check
+                const exists = tags.some(t => t.toLowerCase() === val.toLowerCase());
+
+                if (!exists) {
+                     const updatedTags = [...tags, val];
                      setTags(updatedTags);
                      // Auto-Save immediately using the FRESH values we just calculated
                      saveTagsToBackend(updatedTags, userComment);
@@ -110,9 +114,15 @@ export function TagEditor({ track, onUpdate }: Props) {
     };
     
     const addTag = (valOverride?: string) => {
-        const val = (valOverride || tagInput).trim();
-        if (val) {
-            if (!tags.includes(val)) {
+        const rawVal = (valOverride || tagInput).trim();
+        if (rawVal) {
+            // Capitalize first letter
+            const val = rawVal.charAt(0).toUpperCase() + rawVal.slice(1);
+            
+            // Case-insensitive duplicate check
+            const exists = tags.some(t => t.toLowerCase() === val.toLowerCase());
+            
+            if (!exists) {
                 setTags(prev => [...prev, val]);
             }
             if (!valOverride) setTagInput('');
