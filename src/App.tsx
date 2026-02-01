@@ -77,7 +77,7 @@ function App() {
         {/* Track List Container */}
         <div style={{ 
           flex: 1, 
-          overflowY: 'auto', 
+          overflow: 'hidden', 
           display: 'flex',
           flexDirection: 'column'
         }}>

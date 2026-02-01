@@ -96,7 +96,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date 
-             FROM tracks LIMIT 100", // Limit for safety during dev
+             FROM tracks", // Removed LIMIT
         )?;
 
         let track_iter = stmt.query_map([], |row| {

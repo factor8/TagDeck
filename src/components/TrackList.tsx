@@ -1,5 +1,6 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
     useReactTable, 
     getCoreRowModel, 
@@ -364,8 +365,17 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
         }
     }
 
+    const parentRef = useRef<HTMLDivElement>(null);
+    const { rows } = table.getRowModel();
+    const rowVirtualizer = useVirtualizer({
+        count: rows.length,
+        getScrollElement: () => parentRef.current,
+        estimateSize: () => 35,
+        overscan: 20,
+    });
+
     return (
-        <div style={{ width: '100%', fontSize: '13px', position: 'relative' }}>
+        <div style={{ width: '100%', height: '100%', fontSize: '13px', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             {loading && (
                 <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center' }}>
                     Loading library...
@@ -435,7 +445,14 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                 onDragEnd={handleDragEnd} 
                 sensors={sensors}
             >
-                <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                <div 
+                    ref={parentRef}
+                    style={{ 
+                        overflow: 'auto', 
+                        width: '100%',
+                        height: '100%'
+                    }}
+                >
                     <table style={{ 
                         width: table.getTotalSize(), 
                         minWidth: '100%',
@@ -447,6 +464,7 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                             position: 'sticky', 
                             top: 0, 
                             zIndex: 10,
+                            background: 'var(--bg-primary)'
                         }}>
                              {table.getHeaderGroups().map(headerGroup => (
                                 <tr key={headerGroup.id}>
@@ -462,18 +480,25 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                             ))}
                         </thead>
                         <tbody>
-                            {table.getRowModel().rows.map(row => {
+                            {rowVirtualizer.getVirtualItems().length > 0 && (
+                                <tr style={{ height: `${rowVirtualizer.getVirtualItems()[0].start}px` }}>
+                                    <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
+                                </tr>
+                            )}
+                            {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                                const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackId === row.original.id;
                                 return (
                                     <tr 
                                         key={row.id}
+                                        data-index={virtualRow.index} 
+                                        ref={rowVirtualizer.measureElement}
                                         onClick={() => onSelect(row.original)}
                                         style={{ 
                                             borderBottom: '1px solid var(--bg-secondary)',
                                             background: isSelected ? 'rgba(59, 130, 246, 0.15)' : 'transparent',
                                             color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)',
-                                            cursor: 'pointer',
-                                            transition: 'background 0.1s ease'
+                                            cursor: 'pointer'
                                         }}
                                         onMouseEnter={(e) => {
                                             if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
@@ -498,9 +523,14 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                                     </tr>
                                 );
                             })}
+                            {rowVirtualizer.getVirtualItems().length > 0 && (
+                                <tr style={{ height: `${rowVirtualizer.getTotalSize() - rowVirtualizer.getVirtualItems()[rowVirtualizer.getVirtualItems().length - 1].end}px` }}>
+                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
+                                </tr>
+                            )}
                             {tracks.length === 0 && !loading && (
                                 <tr>
-                                    <td colSpan={columns.length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                    <td colSpan={table.getVisibleLeafColumns().length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         <div style={{ fontSize: '16px', marginBottom: '8px' }}>Library is empty</div>
                                         <div style={{ fontSize: '13px', opacity: 0.7 }}>Import an iTunes XML file to get started</div>
                                     </td>
