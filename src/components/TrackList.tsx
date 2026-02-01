@@ -38,6 +38,7 @@ interface Props {
     refreshTrigger: number;
     onSelect: (track: Track) => void;
     selectedTrackId: number | null;
+    searchTerm: string;
 }
 
 // Format helpers
@@ -134,10 +135,24 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) {
+export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTerm }: Props) {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [loading, setLoading] = useState(false);
     
+    // Filter tracks based on search term
+    const filteredTracks = useMemo(() => {
+        if (!searchTerm) return tracks;
+        const lowerSearch = searchTerm.toLowerCase();
+        return tracks.filter(track => {
+            return (
+                (track.title && track.title.toLowerCase().includes(lowerSearch)) ||
+                (track.artist && track.artist.toLowerCase().includes(lowerSearch)) ||
+                (track.album && track.album.toLowerCase().includes(lowerSearch)) ||
+                (track.comment_raw && track.comment_raw.toLowerCase().includes(lowerSearch))
+            );
+        });
+    }, [tracks, searchTerm]);
+
     // Persistence Helper
     const loadState = <T,>(key: string, defaultVal: T): T => {
         try {
@@ -325,7 +340,7 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
     ], [isMenuOpen]);
 
     const table = useReactTable({
-        data: tracks,
+        data: filteredTracks,
         columns,
         state: {
             sorting,
@@ -528,11 +543,15 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId }: Props) 
                                      <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
                                 </tr>
                             )}
-                            {tracks.length === 0 && !loading && (
+                            {filteredTracks.length === 0 && !loading && (
                                 <tr>
                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                                        <div style={{ fontSize: '16px', marginBottom: '8px' }}>Library is empty</div>
-                                        <div style={{ fontSize: '13px', opacity: 0.7 }}>Import an iTunes XML file to get started</div>
+                                        <div style={{ fontSize: '16px', marginBottom: '8px' }}>
+                                            {searchTerm ? 'No tracks found' : 'Library is empty'}
+                                        </div>
+                                        <div style={{ fontSize: '13px', opacity: 0.7 }}>
+                                            {searchTerm ? `No matches for "${searchTerm}"` : 'Import an iTunes XML file to get started'}
+                                        </div>
                                     </td>
                                 </tr>
                             )}

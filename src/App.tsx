@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import './App.css';
+import { Search } from 'lucide-react';
 import { LibraryImporter } from './components/LibraryImporter';
 import { TrackList } from './components/TrackList';
 import { Player } from './components/Player';
@@ -11,6 +12,7 @@ function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
@@ -62,6 +64,39 @@ function App() {
           <div style={{ width: '24px', height: '24px', background: 'var(--accent-color)', borderRadius: '4px' }}></div>
           <h1 style={{ margin: 0, fontSize: '18px', color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>TagDeck</h1>
         </div>
+        
+        {/* Search Bar */}
+        <div style={{ flex: 1, maxWidth: '500px', margin: '0 20px', position: 'relative' }}>
+            <div style={{ 
+                position: 'absolute', 
+                left: '10px', 
+                top: '50%', 
+                transform: 'translateY(-50%)',
+                color: 'var(--text-secondary)',
+                pointerEvents: 'none'
+            }}>
+                <Search size={16} />
+            </div>
+            <input 
+                type="text" 
+                placeholder="Search library..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{
+                    width: '100%',
+                    padding: '8px 10px 8px 36px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--border-color)',
+                    background: 'var(--bg-tertiary)',
+                    color: 'var(--text-primary)',
+                    fontSize: '13px',
+                    outline: 'none'
+                }}
+                onFocus={(e) => e.target.style.borderColor = 'var(--accent-color)'}
+                onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
+            />
+        </div>
+
         <div>
           <LibraryImporter onImportComplete={handleRefresh} />
         </div>
@@ -85,6 +120,7 @@ function App() {
             refreshTrigger={refreshTrigger} 
             onSelect={handleTrackSelect}
             selectedTrackId={selectedTrack ? selectedTrack.id : null}
+            searchTerm={searchTerm}
           />
         </div>
 
