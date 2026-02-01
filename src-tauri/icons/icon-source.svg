@@ -1,0 +1,28 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Background: Dark Slate -->
+    <rect width="1024" height="1024" rx="220" fill="#0f172a"/>
+    
+    <!-- Design: Stacked Decks -->
+    <!-- Bottom Card -->
+    <rect x="212" y="320" width="600" height="400" rx="40" fill="#1e293b" stroke="#334155" stroke-width="20"/>
+    
+    <!-- Middle Card -->
+    <rect x="262" y="270" width="600" height="400" rx="40" fill="#334155" stroke="#475569" stroke-width="20"/>
+    
+    <!-- Top Card (Active) -->
+    <rect x="312" y="220" width="600" height="400" rx="40" fill="#3b82f6"/>
+    
+    <!-- Tag Symbol Integration -->
+    <!-- The hole of the tag -->
+    <circle cx="380" cy="288" r="25" fill="#ffffff" fill-opacity="0.9"/>
+    
+    <!-- Text: TD -->
+    <path d="M510 500 H 680" stroke="white" stroke-width="60" stroke-linecap="round"/>
+    <path d="M595 500 V 350" stroke="white" stroke-width="60" stroke-linecap="round"/>
+    
+    <!-- Pill Shapes (Representing The Tags) -->
+    <rect x="382" y="440" width="180" height="50" rx="25" fill="white" fill-opacity="0.3"/>
+    <rect x="582" y="440" width="250" height="50" rx="25" fill="white" fill-opacity="0.3"/>
+    <rect x="382" y="510" width="280" height="50" rx="25" fill="white" fill-opacity="0.3"/>
+
+</svg>
