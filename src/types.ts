@@ -16,3 +16,11 @@ export interface Track {
     date_added: number;
     bpm: number;
 }
+
+export interface Playlist {
+    id: number;
+    persistent_id: string;
+    parent_persistent_id?: string;
+    name: string;
+    is_folder: boolean;
+}

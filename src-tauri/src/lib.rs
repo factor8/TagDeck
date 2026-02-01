@@ -43,7 +43,9 @@ pub fn run() {
             commands::get_global_tags,
             commands::show_in_finder,
             commands::write_tags,
-            commands::import_from_music_app
+            commands::import_from_music_app,
+            commands::get_playlists,
+            commands::get_playlist_track_ids
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

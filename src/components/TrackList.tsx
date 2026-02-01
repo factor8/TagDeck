@@ -39,6 +39,7 @@ interface Props {
     onSelect: (track: Track) => void;
     selectedTrackId: number | null;
     searchTerm: string;
+    playlistId: number | null;
 }
 
 // Format helpers
@@ -141,15 +142,42 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTerm }: Props) {
+export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTerm, playlistId }: Props) {
     const [tracks, setTracks] = useState<Track[]>([]);
+    const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
     
-    // Filter tracks based on search term
+    // Load playlist filter
+    useEffect(() => {
+        async function loadPlaylistFilter() {
+            if (playlistId === null) {
+                setAllowedTrackIds(null);
+                return;
+            }
+            try {
+                // Ensure correct parameter mapping
+                const ids = await invoke<number[]>('get_playlist_track_ids', { playlistId });
+                setAllowedTrackIds(new Set(ids));
+            } catch (e) {
+                console.error("Failed to load playlist tracks", e);
+                setAllowedTrackIds(new Set());
+            }
+        }
+        loadPlaylistFilter();
+    }, [playlistId]);
+
+    // Filter tracks based on search term and playlist
     const filteredTracks = useMemo(() => {
-        if (!searchTerm) return tracks;
+        let result = tracks;
+
+        // Filter by playlist
+        if (allowedTrackIds !== null) {
+            result = result.filter(t => allowedTrackIds.has(t.id));
+        }
+
+        if (!searchTerm) return result;
         const lowerSearch = searchTerm.toLowerCase();
-        return tracks.filter(track => {
+        return result.filter(track => {
             return (
                 (track.title && track.title.toLowerCase().includes(lowerSearch)) ||
                 (track.artist && track.artist.toLowerCase().includes(lowerSearch)) ||
@@ -157,7 +185,7 @@ export function TrackList({ refreshTrigger, onSelect, selectedTrackId, searchTer
                 (track.comment_raw && track.comment_raw.toLowerCase().includes(lowerSearch))
             );
         });
-    }, [tracks, searchTerm]);
+    }, [tracks, searchTerm, allowedTrackIds]);
 
     // Persistence Helper
     const loadState = <T,>(key: string, defaultVal: T): T => {

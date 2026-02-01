@@ -9,6 +9,7 @@ struct LibraryExport: Encodable {
 
 struct ExportPlaylist: Encodable {
     let persistent_id: String
+    let parent_persistent_id: String?
     let name: String
     let is_folder: Bool
     let track_ids: [String]
@@ -115,6 +116,12 @@ func main() {
             let pidNumber = playlist.persistentID.uint64Value
             let pidString = String(format: "%016llX", pidNumber)
             
+            // Parent Persistent ID
+            var parentPidString: String? = nil
+            if let parent = playlist.parentID {
+                parentPidString = String(format: "%016llX", parent.uint64Value)
+            }
+            
             // Get track Persistent IDs for this playlist
             // ITLibPlaylist.items -> [ITLibMediaItem]
             let trackIds = playlist.items.map { item in
@@ -125,6 +132,7 @@ func main() {
             
             exportPlaylists.append(ExportPlaylist(
                 persistent_id: pidString,
+                parent_persistent_id: parentPidString,
                 name: playlist.name,
                 is_folder: isFolder,
                 track_ids: trackIds

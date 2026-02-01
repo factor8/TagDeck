@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import './App.css';
 import { Search } from 'lucide-react';
+import Sidebar from './components/Sidebar';
 import { LibraryImporter } from './components/LibraryImporter';
 import { TrackList } from './components/TrackList';
 import { Player } from './components/Player';
@@ -11,6 +12,7 @@ import { Track } from './types';
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -109,6 +111,12 @@ function App() {
         position: 'relative',
         display: 'flex'
       }}>
+        <Sidebar 
+          selectedPlaylistId={selectedPlaylistId} 
+          onSelectPlaylist={setSelectedPlaylistId} 
+          refreshTrigger={refreshTrigger}
+        />
+        
         {/* Track List Container */}
         <div style={{ 
           flex: 1, 
@@ -121,6 +129,7 @@ function App() {
             onSelect={handleTrackSelect}
             selectedTrackId={selectedTrack ? selectedTrack.id : null}
             searchTerm={searchTerm}
+            playlistId={selectedPlaylistId}
           />
         </div>
 

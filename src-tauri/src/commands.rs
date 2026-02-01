@@ -149,9 +149,9 @@ pub async fn import_from_music_app(state: State<'_, AppState>) -> Result<usize, 
     println!("Importing from Music.app...");
 
     // 1. Fetch from Sidecar
-    let tracks = fetch_system_library().map_err(|e| e.to_string())?;
+    let (tracks, playlists) = fetch_system_library().map_err(|e| e.to_string())?;
     let count = tracks.len();
-    println!("Found {} tracks from Music.app", count);
+    println!("Found {} tracks and {} playlists from Music.app", count, playlists.len());
 
     // 2. Insert into DB
     let db = state
@@ -162,6 +162,22 @@ pub async fn import_from_music_app(state: State<'_, AppState>) -> Result<usize, 
     for track in tracks {
         db.insert_track(&track).map_err(|e| e.to_string())?;
     }
+    
+    for playlist in playlists {
+        db.insert_playlist(&playlist).map_err(|e| e.to_string())?;
+    }
 
     Ok(count)
+}
+
+#[tauri::command]
+pub async fn get_playlists(state: State<'_, AppState>) -> Result<Vec<crate::models::Playlist>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.get_playlists().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_playlist_track_ids(state: State<'_, AppState>, playlist_id: i64) -> Result<Vec<i64>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.get_playlist_track_ids(playlist_id).map_err(|e| e.to_string())
 }

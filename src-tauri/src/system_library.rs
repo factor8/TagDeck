@@ -8,6 +8,8 @@ use crate::models::{Track, Playlist};
 #[derive(Debug, Deserialize)]
 struct ExternalPlaylist {
     pub persistent_id: String,
+    #[serde(default)]
+    pub parent_persistent_id: Option<String>,
     pub name: String,
     pub is_folder: bool,
     pub track_ids: Vec<String>,
@@ -113,6 +115,7 @@ pub fn fetch_system_library() -> Result<(Vec<Track>, Vec<Playlist>)> {
         .map(|p| Playlist {
             id: 0,
             persistent_id: p.persistent_id,
+            parent_persistent_id: p.parent_persistent_id,
             name: p.name,
             is_folder: p.is_folder,
             track_ids: Some(p.track_ids),
