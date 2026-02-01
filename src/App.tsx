@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import './App.css';
-import { Search } from 'lucide-react';
+import './Panel.css';
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
+import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import { LibraryImporter } from './components/LibraryImporter';
 import { TrackList } from './components/TrackList';
@@ -15,6 +17,36 @@ function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const leftPanelRef = useRef<PanelImperativeHandle>(null);
+  const rightPanelRef = useRef<PanelImperativeHandle>(null);
+  const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
+  const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  // Toggle handlers
+  const toggleLeftPanel = () => {
+      const panel = leftPanelRef.current;
+      if (panel) {
+          const isCollapsed = panel.isCollapsed();
+          if (isCollapsed) {
+            panel.expand();
+          } else {
+            panel.collapse();
+          }
+      }
+  };
+
+  const toggleRightPanel = () => {
+      const panel = rightPanelRef.current;
+      if (panel) {
+          const isCollapsed = panel.isCollapsed();
+          if (isCollapsed) {
+            panel.expand();
+          } else {
+            panel.collapse();
+          }
+      }
+  };
 
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
@@ -99,7 +131,39 @@ function App() {
             />
         </div>
 
-        <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+             {/* Toggle Buttons */}
+             <button 
+                onClick={toggleLeftPanel}
+                style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}
+                title={isLeftCollapsed ? "Show Sidebar" : "Hide Sidebar"}
+            >
+                {isLeftCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
+            </button>
+            <button 
+                onClick={toggleRightPanel}
+                style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}
+                title={isRightCollapsed ? "Show Tag Deck" : "Hide Tag Deck"}
+            >
+                {isRightCollapsed ? <PanelRightOpen size={20} /> : <PanelRightClose size={20} />}
+            </button>
+            
           <LibraryImporter onImportComplete={handleRefresh} />
         </div>
       </header>
@@ -111,59 +175,90 @@ function App() {
         position: 'relative',
         display: 'flex'
       }}>
-        <Sidebar 
-          selectedPlaylistId={selectedPlaylistId} 
-          onSelectPlaylist={setSelectedPlaylistId} 
-          refreshTrigger={refreshTrigger}
-        />
+      <PanelGroup orientation="horizontal" style={{ height: '100%', width: '100%' }}>
+        {/* Left Sidebar */}
+        <Panel 
+            panelRef={leftPanelRef}
+            defaultSize="20" 
+            minSize="15" 
+            maxSize="50"
+            collapsible={true}
+            onResize={() => {
+              const isCollapsed = leftPanelRef.current?.isCollapsed() ?? false;
+              setIsLeftCollapsed(isCollapsed);
+            }}
+        >
+            <Sidebar 
+            selectedPlaylistId={selectedPlaylistId} 
+            onSelectPlaylist={setSelectedPlaylistId} 
+            refreshTrigger={refreshTrigger}
+            />
+        </Panel>
         
+        <PanelResizeHandle className="resize-handle" />
+
         {/* Track List Container */}
-        <div style={{ 
-          flex: 1, 
-          overflow: 'hidden', 
-          display: 'flex',
-          flexDirection: 'column'
-        }}>
-          <TrackList 
-            refreshTrigger={refreshTrigger} 
-            onSelect={handleTrackSelect}
-            selectedTrackId={selectedTrack ? selectedTrack.id : null}
-            searchTerm={searchTerm}
-            playlistId={selectedPlaylistId}
-          />
-        </div>
+        <Panel minSize="30">
+            <div style={{ 
+            height: '100%', 
+            overflow: 'hidden', 
+            display: 'flex',
+            flexDirection: 'column'
+            }}>
+            <TrackList 
+                refreshTrigger={refreshTrigger} 
+                onSelect={handleTrackSelect}
+                selectedTrackId={selectedTrack ? selectedTrack.id : null}
+                searchTerm={searchTerm}
+                playlistId={selectedPlaylistId}
+            />
+            </div>
+        </Panel>
+
+        <PanelResizeHandle className="resize-handle" />
 
         {/* Right Sidebar: Tag Editor + Tag Deck */}
-        <div style={{ 
-            width: '320px', 
-            flexShrink: 0, 
-            zIndex: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            borderLeft: '1px solid var(--border-color)',
-            background: 'var(--bg-secondary)'
-        }}>
-           {/* Editor Panel (Fixed at top of sidebar) */}
-           {selectedTrack ? (
-               <TagEditor 
-                    track={selectedTrack} 
-                    onUpdate={handleRefresh} 
-               />
-           ) : (
-               <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>
-                   Select a track to edit tags
-               </div>
-           )}
-
-           {/* Tag Deck (Takes remaining space) */}
-           <div style={{ flex: 1, overflow: 'hidden' }}>
-               <TagDeck 
-                    onTagClick={handleDeckTagClick} 
-                    currentTrackTags={currentTags}
-                    refreshTrigger={refreshTrigger}
+        <Panel 
+            panelRef={rightPanelRef}
+            defaultSize="25" 
+            minSize="20" 
+            maxSize="60"
+            collapsible={true}
+            onResize={() => {
+              const isCollapsed = rightPanelRef.current?.isCollapsed() ?? false;
+              setIsRightCollapsed(isCollapsed);
+            }}
+        >
+            <div style={{ 
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                background: 'var(--bg-secondary)'
+            }}>
+            {/* Editor Panel (Fixed at top of sidebar) */}
+            {selectedTrack ? (
+                <TagEditor 
+                        track={selectedTrack} 
+                        onUpdate={handleRefresh} 
                 />
-           </div>
-        </div>
+            ) : (
+                <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>
+                    Select a track to edit tags
+                </div>
+            )}
+
+            {/* Tag Deck (Takes remaining space) */}
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+                <TagDeck 
+                        onTagClick={handleDeckTagClick} 
+                        currentTrackTags={currentTags}
+                        refreshTrigger={refreshTrigger}
+                    />
+            </div>
+            </div>
+        </Panel>
+      
+      </PanelGroup>
       </div>
 
       {/* Player Footer */}

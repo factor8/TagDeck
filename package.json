@@ -21,7 +21,8 @@
     "@tauri-apps/plugin-opener": "^2",
     "lucide-react": "^0.563.0",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "react-resizable-panels": "^4.5.7"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

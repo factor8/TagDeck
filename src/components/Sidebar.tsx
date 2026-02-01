@@ -15,8 +15,6 @@ interface PlaylistNode extends Playlist {
 
 export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [loading, setLoading] = useState(false);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -24,15 +22,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   }, [refreshTrigger]);
 
   async function loadPlaylists() {
-    setLoading(true);
     try {
       const data = await invoke<Playlist[]>('get_playlists');
       setPlaylists(data);
     } catch (e) {
       console.error("Failed to load playlists", e);
-    } finally {
-      setLoading(false);
-    }
+    } 
   }
 
   const toggleFolder = (persistentId: string) => {
@@ -166,12 +161,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
   return (
     <div style={{
-      width: '250px',
-      minWidth: '200px',
-      maxWidth: '400px',
+      width: '100%',
+      minWidth: '100px', // Handled by Panel now
+      maxWidth: '100%',
       height: '100%',
-      backgroundColor: 'var(--bg-secondary)', // Use theme var
-      borderRight: '1px solid var(--border-color)',
+      backgroundColor: 'var(--bg-secondary)', 
+      // borderRight: '1px solid var(--border-color)', // Handled by Panel Resize Handle
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
