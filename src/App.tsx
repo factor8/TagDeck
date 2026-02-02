@@ -54,29 +54,11 @@ function App() {
     setRefreshTrigger(prev => prev + 1);
   };
   
-  const handleSelectionChange = (ids: Set<number>, lastId: number | null, primaryTrack: Track | null) => {
+  const handleSelectionChange = (ids: Set<number>, lastId: number | null, primaryTrack: Track | null, commonTags: string[]) => {
     setSelectedTrackIds(ids);
     setLastSelectedTrackId(lastId);
     setSelectedTrack(primaryTrack);
-
-    // If nothing selected, clear
-    if (ids.size === 0 || !primaryTrack) {
-        setCurrentTags([]);
-        return;
-    }
-
-    // Populate tags from primary track
-    if (primaryTrack.comment_raw) {
-        const splitIndex = primaryTrack.comment_raw.indexOf(' && ');
-        if (splitIndex !== -1) {
-            const tagBlock = primaryTrack.comment_raw.substring(splitIndex + 4);
-            setCurrentTags(tagBlock.split(';').map(t => t.trim()).filter(t => t.length > 0));
-        } else {
-            setCurrentTags([]);
-        }
-    } else {
-        setCurrentTags([]);
-    }
+    setCurrentTags(commonTags);
   };
 
   const handleDeckTagClick = (tag: string) => {
@@ -253,6 +235,7 @@ function App() {
                     track={selectedTrack} 
                     onUpdate={handleRefresh} 
                     selectedTrackIds={selectedTrackIds}
+                    commonTags={currentTags}
                 />
             ) : (
                 <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>

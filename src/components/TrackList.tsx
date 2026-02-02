@@ -38,10 +38,38 @@ interface Props {
     refreshTrigger: number;
     selectedTrackIds: Set<number>;
     lastSelectedTrackId: number | null;
-    onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null) => void;
+    onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
     searchTerm: string;
     playlistId: number | null;
 }
+
+// Helper to calculate common tags
+const getCommonTags = (tracks: Track[], selectedIds: Set<number>): string[] => {
+    if (selectedIds.size === 0) return [];
+    
+    // Get all selected track objects
+    const selectedTracks = tracks.filter(track => selectedIds.has(track.id));
+    if (selectedTracks.length === 0) return [];
+    
+    // Parse tags for first track to initialize intersection
+    const parse = (t: Track) => {
+        if (!t.comment_raw) return [];
+        const parts = t.comment_raw.split(" && ");
+        if (parts.length < 2) return [];
+        return parts[1].split(';').map(s => s.trim()).filter(x => x);
+    };
+    
+    let common = new Set(parse(selectedTracks[0]));
+    
+    // Intersect with rest
+    for (let i = 1; i < selectedTracks.length; i++) {
+        const tTags = new Set(parse(selectedTracks[i]));
+        common = new Set([...common].filter(x => tTags.has(x)));
+        if (common.size === 0) break;
+    }
+    
+    return Array.from(common);
+};
 
 // Format helpers
 const formatDuration = (secs: number) => {
@@ -212,7 +240,8 @@ export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds,
                         primaryTrack = filteredTracks.find(t => t.id === primaryId) || filteredTracks[0];
                     }
 
-                    onSelectionChange(allIds, primaryId, primaryTrack);
+                    const commonTags = getCommonTags(filteredTracks, allIds);
+                    onSelectionChange(allIds, primaryId, primaryTrack, commonTags);
                 }
             }
         };
@@ -491,7 +520,8 @@ export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds,
             newSelectedIds.add(track.id);
         }
         
-        onSelectionChange(newSelectedIds, newLastSelectedId, primaryTrack);
+        const commonTags = getCommonTags(rows.map(r => r.original), newSelectedIds);
+        onSelectionChange(newSelectedIds, newLastSelectedId, primaryTrack, commonTags);
     };
 
     const parentRef = useRef<HTMLDivElement>(null);

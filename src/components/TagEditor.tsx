@@ -7,9 +7,10 @@ interface Props {
     track: Track | null;
     onUpdate: () => void;
     selectedTrackIds?: Set<number>;
+    commonTags?: string[];
 }
 
-export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
+export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Props) {
     // rawComment is ONLY the Left Side (User Comment)
     const [userComment, setUserComment] = useState('');
     // tags is the Right Side parsed into pills
@@ -18,9 +19,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
     const [tagInput, setTagInput] = useState('');
     
     const [saving, setSaving] = useState(false);
+    
+    const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
 
     useEffect(() => {
-        if (track && track.comment_raw) {
+        if (isMultiSelect) {
+            setUserComment('');
+            setTags(commonTags || []);
+        } else if (track && track.comment_raw) {
             const raw = track.comment_raw;
             // Split only on the FIRST " && " to separate User Comment from Tag Block
             const splitIndex = raw.indexOf(' && ');
@@ -43,7 +49,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
             setTags([]);
         }
         setTagInput('');
-    }, [track]);
+    }, [track, isMultiSelect, commonTags]);
 
     // Define handleSave inside the component scope so it can be used by the effect
     // We wrap it in a function that doesn't depend on stale 'tags' state if we pass overrides
@@ -231,18 +237,33 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
         }
     };
     
-    const addTag = (valOverride?: string) => {
+    const addTag = async (valOverride?: string) => {
         const rawVal = (valOverride || tagInput).trim();
         if (rawVal) {
             // Capitalize first letter
             const val = rawVal.charAt(0).toUpperCase() + rawVal.slice(1);
             
-            setTags(prev => {
-                // Case-insensitive duplicate check using the latest state
-                const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
-                if (exists) return prev;
-                return [...prev, val];
-            });
+            if (isMultiSelect) {
+                const ids = Array.from(selectedTrackIds || []);
+                try {
+                    await invoke('batch_add_tag', { ids, tag: val });
+                    setTags(prev => {
+                        const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
+                        if (exists) return prev;
+                        return [...prev, val];
+                    });
+                    onUpdate();
+                } catch (e) {
+                    console.error("Batch add failed", e);
+                }
+            } else {
+                setTags(prev => {
+                    // Case-insensitive duplicate check using the latest state
+                    const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
+                    if (exists) return prev;
+                    return [...prev, val];
+                });
+            }
             
             if (!valOverride) setTagInput('');
         }
@@ -279,16 +300,18 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
             </div>
             
             {/* User Comment Section */}
-            <div style={{ padding: '0px 0 5px 0' }}>
-                <input 
-                    type="text"
-                    value={userComment}
-                    onChange={e => setUserComment(e.target.value)}
-                    style={styles.input}
-                    placeholder="Comment..."
-                    onKeyDown={e => { if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSave(); }}
-                />
-            </div>
+            {!isMultiSelect && (
+                <div style={{ padding: '0px 0 5px 0' }}>
+                    <input 
+                        type="text"
+                        value={userComment}
+                        onChange={e => setUserComment(e.target.value)}
+                        style={styles.input}
+                        placeholder="Comment..."
+                        onKeyDown={e => { if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSave(); }}
+                    />
+                </div>
+            )}
 
             {/* Tags Section */}
             <div style={{ padding: '0px 0 5px 0' }}>
@@ -298,7 +321,18 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
                             {tag}
                             <span 
                                 style={{ marginLeft: '4px', cursor: 'pointer', opacity: 0.6 }}
-                                onClick={(e) => { e.stopPropagation(); setTags(tags.filter((_, idx) => idx !== i)); }}
+                                onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    if (isMultiSelect) {
+                                         const ids = Array.from(selectedTrackIds || []);
+                                         invoke('batch_remove_tag', { ids, tag }).then(() => {
+                                             setTags(tags.filter((_, idx) => idx !== i));
+                                             onUpdate();
+                                         }).catch(console.error);
+                                    } else {
+                                        setTags(tags.filter((_, idx) => idx !== i)); 
+                                    }
+                                }}
                             >×</span>
                         </div>
                     ))}
@@ -315,8 +349,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds }: Props) {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0px' }}>
-                <button onClick={handleSave} disabled={saving} className="btn btn-primary" style={{ width: '100%', fontSize: '12px', padding: '6px' }}>
-                    {saving ? 'Saving...' : 'Save Changes'}
+                <button onClick={handleSave} disabled={saving || isMultiSelect} className="btn btn-primary" style={{ 
+                    width: '100%', 
+                    fontSize: '12px', 
+                    padding: '6px',
+                    opacity: isMultiSelect ? 0.5 : 1,
+                    cursor: isMultiSelect ? 'default' : 'pointer'
+                }}>
+                    {isMultiSelect ? 'Batch Editing Active' : (saving ? 'Saving...' : 'Save Changes')}
                 </button>
             </div>
         </div>

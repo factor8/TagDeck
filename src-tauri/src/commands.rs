@@ -2,7 +2,7 @@ use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::write_metadata as write_tags_to_file;
-use crate::apple_music::{update_track_comment, touch_file};
+use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file};
 use crate::models::Track;
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
@@ -157,6 +157,8 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
     // Drop lock to perform file IO
     drop(db_mutex); 
 
+    let mut apple_music_updates = Vec::new();
+
     for mut track in tracks_to_update {
         let current_comment = track.comment_raw.clone().unwrap_or_default();
         let (user_comment, tag_block) = if let Some(idx) = current_comment.find(" && ") {
@@ -202,12 +204,19 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                 }
             }
 
-            // 3. Music.app
+            // 3. Queue Music.app Update
              if !track.persistent_id.is_empty() {
-                 let _ = update_track_comment(&track.persistent_id, &new_full_comment);
+                 apple_music_updates.push((track.persistent_id.clone(), new_full_comment));
              } else {
                  let _ = touch_file(&track.file_path);
              }
+        }
+    }
+
+    // Flush Batch Update
+    if !apple_music_updates.is_empty() {
+        if let Err(e) = batch_update_track_comments(apple_music_updates) {
+            println!("Batch update to Music app failed: {}", e);
         }
     }
 
@@ -231,6 +240,8 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
             }
         }
     } // Drop lock
+
+    let mut apple_music_updates = Vec::new();
 
     for mut track in tracks_to_update {
         // Parse Comments
@@ -278,12 +289,19 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                 }
             }
 
-            // Music.app
+            // Music.app Queue
              if !track.persistent_id.is_empty() {
-                 let _ = update_track_comment(&track.persistent_id, &new_full_comment);
+                 apple_music_updates.push((track.persistent_id.clone(), new_full_comment));
              } else {
                  let _ = touch_file(&track.file_path);
              }
+        }
+    }
+
+    // Flush Batch
+    if !apple_music_updates.is_empty() {
+        if let Err(e) = batch_update_track_comments(apple_music_updates) {
+             println!("Batch update to Music app failed: {}", e);
         }
     }
 
