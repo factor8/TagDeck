@@ -132,15 +132,18 @@ function App() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       
       {/* Header */}
-      <header style={{ 
-        height: '60px', 
-        padding: '0 20px', 
-        background: 'var(--bg-secondary)', 
-        borderBottom: '1px solid var(--border-color)',
-        display: 'flex', 
-        justifyContent: 'space-between', 
-        alignItems: 'center',
-        flexShrink: 0
+      <header 
+         className="no-select"
+         data-tauri-drag-region 
+         style={{ 
+            height: '60px', 
+            padding: '0 20px', 
+            background: 'var(--bg-secondary)', 
+            borderBottom: '1px solid var(--border-color)',
+            display: 'flex', 
+            justifyContent: 'space-between', 
+            alignItems: 'center',
+            flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <AppLogo size={28} />
