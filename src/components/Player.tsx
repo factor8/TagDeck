@@ -208,6 +208,8 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
             setError(null);
             setIsPlaying(false);
             
+            let isCancelled = false;
+            
             const loadAudio = async () => {
                 try {
                      try { wavesurfer.stop(); } catch(e) { /* ignore */ }
@@ -216,6 +218,9 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                     // This bypasses potential CORS/Range-request issues with Web Audio API + asset://
                     console.log('Reading file for playback:', track.file_path);
                     const contents = await readFile(track.file_path);
+                    
+                    if (isCancelled) return;
+
                     const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
                                    track.format === 'm4a' ? 'audio/mp4' : 
                                    track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
@@ -223,20 +228,32 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                     const blob = new Blob([contents], { type: mimeType });
                     const blobUrl = URL.createObjectURL(blob);
                     
+                    if (isCancelled) {
+                        URL.revokeObjectURL(blobUrl);
+                        return;
+                    }
+
                     console.log('Loading Blob URL:', blobUrl);
                     setCurrentUrl(blobUrl);
                     
                     await wavesurfer.load(blobUrl);
                     
+                    if (isCancelled) return;
+                    
                     if (autoPlay) {
+                        console.log("AutoPlay requested, attempting play...");
                         try {
                             await wavesurfer.play();
+                            console.log("AutoPlay started successfully");
                         } catch (e) {
                             console.warn("Auto-play failed:", e);
+                            // Retry once with a small delay if interaction issue suspected, 
+                            // though double-click should cover it.
                         }
                     }
                     
                 } catch (err) {
+                    if (isCancelled) return;
                     console.error("Error loading audio file:", err);
                     setError(`Failed to load audio: ${err}`);
                     
@@ -251,6 +268,10 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
             };
     
             loadAudio();
+            
+            return () => {
+                isCancelled = true;
+            };
         } else {
              // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
              if (autoPlay) {
