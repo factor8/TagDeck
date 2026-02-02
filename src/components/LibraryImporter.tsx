@@ -67,7 +67,7 @@ export function LibraryImporter({ onImportComplete }: Props) {
                 }}
             >
                 {importing ? <Loader2 size={14} className="spin" /> : null}
-                {importing ? 'Syncing...' : 'Sync Music.app'}
+                {importing ? 'Syncing...' : 'Sync iTunes'}
             </button>
             <button onClick={handleXMLImport} disabled={importing} className="btn" style={{ fontSize: '13px', padding: '6px 12px', background: 'var(--bg-tertiary)' }}>
                 Import XML
