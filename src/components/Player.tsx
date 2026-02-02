@@ -13,9 +13,10 @@ interface Props {
     onTrackError?: () => void;
     accentColor?: string;
     onArtworkClick?: () => void;
+    onPlayStateChange?: (isPlaying: boolean) => void;
 }
 
-export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick }: Props) {
+export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
     const prevTrackIdRef = useRef<number | null>(null);
@@ -93,9 +94,18 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
         });
 
         // Event listeners
-        ws.on('play', () => setIsPlaying(true));
-        ws.on('pause', () => setIsPlaying(false));
-        ws.on('finish', () => setIsPlaying(false));
+        ws.on('play', () => {
+            setIsPlaying(true);
+            onPlayStateChange?.(true);
+        });
+        ws.on('pause', () => {
+             setIsPlaying(false);
+             onPlayStateChange?.(false);
+        });
+        ws.on('finish', () => {
+            setIsPlaying(false);
+            onPlayStateChange?.(false);
+        });
         ws.on('ready', () => {
             console.log("WaveSurfer Ready. Duration:", ws.getDuration());
             if (autoPlayRef.current) {

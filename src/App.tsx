@@ -17,6 +17,7 @@ function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [playingTrack, setPlayingTrack] = useState<Track | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
   const [lastSelectedTrackId, setLastSelectedTrackId] = useState<number | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(() => {
@@ -324,6 +325,7 @@ function App() {
               selectedTrackIds={selectedTrackIds}
               lastSelectedTrackId={lastSelectedTrackId}
               playingTrackId={playingTrack?.id}
+              isPlaying={isPlaying}
               searchTerm={searchTerm}
               onRefresh={handleRefresh}
             />
@@ -403,6 +405,7 @@ function App() {
         onTrackError={handleRefresh}
         accentColor={accentColor}
         onArtworkClick={() => setIsSidebarArtworkVisible(prev => !prev)}
+        onPlayStateChange={setIsPlaying}
       />
     </div>
   );
