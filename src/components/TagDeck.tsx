@@ -60,7 +60,7 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     }, [filter]);
 
     return (
-        <div style={styles.container}>
+        <div style={styles.container} className="no-select">
             <div style={styles.header}>
                 <h3 style={styles.title}>Tag Deck</h3>
                 <input 
@@ -110,7 +110,6 @@ const styles = {
         display: 'flex',
         flexDirection: 'column' as const,
         background: 'var(--bg-secondary)',
-        userSelect: 'none' as const,
     },
     header: {
         padding: '15px',

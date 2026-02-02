@@ -160,7 +160,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   };
 
   return (
-    <div style={{
+    <div className="no-select" style={{
       width: '100%',
       minWidth: '100px', // Handled by Panel now
       maxWidth: '100%',
@@ -170,7 +170,6 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
-      userSelect: 'none',
       color: 'var(--text-primary)'
     }}>
       <div style={{ 
