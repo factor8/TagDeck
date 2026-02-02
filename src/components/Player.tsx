@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Track } from '../types';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw, Music } from 'lucide-react';
 
 interface Props {
     track: Track | null;
@@ -28,6 +28,39 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }
     const [currentUrl, setCurrentUrl] = useState<string | null>(null);
     const [isMuted, setIsMuted] = useState(false);
     const [volume, setVolume] = useState(1);
+    const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
+
+    // Fetch Artwork
+    useEffect(() => {
+        setArtworkUrl(null);
+        if (!track) return;
+        
+        let active = true;
+        const fetchArt = async () => {
+             try {
+                const data = await invoke<number[] | null>('get_track_artwork', { id: track.id });
+                if (active && data) {
+                     const blob = new Blob([new Uint8Array(data)]);
+                     const url = URL.createObjectURL(blob);
+                     setArtworkUrl(url);
+                }
+             } catch(e) {
+                 console.warn("Artwork fetch failed", e);
+             }
+        };
+        fetchArt();
+        
+        return () => {
+             active = false;
+        };
+    }, [track]);
+
+    // Cleanup Artwork URL
+    useEffect(() => {
+        return () => {
+            if (artworkUrl) URL.revokeObjectURL(artworkUrl);
+        };
+    }, [artworkUrl]);
 
     // Error toast timer
     useEffect(() => {
@@ -276,11 +309,38 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }
     return (
         <div style={styles.container}>
             {/* Left: Track Info */}
-            <div style={styles.info}>
-                <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{track.title || 'Unknown Title'}</div>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{track.artist || 'Unknown Artist'}</div>
-                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '4px' }}>
-                    {track.format} • {track.file_path.split('/').pop()}
+            <div style={{ ...styles.info, display: 'flex', alignItems: 'center' }}>
+                {/* Artwork */}
+                <div style={{ 
+                    width: '48px', 
+                    height: '48px', 
+                    borderRadius: '4px', 
+                    overflow: 'hidden', 
+                    marginRight: '12px',
+                    background: 'var(--bg-tertiary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                }}>
+                    {artworkUrl ? (
+                         <img src={artworkUrl} alt="Album Art" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    ) : (
+                         <Music size={24} color="var(--text-secondary)" opacity={0.5} />
+                    )}
+                </div>
+                
+                <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {track.title || 'Unknown Title'}
+                    </div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {track.artist || 'Unknown Artist'}
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '2px' }}>
+                        {track.format} • {track.file_path.split('/').pop()}
+                    </div>
                 </div>
             </div>
 

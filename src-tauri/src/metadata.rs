@@ -148,3 +148,18 @@ pub fn write_tags<P: AsRef<Path>>(path: P, new_tags_string: &str) -> Result<()> 
 
     Ok(())
 }
+
+pub fn get_artwork<P: AsRef<Path>>(path: P) -> Result<Option<Vec<u8>>> {
+    let tagged_file = read_from_path(path.as_ref()).context("Failed to read file")?;
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag());
+
+    if let Some(tag) = tag {
+        if let Some(picture) = tag.pictures().first() {
+            return Ok(Some(picture.data().to_vec()));
+        }
+    }
+    
+    Ok(None)
+}

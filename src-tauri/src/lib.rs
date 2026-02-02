@@ -49,7 +49,8 @@ pub fn run() {
             commands::import_from_music_app,
             commands::get_playlists,
             commands::get_playlist_track_ids,
-            commands::mark_track_missing
+            commands::mark_track_missing,
+            commands::get_track_artwork
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

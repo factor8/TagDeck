@@ -1,7 +1,7 @@
 use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
-use crate::metadata::write_metadata as write_tags_to_file;
+use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
 use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file};
 use crate::models::Track;
 use std::sync::Mutex;
@@ -390,4 +390,13 @@ pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppStat
 #[tauri::command]
 pub async fn debug_db_path(state: State<'_, AppState>) -> Result<String, String> {
     Ok("Debug path info not exposed directly but DB is open".to_string())
+}
+
+#[tauri::command]
+pub async fn get_track_artwork(id: i64, state: State<'_, AppState>) -> Result<Option<Vec<u8>>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let path = db.get_track_path(id).map_err(|e| e.to_string())?;
+    drop(db); // Release lock before doing IO
+    
+    get_artwork(&path).map_err(|e| e.to_string())
 }
