@@ -39,7 +39,15 @@ pub async fn get_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String
         .db
         .lock()
         .map_err(|_| "Failed to lock DB".to_string())?;
-    db.get_all_tracks().map_err(|e| e.to_string())
+    let tracks = db.get_all_tracks().map_err(|e| e.to_string())?;
+    
+    // Debug logging for missing tracks
+    let missing_count = tracks.iter().filter(|t| t.missing).count();
+    if missing_count > 0 {
+        println!("get_tracks: Found {} missing tracks", missing_count);
+    }
+    
+    Ok(tracks)
 }
 
 #[tauri::command]
@@ -348,6 +356,12 @@ pub async fn get_playlist_track_ids(state: State<'_, AppState>, playlist_id: i64
 
 #[tauri::command]
 pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppState>) -> Result<(), String> {
+    println!("Executing mark_track_missing: id={}, missing={}", id, missing);
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.set_track_missing(id, missing).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn debug_db_path(state: State<'_, AppState>) -> Result<String, String> {
+    Ok("Debug path info not exposed directly but DB is open".to_string())
 }
