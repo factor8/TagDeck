@@ -31,13 +31,14 @@ import {
     useSortable 
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2 } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
     refreshTrigger: number;
     selectedTrackIds: Set<number>;
     lastSelectedTrackId: number | null;
+    playingTrackId?: number | null;
     onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
     onTrackDoubleClick?: (track: Track) => void;
     searchTerm: string;
@@ -48,6 +49,8 @@ interface Props {
 export interface TrackListHandle {
     selectNext: () => void;
     selectPrev: () => void;
+    getNextTrack: (fromId: number | null) => Track | null;
+    getPrevTrack: (fromId: number | null) => Track | null;
 }
 
 // Helper to calculate common tags
@@ -174,7 +177,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId, onRefresh }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, searchTerm, playlistId, onRefresh }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -323,7 +326,17 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         columnHelper.accessor('artist', {
             id: 'artist',
             header: 'Artist',
-            cell: info => info.getValue(),
+            cell: info => {
+                const isPlaying = playingTrackId === info.row.original.id;
+                return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {isPlaying && (
+                             <Volume2 size={12} fill="currentColor" style={{ flexShrink: 0, color: 'var(--accent-color)' }} />
+                        )}
+                        <span>{info.getValue()}</span>
+                    </div>
+                );
+            },
             size: 150,
         }),
         columnHelper.accessor('title', {
@@ -458,7 +471,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 </div>
             )
         })
-    ], [isMenuOpen]);
+    ], [isMenuOpen, playingTrackId]);
 
     const table = useReactTable({
         data: filteredTracks,
@@ -611,6 +624,23 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 onSelectionChange(newSet, prevTrack.id, prevTrack, commonTags);
                 rowVirtualizer.scrollToIndex(prevIndex);
             }
+        },
+        getNextTrack: (fromId: number | null) => {
+            const currentIndex = rows.findIndex(r => r.original.id === fromId);
+            if (currentIndex !== -1 && currentIndex < rows.length - 1) {
+                return rows[currentIndex + 1].original;
+            }
+            if (currentIndex === -1 && rows.length > 0 && fromId === null) {
+                return rows[0].original;
+            }
+            return null;
+        },
+        getPrevTrack: (fromId: number | null) => {
+            const currentIndex = rows.findIndex(r => r.original.id === fromId);
+            if (currentIndex > 0) {
+                return rows[currentIndex - 1].original;
+            }
+            return null;
         }
     }));
 
@@ -765,6 +795,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             {rowVirtualizer.getVirtualItems().map(virtualRow => {
                                 const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackIds.has(row.original.id);
+                                const isPlaying = playingTrackId === row.original.id;
                                 const isMissing = row.original.missing;
                                 
                                 if (isMissing) {
@@ -797,7 +828,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                                         : 'transparent',
                                             color: isSelected 
                                                     ? 'var(--accent-color)' 
-                                                    : 'var(--text-primary)',
+                                                    : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
+                                            fontWeight: isPlaying ? '600' : 'normal',
                                             opacity: isMissing ? 0.5 : 1,
                                             cursor: isMissing ? 'default' : 'pointer',
                                             userSelect: 'none',

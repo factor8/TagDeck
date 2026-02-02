@@ -1,19 +1,21 @@
 import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Playlist } from '../types';
+import { Playlist, Track } from '../types';
 import { ChevronRight, ChevronDown, Folder, ListMusic } from 'lucide-react';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
   selectedPlaylistId: number | null;
   refreshTrigger?: number;
+  selectedTrack?: Track | null;
+  showArtwork?: boolean;
 }
 
 interface PlaylistNode extends Playlist {
     children: PlaylistNode[];
 }
 
-export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger }: SidebarProps) {
+export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -233,7 +235,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
         Library
       </div>
       
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         <div 
           onClick={() => onSelectPlaylist(null)}
           style={{
@@ -275,6 +277,63 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
         {playlistTree.map(node => renderNode(node, 0))}
       </div>
+      
+      {showArtwork && selectedTrack && (
+          <SidebarArtwork track={selectedTrack} />
+      )}
     </div>
   );
+}
+
+function SidebarArtwork({ track }: { track: Track }) {
+    const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
+
+    useEffect(() => {
+        setArtworkUrl(null);
+        let active = true;
+        const fetchArt = async () => {
+             try {
+                const data = await invoke<number[] | null>('get_track_artwork', { id: track.id });
+                if (active && data) {
+                     const blob = new Blob([new Uint8Array(data)]);
+                     const url = URL.createObjectURL(blob);
+                     setArtworkUrl(url);
+                }
+             } catch(e) { /* ignore */ }
+        };
+        fetchArt();
+        return () => { active = false; };
+    }, [track.id]); // Only re-fetch if track ID changes
+
+    useEffect(() => {
+        return () => { if (artworkUrl) URL.revokeObjectURL(artworkUrl); };
+    }, [artworkUrl]);
+
+    if (!artworkUrl) return null;
+
+    return (
+        <div style={{ 
+            width: '100%', 
+            aspectRatio: '1', 
+            position: 'relative', 
+            borderTop: '1px solid var(--border-color)',
+            background: 'var(--bg-tertiary)',
+            flexShrink: 0
+        }}>
+            <div style={{ 
+                position: 'absolute', 
+                inset: 0, 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                overflow: 'hidden'
+            }}>
+                <img 
+                    src={artworkUrl} 
+                    alt="Album Art" 
+                    style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                />
+            </div>
+        </div>
+    );
 }

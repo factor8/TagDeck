@@ -12,11 +12,13 @@ interface Props {
     autoPlay?: boolean;
     onTrackError?: () => void;
     accentColor?: string;
+    onArtworkClick?: () => void;
 }
 
-export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6' }: Props) {
+export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
+    const prevTrackIdRef = useRef<number | null>(null);
 
     // Keep autoPlay info up to date for event listeners
     useEffect(() => {
@@ -116,7 +118,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                 console.warn('Error destroying WaveSurfer instance:', e);
             }
         };
-    }, [track]); // We don't depend on accentColor here to avoid recreate loop. Handled below.
+    }, []); // Only on mount
 
     // Update WaveSurfer colors when accent/theme changes
     useEffect(() => {
@@ -181,71 +183,74 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
         };
     }, [wavesurfer, handlePlaybackError]);
 
+
     // Load audio when track changes
     useEffect(() => {
-        if (!track || !wavesurfer) {
-            if (!track) setCurrentUrl(null);
+        if (!wavesurfer) return;
+
+        // If track is null, clear player
+        if (!track) {
+            setCurrentUrl(null);
+            prevTrackIdRef.current = null;
+            try { wavesurfer.stop(); } catch (e) { /* ignore */ }
             return;
         }
 
-        setError(null);
-        setIsPlaying(false);
-
-        // If autoPlay changed to true while we are already loaded/ready and paused, play?
-        // This handles case where double click happens AFTER load.
-        // But App sets autoPlay=true on double click.
-
-
-        const loadAudio = async () => {
-            try {
-                // Try reading file directly to Blob first (most robust for local files in Tauri)
-                // This bypasses potential CORS/Range-request issues with Web Audio API + asset://
-                console.log('Reading file for playback:', track.file_path);
-                const contents = await readFile(track.file_path);
-                const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
-                               track.format === 'm4a' ? 'audio/mp4' : 
-                               track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
-                
-                const blob = new Blob([contents], { type: mimeType });
-                const blobUrl = URL.createObjectURL(blob);
-                
-                console.log('Loading Blob URL:', blobUrl);
-                setCurrentUrl(blobUrl);
-                
+        // Check if track really changed
+        if (track.id !== prevTrackIdRef.current) {
+            // Track Changed -> Load New
+            prevTrackIdRef.current = track.id;
+            
+            setError(null);
+            setIsPlaying(false);
+            
+            const loadAudio = async () => {
                 try {
-                     wavesurfer.stop();
-                } catch(e) { /* ignore */ }
-                
-                await wavesurfer.load(blobUrl);
-                
-            } catch (err) {
-                console.error("Error loading audio file:", err);
-                setError(`Failed to load audio: ${err}`);
-                
-                // If we can't read the file, it's likely missing
-                invoke('mark_track_missing', { id: track.id, missing: true })
-                    .then(() => {
-                        console.log(`Marked track ${track.id} as missing`);
-                        onTrackError?.();
-                    })
-                    .catch(e => console.error("Failed to mark track missing:", e));
-            }
-        };
-
-        loadAudio();
-        
-    }, [track, wavesurfer]);
-
-    // Auto-play trigger if not reloading (e.g. double click on already selected track)
-    useEffect(() => {
-        if (autoPlay && wavesurfer) {
-             try {
-                if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
-                    wavesurfer.play();
+                     try { wavesurfer.stop(); } catch(e) { /* ignore */ }
+                    
+                    // Try reading file directly to Blob first (most robust for local files in Tauri)
+                    // This bypasses potential CORS/Range-request issues with Web Audio API + asset://
+                    console.log('Reading file for playback:', track.file_path);
+                    const contents = await readFile(track.file_path);
+                    const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
+                                   track.format === 'm4a' ? 'audio/mp4' : 
+                                   track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+                    
+                    const blob = new Blob([contents], { type: mimeType });
+                    const blobUrl = URL.createObjectURL(blob);
+                    
+                    console.log('Loading Blob URL:', blobUrl);
+                    setCurrentUrl(blobUrl);
+                    
+                    await wavesurfer.load(blobUrl);
+                    
+                } catch (err) {
+                    console.error("Error loading audio file:", err);
+                    setError(`Failed to load audio: ${err}`);
+                    
+                    // If we can't read the file, it's likely missing
+                    invoke('mark_track_missing', { id: track.id, missing: true })
+                        .then(() => {
+                            console.log(`Marked track ${track.id} as missing`);
+                            onTrackError?.();
+                        })
+                        .catch(e => console.error("Failed to mark track missing:", e));
                 }
-             } catch(e) { console.warn("AutoPlay trigger failed", e); }
+            };
+    
+            loadAudio();
+        } else {
+             // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
+             if (autoPlay) {
+                 try {
+                    if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
+                        wavesurfer.play();
+                    }
+                 } catch(e) { console.warn("AutoPlay trigger failed", e); }
+            }
         }
-    }, [autoPlay, wavesurfer]);
+        
+    }, [track, wavesurfer, autoPlay]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
@@ -321,19 +326,24 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
             {/* Left: Track Info */}
             <div style={{ ...styles.info, display: 'flex', alignItems: 'center' }}>
                 {/* Artwork */}
-                <div style={{ 
-                    width: '48px', 
-                    height: '48px', 
-                    borderRadius: '4px', 
-                    overflow: 'hidden', 
-                    marginRight: '12px',
-                    background: 'var(--bg-tertiary)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                }}>
+                <div 
+                    onClick={onArtworkClick}
+                    style={{ 
+                        width: '48px', 
+                        height: '48px', 
+                        borderRadius: '4px', 
+                        overflow: 'hidden', 
+                        marginRight: '12px',
+                        background: 'var(--bg-tertiary)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                        cursor: 'pointer'
+                    }}
+                    title="Toggle sidebar artwork"
+                >
                     {artworkUrl ? (
                          <img src={artworkUrl} alt="Album Art" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     ) : (

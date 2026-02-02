@@ -301,8 +301,28 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     return (
         <div style={styles.container}>
             <div style={styles.header}>
-                <h3 style={{ margin: 0, fontSize: '12px', fontWeight: 600 }}>QUICK TAG</h3>
-                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>⌘+Enter to save</span>
+                <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+                    <h3 style={{ margin: 0, fontSize: '12px', fontWeight: 600, opacity: 0.7 }}>
+                        {isMultiSelect ? 'BATCH EDIT' : 'QUICK TAG'}
+                    </h3>
+                    <span 
+                        title={isMultiSelect ? `${selectedTrackIds?.size} Files Selected` : `${track.artist} - ${track.title}`}
+                        style={{ 
+                            fontSize: '11px', 
+                            color: 'var(--accent-color)', 
+                            fontWeight: 600,
+                            whiteSpace: 'nowrap', 
+                            overflow: 'hidden', 
+                            textOverflow: 'ellipsis',
+                            marginTop: '2px'
+                        }}
+                    >
+                        {isMultiSelect 
+                            ? `${selectedTrackIds?.size || 0} Files Selected` 
+                            : `${track.artist} - ${track.title}`
+                        }
+                    </span>
+                </div>
             </div>
             
             {/* User Comment Section */}

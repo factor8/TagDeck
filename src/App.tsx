@@ -16,6 +16,7 @@ import { Track } from './types';
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
+  const [playingTrack, setPlayingTrack] = useState<Track | null>(null);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
   const [lastSelectedTrackId, setLastSelectedTrackId] = useState<number | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(() => {
@@ -25,6 +26,11 @@ function App() {
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isSidebarArtworkVisible, setIsSidebarArtworkVisible] = useState(() => {
+    // Default to true or load from storage
+    const saved = localStorage.getItem('app_show_sidebar_artwork');
+    return saved ? saved === 'true' : false;
+  });
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -47,6 +53,10 @@ function App() {
     document.documentElement.style.setProperty('--accent-color', accentColor);
     document.documentElement.style.setProperty('--accent-hover', accentColor);
   }, [theme, accentColor]);
+
+  useEffect(() => {
+    localStorage.setItem('app_show_sidebar_artwork', isSidebarArtworkVisible.toString());
+  }, [isSidebarArtworkVisible]);
 
   useEffect(() => {
       localStorage.setItem('app_accent', accentColor);
@@ -94,7 +104,6 @@ function App() {
     setLastSelectedTrackId(lastId);
     setSelectedTrack(primaryTrack);
     setCurrentTags(commonTags);
-    setShouldAutoPlay(false); // Reset auto-play on regular selection
   };
   
   const handleTrackDoubleClick = (track: Track) => {
@@ -103,6 +112,7 @@ function App() {
           const newSet = new Set([track.id]);
           handleSelectionChange(newSet, track.id, track, track.comment_raw ? track.comment_raw.split(" && ")[1]?.split(';') || [] : []);
       }
+      setPlayingTrack(track);
       setShouldAutoPlay(true);
   };
 
@@ -290,6 +300,8 @@ function App() {
             selectedPlaylistId={selectedPlaylistId} 
             onSelectPlaylist={setSelectedPlaylistId} 
             refreshTrigger={refreshTrigger}
+            selectedTrack={selectedTrack}
+            showArtwork={isSidebarArtworkVisible}
             />
         </Panel>
         
@@ -311,6 +323,7 @@ function App() {
               onTrackDoubleClick={handleTrackDoubleClick}
               selectedTrackIds={selectedTrackIds}
               lastSelectedTrackId={lastSelectedTrackId}
+              playingTrackId={playingTrack?.id}
               searchTerm={searchTerm}
               onRefresh={handleRefresh}
             />
@@ -367,12 +380,29 @@ function App() {
 
       {/* Player Footer */}
       <Player 
-        track={selectedTrack} 
-        onNext={() => trackListRef.current?.selectNext()}
-        onPrev={() => trackListRef.current?.selectPrev()}
+        track={playingTrack} 
+        onNext={() => {
+             if (playingTrack) {
+                 const next = trackListRef.current?.getNextTrack(playingTrack.id);
+                 if (next) {
+                     setPlayingTrack(next);
+                     setShouldAutoPlay(true);
+                 }
+             }
+        }}
+        onPrev={() => {
+            if (playingTrack) {
+                const prev = trackListRef.current?.getPrevTrack(playingTrack.id);
+                if (prev) {
+                    setPlayingTrack(prev);
+                    setShouldAutoPlay(true);
+                }
+            }
+        }}
         autoPlay={shouldAutoPlay}
         onTrackError={handleRefresh}
         accentColor={accentColor}
+        onArtworkClick={() => setIsSidebarArtworkVisible(prev => !prev)}
       />
     </div>
   );
