@@ -484,14 +484,16 @@ const styles = {
         cursor: 'text'
     },
     pill: {
-        background: 'rgba(59, 130, 246, 0.2)', // Accent transparent
-        color: 'var(--accent-color)',
+        background: 'rgba(59, 130, 246, 0.5)', // Match TagDeck "Active" state
+        color: '#fff',
         padding: '2px 10px',
         borderRadius: '12px',
-        fontSize: '14px',
+        fontSize: '13px',
+        fontWeight: 600, // Bold as requested
         display: 'flex',
         alignItems: 'center',
-        border: '1px solid rgba(59, 130, 246, 0.3)'
+        border: '1px solid var(--accent-color)',
+        userSelect: 'none' as const,
     },
     ghostInput: {
         border: 'none',
