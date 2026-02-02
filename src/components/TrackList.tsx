@@ -130,7 +130,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     };
 
     return (
-        <th ref={setNodeRef} style={style} {...attributes} {...listeners}>
+        <th ref={setNodeRef} className="no-select" style={style} {...attributes} {...listeners}>
             <div style={{ display: 'flex', alignItems: 'center', height: '100%', gap: '6px' }}>
                 {header.isPlaceholder ? null : (
                     <div 
