@@ -5,7 +5,7 @@ use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
 use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file};
 use crate::models::Track;
 use std::sync::Mutex;
-use tauri::{AppHandle, State};
+use tauri::State;
 
 pub struct AppState {
     pub db: Mutex<Database>,
@@ -388,7 +388,7 @@ pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppStat
 }
 
 #[tauri::command]
-pub async fn debug_db_path(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn debug_db_path(_state: State<'_, AppState>) -> Result<String, String> {
     Ok("Debug path info not exposed directly but DB is open".to_string())
 }
 

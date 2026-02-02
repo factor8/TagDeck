@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection};
 use std::path::Path;
-use crate::models::{Track, Playlist};
+use crate::models::{Track};
 
 const DB_SCHEMA: &str = r#"
     CREATE TABLE IF NOT EXISTS tracks (
@@ -192,7 +192,6 @@ impl Database {
 
     pub fn insert_playlist(&self, playlist: &crate::models::Playlist) -> Result<()> {
         // Use a transaction for atomicity
-        let mut conn = &self.conn;
         // Note: For simple methods we don't strictly need a transaction object if we handle it carefully, 
         // but rusqlite transaction is safer. Since `&self.conn` is immutable here, we use internal mutability of DB or simple execute.
         // For simplicity:
