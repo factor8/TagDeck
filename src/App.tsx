@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
-import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings } from 'lucide-react';
+import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X } from 'lucide-react';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AppLogo } from './components/AppLogo';
 import Sidebar from './components/Sidebar';
@@ -96,6 +96,16 @@ function App() {
   };
 
   const handleDeckTagClick = (tag: string) => {
+      if (selectedTrackIds.size === 0) {
+          setSearchTerm(prev => {
+              if (!prev) return tag;
+              // Check if tag is already in search term to avoid duplicates if desired? 
+              // User said "adds to the text bar", implies appending.
+              return `${prev} ${tag}`;
+          });
+          return;
+      }
+      
       // This will be passed down to TagEditor to actually modify the track
       // Or we can modify it here if we hoist the "Save" logic?
       // For now, let's signal the TagEditor... but TagEditor has its own state.
@@ -145,7 +155,7 @@ function App() {
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
                     width: '100%',
-                    padding: '8px 10px 8px 36px',
+                    padding: '8px 30px 8px 36px',
                     borderRadius: '6px',
                     border: '1px solid var(--border-color)',
                     background: 'var(--bg-tertiary)',
@@ -156,6 +166,28 @@ function App() {
                 onFocus={(e) => e.target.style.borderColor = 'var(--accent-color)'}
                 onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
             />
+            {searchTerm && (
+                <button
+                    onClick={() => setSearchTerm('')}
+                    style={{
+                        position: 'absolute',
+                        right: '8px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-secondary)',
+                        cursor: 'pointer',
+                        padding: '2px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                    }}
+                    title="Clear search"
+                >
+                    <X size={14} />
+                </button>
+            )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
