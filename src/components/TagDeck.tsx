@@ -110,6 +110,7 @@ const styles = {
         display: 'flex',
         flexDirection: 'column' as const,
         background: 'var(--bg-secondary)',
+        userSelect: 'none' as const,
     },
     header: {
         padding: '15px',
