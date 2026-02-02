@@ -121,3 +121,48 @@ input:focus, textarea:focus {
 .resizer.isResizing {
   background: var(--accent-color);
 }
+
+/* Themes */
+body.theme-light {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+    --text-primary: #0f172a;
+    --text-secondary: #64748b;
+    --border-color: #e2e8f0;
+    --glass-bg: rgba(255, 255, 255, 0.95);
+    --glass-border: rgba(0, 0, 0, 0.05);
+}
+
+body.theme-dark {
+    --bg-primary: #18181b; /* Zinc 950 */
+    --bg-secondary: #27272a; /* Zinc 900 */
+    --bg-tertiary: #3f3f46; /* Zinc 700 */
+    --text-primary: #f4f4f5; /* Zinc 100 */
+    --text-secondary: #a1a1aa; /* Zinc 400 */
+    --border-color: #3f3f46;
+    --glass-bg: rgba(24, 24, 27, 0.95);
+    --glass-border: rgba(255, 255, 255, 0.1);
+}
+
+body.theme-rustic {
+    --bg-primary: #1c1917; /* Stone 900 */
+    --bg-secondary: #292524; /* Stone 800 */
+    --bg-tertiary: #44403c; /* Stone 700 */
+    --text-primary: #fafaf9; /* Stone 50 */
+    --text-secondary: #a8a29e; /* Stone 400 */
+    --border-color: #44403c;
+    --glass-bg: rgba(28, 25, 23, 0.95);
+    --glass-border: rgba(255, 255, 255, 0.1);
+}
+
+body.theme-ocean {
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-tertiary: #334155;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --border-color: #334155;
+    --glass-bg: rgba(30, 41, 59, 0.95);
+    --glass-border: rgba(255, 255, 255, 0.1);
+}

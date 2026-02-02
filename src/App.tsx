@@ -1,8 +1,10 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
-import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
+import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings } from 'lucide-react';
+import { SettingsPanel } from './components/SettingsPanel';
+import { AppLogo } from './components/AppLogo';
 import Sidebar from './components/Sidebar';
 import { LibraryImporter } from './components/LibraryImporter';
 import { TrackList, TrackListHandle } from './components/TrackList';
@@ -26,6 +28,21 @@ function App() {
   const trackListRef = useRef<TrackListHandle>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  // Settings State
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState('dark');
+  const [accentColor, setAccentColor] = useState('#3b82f6');
+
+  useEffect(() => {
+    // Apply theme
+    document.body.className = '';
+    document.body.classList.add(`theme-${theme}`);
+    
+    // Apply accent
+    document.documentElement.style.setProperty('--accent-color', accentColor);
+    document.documentElement.style.setProperty('--accent-hover', accentColor);
+  }, [theme, accentColor]);
 
   // Toggle handlers
   const toggleLeftPanel = () => {
@@ -100,7 +117,7 @@ function App() {
         flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ width: '24px', height: '24px', background: 'var(--accent-color)', borderRadius: '4px' }}></div>
+          <AppLogo size={28} />
           <h1 style={{ margin: 0, fontSize: '18px', color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>TagDeck</h1>
         </div>
         
@@ -170,6 +187,31 @@ function App() {
             </button>
             
           <LibraryImporter onImportComplete={handleRefresh} />
+            
+            <button 
+                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}
+                title="Settings"
+            >
+                <Settings size={20} />
+            </button>
+            <SettingsPanel 
+                isOpen={isSettingsOpen} 
+                onClose={() => setIsSettingsOpen(false)}
+                currentTheme={theme}
+                onThemeChange={setTheme}
+                currentAccent={accentColor}
+                onAccentChange={setAccentColor}
+            />
         </div>
       </header>
 
