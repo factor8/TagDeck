@@ -19,13 +19,18 @@ interface Props {
 export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
-    const prevTrackIdRef = useRef<number | null>(null);
+    // Track the latest track ID to handle race conditions in async loading
+    const latestTrackIdRef = useRef<number | undefined>(track?.id);
 
-    // Keep autoPlay info up to date for event listeners
+    // Keep refs up to date
     useEffect(() => {
         autoPlayRef.current = autoPlay;
     }, [autoPlay]);
-    
+
+    useEffect(() => {
+        latestTrackIdRef.current = track?.id;
+    }, [track]);
+
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -195,95 +200,75 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
         // If track is null, clear player
         if (!track) {
             setCurrentUrl(null);
-            prevTrackIdRef.current = null;
             try { wavesurfer.stop(); } catch (e) { /* ignore */ }
             return;
         }
 
-        // Check if track really changed
-        if (track.id !== prevTrackIdRef.current) {
-            // Track Changed -> Load New
-            prevTrackIdRef.current = track.id;
+        // Setup loading state
+        setError(null);
+        setIsPlaying(false);
+        const targetId = track.id;
             
-            setError(null);
-            setIsPlaying(false);
-            
-            let isCancelled = false;
-            
-            const loadAudio = async () => {
-                try {
-                     try { wavesurfer.stop(); } catch(e) { /* ignore */ }
-                    
-                    // Try reading file directly to Blob first (most robust for local files in Tauri)
-                    // This bypasses potential CORS/Range-request issues with Web Audio API + asset://
-                    console.log('Reading file for playback:', track.file_path);
-                    const contents = await readFile(track.file_path);
-                    
-                    if (isCancelled) return;
-
-                    const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
-                                   track.format === 'm4a' ? 'audio/mp4' : 
-                                   track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
-                    
-                    const blob = new Blob([contents], { type: mimeType });
-                    const blobUrl = URL.createObjectURL(blob);
-                    
-                    if (isCancelled) {
-                        URL.revokeObjectURL(blobUrl);
-                        return;
-                    }
-
-                    console.log('Loading Blob URL:', blobUrl);
-                    setCurrentUrl(blobUrl);
-                    
-                    await wavesurfer.load(blobUrl);
-                    
-                    if (isCancelled) return;
-                    
-                    if (autoPlay) {
-                        console.log("AutoPlay requested, attempting play...");
-                        try {
-                            await wavesurfer.play();
-                            console.log("AutoPlay started successfully");
-                        } catch (e) {
-                            console.warn("Auto-play failed:", e);
-                            // Retry once with a small delay if interaction issue suspected, 
-                            // though double-click should cover it.
-                        }
-                    }
-                    
-                } catch (err) {
-                    if (isCancelled) return;
-                    console.error("Error loading audio file:", err);
-                    setError(`Failed to load audio: ${err}`);
-                    
-                    // If we can't read the file, it's likely missing
-                    invoke('mark_track_missing', { id: track.id, missing: true })
-                        .then(() => {
-                            console.log(`Marked track ${track.id} as missing`);
-                            onTrackError?.();
-                        })
-                        .catch(e => console.error("Failed to mark track missing:", e));
+        const loadAudio = async () => {
+            try {
+                    try { wavesurfer.stop(); } catch(e) { /* ignore */ }
+                
+                console.log('Reading file for playback:', track.file_path);
+                const contents = await readFile(track.file_path);
+                
+                // Check if track changed during read
+                if (latestTrackIdRef.current !== targetId) {
+                    console.log("Loading aborted: Track changed");
+                    return; 
                 }
-            };
-    
-            loadAudio();
-            
-            return () => {
-                isCancelled = true;
-            };
-        } else {
-             // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
-             if (autoPlay) {
-                 try {
-                    if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
-                        wavesurfer.play();
+
+                const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
+                                track.format === 'm4a' ? 'audio/mp4' : 
+                                track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+                
+                const blob = new Blob([new Uint8Array(contents)], { type: mimeType });
+                const blobUrl = URL.createObjectURL(blob);
+                
+                if (latestTrackIdRef.current !== targetId) {
+                    URL.revokeObjectURL(blobUrl);
+                    return;
+                }
+
+                console.log('Loading Blob URL:', blobUrl);
+                setCurrentUrl(blobUrl);
+                
+                await wavesurfer.load(blobUrl);
+                
+                if (latestTrackIdRef.current !== targetId) return;
+                
+                if (autoPlayRef.current) {
+                    console.log("AutoPlay requested, attempting play...");
+                    try {
+                        await wavesurfer.play();
+                    } catch (e) {
+                        console.warn("Auto-play failed:", e);
                     }
-                 } catch(e) { console.warn("AutoPlay trigger failed", e); }
+                }
+                
+            } catch (err) {
+                if (latestTrackIdRef.current !== targetId) return;
+
+                console.error("Error loading audio file:", err);
+                setError(`Failed to load audio: ${err}`);
+                
+                invoke('mark_track_missing', { id: track.id, missing: true })
+                    .then(() => {
+                        console.log(`Marked track ${track.id} as missing`);
+                        onTrackError?.();
+                    })
+                    .catch(e => console.error("Failed to mark track missing:", e));
             }
-        }
+        };
+
+        loadAudio();
         
-    }, [track, wavesurfer, autoPlay]);
+    }, [track?.id, wavesurfer, track?.file_path, track?.format]); 
+    // ^ Key Dependencies: Only ID and WS. Exclude autoPlay to prevent reload loop/cancellation.
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
