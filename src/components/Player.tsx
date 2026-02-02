@@ -178,6 +178,14 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }
             } catch (err) {
                 console.error("Error loading audio file:", err);
                 setError(`Failed to load audio: ${err}`);
+                
+                // If we can't read the file, it's likely missing
+                invoke('mark_track_missing', { id: track.id, missing: true })
+                    .then(() => {
+                        console.log(`Marked track ${track.id} as missing`);
+                        onTrackError?.();
+                    })
+                    .catch(e => console.error("Failed to mark track missing:", e));
             }
         };
 
