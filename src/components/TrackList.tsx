@@ -154,6 +154,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
             <div
                 onMouseDown={header.getResizeHandler()}
                 onTouchStart={header.getResizeHandler()}
+                onPointerDown={(e) => e.stopPropagation()} 
                 className={`resizer ${
                     header.column.getIsResizing() ? 'isResizing' : ''
                 }`}
