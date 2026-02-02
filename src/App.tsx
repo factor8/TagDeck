@@ -320,6 +320,7 @@ function App() {
         onNext={() => trackListRef.current?.selectNext()}
         onPrev={() => trackListRef.current?.selectPrev()}
         autoPlay={shouldAutoPlay}
+        onTrackError={handleRefresh}
       />
     </div>
   );

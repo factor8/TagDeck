@@ -59,6 +59,7 @@ impl ExternalTrack {
             rating: self.rating,
             date_added: self.date_added,
             bpm: self.bpm,
+            missing: false,
         }
     }
 }

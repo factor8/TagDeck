@@ -131,6 +131,7 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             rating: rating as i64,
             date_added: date_added_timestamp,
             bpm: bpm as i64,
+            missing: false,
         };
 
         tracks.push(track);

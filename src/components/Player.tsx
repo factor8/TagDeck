@@ -10,9 +10,10 @@ interface Props {
     onNext?: () => void;
     onPrev?: () => void;
     autoPlay?: boolean;
+    onTrackError?: () => void;
 }
 
-export function Player({ track, onNext, onPrev, autoPlay = false }: Props) {
+export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
 
@@ -113,9 +114,10 @@ export function Player({ track, onNext, onPrev, autoPlay = false }: Props) {
         } catch (fallbackErr) {
             console.error('Fallback failed:', fallbackErr);
             setError(`Playback Error: Could not load audio via Asset or Blob.`);
-            invoke('mark_track_missing', { id: track.id, missing: true });
+            invoke('mark_track_missing', { id: track.id, missing: true })
+                .then(() => onTrackError?.());
         }
-    }, [track, currentUrl, wavesurfer]);
+    }, [track, currentUrl, wavesurfer, onTrackError]);
 
     // Attach Error Handler with Dependencies
     useEffect(() => {
