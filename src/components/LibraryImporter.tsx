@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { Loader2 } from 'lucide-react';
 
 interface Props {
     onImportComplete: () => void;
@@ -53,7 +54,20 @@ export function LibraryImporter({ onImportComplete }: Props) {
     return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             {status && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{status}</span>}
-            <button onClick={handleMusicAppImport} disabled={importing} className="btn btn-primary" style={{ fontSize: '13px', padding: '6px 12px', background: 'var(--accent-hover)' }}>
+            <button 
+                onClick={handleMusicAppImport} 
+                disabled={importing} 
+                className="btn btn-primary" 
+                style={{ 
+                    fontSize: '13px', 
+                    padding: '6px 12px', 
+                    background: 'var(--accent-hover)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px'
+                }}
+            >
+                {importing ? <Loader2 size={14} className="spin" /> : null}
                 {importing ? 'Syncing...' : 'Sync Music.app'}
             </button>
             <button onClick={handleXMLImport} disabled={importing} className="btn" style={{ fontSize: '13px', padding: '6px 12px', background: 'var(--bg-tertiary)' }}>

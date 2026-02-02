@@ -275,6 +275,22 @@ impl Database {
         Ok(tracks)
     }
 
+    pub fn get_track_path(&self, id: i64) -> Result<String> {
+        self.conn.query_row(
+            "SELECT file_path FROM tracks WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        ).map_err(|e| e.into())
+    }
+
+    pub fn update_track_path(&self, id: i64, path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET file_path = ?1 WHERE id = ?2",
+            params![path, id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_track_missing(&self, id: i64, missing: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE tracks SET missing = ?1 WHERE id = ?2",

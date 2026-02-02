@@ -2,7 +2,7 @@ use crate::models::Track;
 use anyhow::{Context, Result};
 use plist::Value;
 use std::path::Path;
-use urlencoding::decode;
+use url::Url;
 
 pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
     let value = Value::from_file(path).context("Failed to read iTunes Library XML")?;
@@ -141,9 +141,40 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
 }
 
 fn decode_location(location: &str) -> String {
-    // iTunes Location is file://localhost/Users/...
-    let decoded = decode(location).expect("UTF-8").to_string();
-    decoded
-        .replace("file://localhost", "")
-        .replace("file://", "")
+    // robustly parse using url crate
+    let path_str = if let Ok(parsed) = Url::parse(location) {
+        if let Ok(file_path) = parsed.to_file_path() {
+            if let Some(s) = file_path.to_str() {
+                s.to_string()
+            } else {
+                location.to_string()
+            }
+        } else {
+             location.to_string()
+        }
+    } else {
+        // Fallback to manual if Url parse fails
+        let decoded = urlencoding::decode(location).unwrap_or(std::borrow::Cow::Borrowed(location)).to_string();
+        decoded
+            .replace("file://localhost", "")
+            .replace("file://", "")
+    };
+
+    // Heuristic: Strip Volume Name if it points to Users directory on boot drive
+    // e.g. /Volumes/Macintosh HD/Users/... -> /Users/...
+    // e.g. /Macintosh HD/Users/... -> /Users/...
+    // This handles the case where XML includes the boot volume name but the system expects root paths.
+    if path_str.starts_with("/Volumes/") {
+        if let Some(users_idx) = path_str.find("/Users/") {
+             // Check if it's likely the boot drive (contains Users)
+             return path_str[users_idx..].to_string();
+        }
+    } else if !path_str.starts_with("/Users/") && path_str.contains("/Users/") {
+        // Handle weird cases like "/Macintosh HD/Users/..."
+        if let Some(users_idx) = path_str.find("/Users/") {
+            return path_str[users_idx..].to_string();
+        }
+    }
+
+    path_str
 }
