@@ -479,11 +479,11 @@ const styles = {
         background: 'var(--bg-secondary)',
         color: 'var(--text-primary)',
         borderTop: '1px solid var(--border-color)',
-        position: 'fixed' as const,
-        bottom: 0,
-        left: 0,
-        right: '0', 
+        // position: 'fixed' removed to allow flex parent to manage layout space
+        width: '100%', 
         height: '80px',
+        flexShrink: 0,
+        position: 'relative', // Ensure z-index works
         display: 'flex',
         flexDirection: 'row' as const,
         alignItems: 'center', // Horizontal layout: Info | Controls
