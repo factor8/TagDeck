@@ -36,6 +36,7 @@ function App() {
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
   const trackListRef = useRef<TrackListHandle>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
 
@@ -70,6 +71,35 @@ function App() {
       localStorage.removeItem('app_selected_playlist_id');
     }
   }, [selectedPlaylistId]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+        // Cmd+F or Ctrl+F -> Focus Search
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+            e.preventDefault();
+            if (searchInputRef.current) {
+                searchInputRef.current.focus();
+                searchInputRef.current.select();
+            }
+        }
+
+        // Cmd+0 or Cmd+1 -> Select All Tracks (playlistId = null)
+        if ((e.metaKey || e.ctrlKey) && e.key === '0') {
+             e.preventDefault();
+             setSelectedPlaylistId(null);
+        }
+
+        // Cmd+, -> Open Settings (Standard Mac behavior)
+        if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+            e.preventDefault();
+            setIsSettingsOpen(prev => !prev);
+        }
+        
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   // Toggle handlers
   const toggleLeftPanel = () => {
@@ -174,6 +204,7 @@ function App() {
                 <Search size={16} />
             </div>
             <input 
+                ref={searchInputRef}
                 type="text" 
                 placeholder="Search library..." 
                 value={searchTerm}

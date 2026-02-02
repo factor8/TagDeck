@@ -1,7 +1,10 @@
 # Key Commands
 
 ## Global
-- **Cmd+Opt+I**: Open Developer Tools (Debug)
+- **Cmd + F** (Mac) / **Ctrl + F** (Win): Focus Search Bar
+- **Cmd + 0** (Mac) / **Ctrl + 0** (Win): Select "All Tracks" Playlist
+- **Cmd + ,** (Mac) / **Ctrl + ,** (Win): Open/Toggle Settings
+- **Cmd + Opt + I**: Open Developer Tools (Debug)
 
 ## Track List
 - **Click**: Select Track
