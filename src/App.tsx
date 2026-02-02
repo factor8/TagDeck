@@ -300,7 +300,7 @@ function App() {
             selectedPlaylistId={selectedPlaylistId} 
             onSelectPlaylist={setSelectedPlaylistId} 
             refreshTrigger={refreshTrigger}
-            selectedTrack={selectedTrack}
+            selectedTrack={playingTrack}
             showArtwork={isSidebarArtworkVisible}
             />
         </Panel>
@@ -382,22 +382,23 @@ function App() {
       <Player 
         track={playingTrack} 
         onNext={() => {
-             if (playingTrack) {
-                 const next = trackListRef.current?.getNextTrack(playingTrack.id);
-                 if (next) {
-                     setPlayingTrack(next);
-                     setShouldAutoPlay(true);
-                 }
-             }
+             // Basic next logic, ideally delegated to TrackList or a playlist manager
+             trackListRef.current?.selectNext(); 
+             // But wait, selectNext changes selection.
+             // If we want separate playback, we need a method to just GET next track or move playback without selection?
+             // For now, if user hits Next in Player, typically we sync selection too in iTunes-like apps unless "Shuffle Play" etc.
+             // Let's assume hitting Next in Player DOES change selection for now to keep it simple, OR we just setPlayingTrack.
+             // If we just setPlayingTrack(next), selection stays behind.
+             // Let's rely on the TrackList selecting the next one and then DoubleClick/AutoPlay logic?
+             // No, manual Next button.
+             trackListRef.current?.selectNext();
+             const next = trackListRef.current?.getSelectedTrack(); 
+             if (next) setPlayingTrack(next);
         }}
         onPrev={() => {
-            if (playingTrack) {
-                const prev = trackListRef.current?.getPrevTrack(playingTrack.id);
-                if (prev) {
-                    setPlayingTrack(prev);
-                    setShouldAutoPlay(true);
-                }
-            }
+             trackListRef.current?.selectPrev();
+             const prev = trackListRef.current?.getSelectedTrack();
+             if (prev) setPlayingTrack(prev);
         }}
         autoPlay={shouldAutoPlay}
         onTrackError={handleRefresh}
