@@ -345,3 +345,9 @@ pub async fn get_playlist_track_ids(state: State<'_, AppState>, playlist_id: i64
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.get_playlist_track_ids(playlist_id).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.set_track_missing(id, missing).map_err(|e| e.to_string())
+}

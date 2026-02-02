@@ -18,6 +18,8 @@ pub struct Track {
     pub rating: i64, // 0-100
     pub date_added: i64, // Unix timestamp
     pub bpm: i64,
+    #[serde(default)]
+    pub missing: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

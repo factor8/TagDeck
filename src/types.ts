@@ -15,6 +15,7 @@ export interface Track {
     rating: number;
     date_added: number;
     bpm: number;
+    missing?: boolean;
 }
 
 export interface Playlist {

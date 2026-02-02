@@ -20,7 +20,8 @@ const DB_SCHEMA: &str = r#"
         modified_date INTEGER,
         rating INTEGER,
         date_added INTEGER,
-        bpm INTEGER
+        bpm INTEGER,
+        missing BOOLEAN DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS playlists (
@@ -63,6 +64,7 @@ impl Database {
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bpm INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN is_folder BOOLEAN DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN parent_persistent_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN missing BOOLEAN DEFAULT 0", []);
         
         Ok(Self { conn })
     }
@@ -133,6 +135,7 @@ impl Database {
                 rating: row.get(13)?,
                 date_added: row.get(14)?,
                 bpm: row.get(15)?,
+                missing: row.get(16).unwrap_or(false),
             }))
         } else {
             Ok(None)
@@ -239,7 +242,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm
+             rating, date_added, bpm, missing
              FROM tracks", 
         )?;
 
@@ -261,6 +264,7 @@ impl Database {
                 rating: row.get(13)?,
                 date_added: row.get(14)?,
                 bpm: row.get(15)?,
+                missing: row.get(16).unwrap_or(false),
             })
         })?;
 
@@ -269,5 +273,13 @@ impl Database {
             tracks.push(track?);
         }
         Ok(tracks)
+    }
+
+    pub fn set_track_missing(&self, id: i64, missing: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET missing = ?1 WHERE id = ?2",
+            params![missing, id],
+        )?;
+        Ok(())
     }
 }

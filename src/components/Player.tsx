@@ -1,4 +1,5 @@
 import { readFile } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
 import { Track } from '../types';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
@@ -112,6 +113,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false }: Props) {
         } catch (fallbackErr) {
             console.error('Fallback failed:', fallbackErr);
             setError(`Playback Error: Could not load audio via Asset or Blob.`);
+            invoke('mark_track_missing', { id: track.id, missing: true });
         }
     }, [track, currentUrl, wavesurfer]);
 

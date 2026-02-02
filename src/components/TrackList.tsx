@@ -42,6 +42,7 @@ interface Props {
     onTrackDoubleClick?: (track: Track) => void;
     searchTerm: string;
     playlistId: number | null;
+    onRefresh?: () => void;
 }
 
 export interface TrackListHandle {
@@ -173,7 +174,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId, onRefresh }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -764,13 +765,24 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             {rowVirtualizer.getVirtualItems().map(virtualRow => {
                                 const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackIds.has(row.original.id);
+                                const isMissing = row.original.missing;
                                 return (
                                     <tr 
                                         key={row.id}
                                         data-index={virtualRow.index} 
                                         ref={rowVirtualizer.measureElement}
                                         onClick={(e) => handleRowClick(row.original, e)}
-                                        onDoubleClick={() => onTrackDoubleClick?.(row.original)}
+                                        onContextMenu={(e) => {
+                                            if (isMissing) {
+                                                e.preventDefault();
+                                                const shouldReset = window.confirm("Reset missing file status?");
+                                                if (shouldReset) {
+                                                     invoke('mark_track_missing', { id: row.original.id, missing: false })
+                                                        .then(() => onRefresh?.());
+                                                }
+                                            }
+                                        }}
+                                        onDoubleClick={() => !isMissing && onTrackDoubleClick?.(row.original)}
                                         style={{ 
                                             borderBottom: '1px solid var(--bg-secondary)',
                                             background: isSelected 
@@ -778,8 +790,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                                 : virtualRow.index % 2 === 1 
                                                     ? 'rgba(255, 255, 255, 0.02)'
                                                     : 'transparent',
-                                            color: isSelected ? 'var(--accent-color)' : 'var(--text-primary)',
-                                            cursor: 'pointer',
+                                            color: isMissing 
+                                                ? 'var(--text-secondary)'
+                                                : isSelected 
+                                                    ? 'var(--accent-color)' 
+                                                    : 'var(--text-primary)',
+                                            opacity: isMissing ? 0.6 : 1,
+                                            cursor: isMissing ? 'not-allowed' : 'pointer',
                                             userSelect: 'none',
                                             WebkitUserSelect: 'none'
                                         }}

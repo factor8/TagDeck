@@ -261,6 +261,7 @@ function App() {
               selectedTrackIds={selectedTrackIds}
               lastSelectedTrackId={lastSelectedTrackId}
               searchTerm={searchTerm}
+              onRefresh={handleRefresh}
             />
             </div>
         </Panel>
