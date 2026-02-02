@@ -231,6 +231,12 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+                // Ignore if in input/textarea
+                const activeTag = document.activeElement?.tagName.toLowerCase();
+                const isInput = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement as HTMLElement)?.isContentEditable;
+                
+                if (isInput) return;
+
                 e.preventDefault();
                 const allIds = new Set(filteredTracks.map(t => t.id));
                 // Only select if we have tracks
