@@ -147,23 +147,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false }: Props) {
         // If autoPlay changed to true while we are already loaded/ready and paused, play?
         // This handles case where double click happens AFTER load.
         // But App sets autoPlay=true on double click.
-        // If track didn't change (already selected), we might not reload audio.
-        // But double click -> App state update -> re-render with autoPlay=true.
-        // This effect runs on [track, wavesurfer].
-        // We separate the "Play if ready and autoPlay just became true" logic?
-    }, [track, wavesurfer]);
-    
-    // Auto-play trigger if not reloading
-    useEffect(() => {
-        if (autoPlay && wavesurfer) {
-            // Check if ready?
-             try {
-                if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
-                    wavesurfer.play();
-                }
-             } catch(e) { console.warn("AutoPlay trigger failed", e); }
-        }
-    }, [autoPlay, wavesurfer]);
+
 
         const loadAudio = async () => {
             try {
@@ -196,6 +180,17 @@ export function Player({ track, onNext, onPrev, autoPlay = false }: Props) {
         loadAudio();
         
     }, [track, wavesurfer]);
+
+    // Auto-play trigger if not reloading (e.g. double click on already selected track)
+    useEffect(() => {
+        if (autoPlay && wavesurfer) {
+             try {
+                if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
+                    wavesurfer.play();
+                }
+             } catch(e) { console.warn("AutoPlay trigger failed", e); }
+        }
+    }, [autoPlay, wavesurfer]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {

@@ -495,39 +495,71 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
 
     // Selection Handler
     const handleRowClick = (track: Track, event: React.MouseEvent) => {
-        let newSelectedIds = new Set(selectedTrackIds);
-        let newLastSelectedId = track.id;
-        let primaryTrack = track;
+        try {
+            let newSelectedIds = new Set(selectedTrackIds);
+            let newLastSelectedId = track.id;
+            let primaryTrack = track;
 
-        if (event.shiftKey && lastSelectedTrackId !== null) {
-            const lastIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
-            const currentIndex = rows.findIndex(r => r.original.id === track.id);
-            
-            if (lastIndex !== -1 && currentIndex !== -1) {
-                const start = Math.min(lastIndex, currentIndex);
-                const end = Math.max(lastIndex, currentIndex);
+            if (event.shiftKey && lastSelectedTrackId !== null) {
+                const lastIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
+                const currentIndex = rows.findIndex(r => r.original.id === track.id);
                 
-                if (!event.metaKey && !event.ctrlKey) {
-                   newSelectedIds.clear();
-                }
+                if (lastIndex !== -1 && currentIndex !== -1) {
+                    const start = Math.min(lastIndex, currentIndex);
+                    const end = Math.max(lastIndex, currentIndex);
+                    
+                    if (!event.metaKey && !event.ctrlKey) {
+                    newSelectedIds.clear();
+                    }
 
-                for (let i = start; i <= end; i++) {
-                    newSelectedIds.add(rows[i].original.id);
+                    for (let i = start; i <= end; i++) {
+                        newSelectedIds.add(rows[i].original.id);
+                    }
                 }
-            }
-        } else if (event.metaKey || event.ctrlKey) {
-            if (newSelectedIds.has(track.id)) {
-                newSelectedIds.delete(track.id);
+            } else if (event.metaKey || event.ctrlKey) {
+                if (newSelectedIds.has(track.id)) {
+                    newSelectedIds.delete(track.id);
+                } else {
+                    newSelectedIds.add(track.id);
+                }
             } else {
+                newSelectedIds.clear();
                 newSelectedIds.add(track.id);
             }
-        } else {
-            newSelectedIds.clear();
-            newSelectedIds.add(track.id);
+            
+            // Optimization: Avoid mapping all rows if we just need tags for the clicked track
+            let commonTags: string[] = [];
+            
+            const parse = (t: Track) => {
+                if (!t.comment_raw) return [];
+                const parts = t.comment_raw.split(" && ");
+                if (parts.length < 2) return [];
+                return parts[1].split(';').map(s => s.trim()).filter(x => x);
+            };
+
+            // Fast path for single selection (most common case)
+            if (newSelectedIds.size === 1 && newSelectedIds.has(track.id)) {
+                commonTags = parse(track);
+            } else {
+                // For multi-selection, only process the selected rows
+                const selectedRows = rows.filter(r => newSelectedIds.has(r.original.id));
+                const selectedTracks = selectedRows.map(r => r.original);
+                
+                if (selectedTracks.length > 0) {
+                    let common = new Set(parse(selectedTracks[0]));
+                    for (let i = 1; i < selectedTracks.length; i++) {
+                        const tTags = new Set(parse(selectedTracks[i]));
+                        common = new Set([...common].filter(x => tTags.has(x)));
+                        if (common.size === 0) break;
+                    }
+                    commonTags = Array.from(common);
+                }
+            }
+            
+            onSelectionChange(newSelectedIds, newLastSelectedId, primaryTrack, commonTags);
+        } catch (e) {
+            console.error("Error in handleRowClick:", e);
         }
-        
-        const commonTags = getCommonTags(rows.map(r => r.original), newSelectedIds);
-        onSelectionChange(newSelectedIds, newLastSelectedId, primaryTrack, commonTags);
     };
 
     const parentRef = useRef<HTMLDivElement>(null);
