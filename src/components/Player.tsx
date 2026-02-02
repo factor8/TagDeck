@@ -106,12 +106,6 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
             setIsPlaying(false);
             onPlayStateChange?.(false);
         });
-        ws.on('ready', () => {
-            console.log("WaveSurfer Ready. Duration:", ws.getDuration());
-            if (autoPlayRef.current) {
-                ws.play();
-            }
-        });
         
         // Initial basic error logging
         ws.on('error', (err: any) => {
@@ -233,6 +227,14 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                     setCurrentUrl(blobUrl);
                     
                     await wavesurfer.load(blobUrl);
+                    
+                    if (autoPlay) {
+                        try {
+                            await wavesurfer.play();
+                        } catch (e) {
+                            console.warn("Auto-play failed:", e);
+                        }
+                    }
                     
                 } catch (err) {
                     console.error("Error loading audio file:", err);
