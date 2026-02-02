@@ -53,7 +53,6 @@ export function LibraryImporter({ onImportComplete }: Props) {
 
     return (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {status && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{status}</span>}
             <button 
                 onClick={handleMusicAppImport} 
                 disabled={importing} 
