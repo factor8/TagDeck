@@ -232,16 +232,17 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         });
     }, [tracks, searchTerm, allowedTrackIds]);
 
-    // Select All Shortcut
+    // Keyboard Shortcuts (Select All, Enter to Play)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-                // Ignore if in input/textarea
-                const activeTag = document.activeElement?.tagName.toLowerCase();
-                const isInput = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement as HTMLElement)?.isContentEditable;
-                
-                if (isInput) return;
+            // Ignore if in input/textarea
+            const activeTag = document.activeElement?.tagName.toLowerCase();
+            const isInput = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement as HTMLElement)?.isContentEditable;
+            
+            if (isInput) return;
 
+            // Cmd+A / Ctrl+A -> Select All
+            if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
                 e.preventDefault();
                 const allIds = new Set(filteredTracks.map(t => t.id));
                 // Only select if we have tracks
@@ -261,11 +262,22 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                     onSelectionChange(allIds, primaryId, primaryTrack, commonTags);
                 }
             }
+
+            // Enter -> Play Selected Track
+            if (e.key === 'Enter') {
+                if (lastSelectedTrackId && onTrackDoubleClick) {
+                    const trackToPlay = filteredTracks.find(t => t.id === lastSelectedTrackId);
+                    if (trackToPlay) {
+                        e.preventDefault();
+                        onTrackDoubleClick(trackToPlay);
+                    }
+                }
+            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [filteredTracks, lastSelectedTrackId, onSelectionChange]);
+    }, [filteredTracks, lastSelectedTrackId, onSelectionChange, onTrackDoubleClick]);
 
     // Persistence Helper
     const loadState = <T,>(key: string, defaultVal: T): T => {

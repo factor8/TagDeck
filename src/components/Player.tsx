@@ -483,7 +483,7 @@ const styles = {
         width: '100%', 
         height: '80px',
         flexShrink: 0,
-        position: 'relative', // Ensure z-index works
+        position: 'relative' as 'relative', // Ensure z-index works
         display: 'flex',
         flexDirection: 'row' as const,
         alignItems: 'center', // Horizontal layout: Info | Controls
