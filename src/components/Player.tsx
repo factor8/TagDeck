@@ -11,9 +11,10 @@ interface Props {
     onPrev?: () => void;
     autoPlay?: boolean;
     onTrackError?: () => void;
+    accentColor?: string;
 }
 
-export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }: Props) {
+export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6' }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
 
@@ -77,7 +78,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }
         const ws = WaveSurfer.create({
             container: containerRef.current,
             waveColor: '#475569', // slate-600
-            progressColor: '#3b82f6', // blue-500
+            progressColor: accentColor,
             cursorColor: '#f1f5f9', // slate-100
             barWidth: 2,
             barGap: 1,
@@ -115,7 +116,16 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError }
                 console.warn('Error destroying WaveSurfer instance:', e);
             }
         };
-    }, [track]);
+    }, [track]); // We don't depend on accentColor here to avoid recreate loop. Handled below.
+
+    // Update WaveSurfer colors when accent/theme changes
+    useEffect(() => {
+        if (wavesurfer) {
+            wavesurfer.setOptions({
+                progressColor: accentColor
+            });
+        }
+    }, [accentColor, wavesurfer]);
 
     // Error Handling Logic
     const handlePlaybackError = useCallback(async (err: any) => {

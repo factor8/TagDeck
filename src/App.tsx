@@ -372,6 +372,7 @@ function App() {
         onPrev={() => trackListRef.current?.selectPrev()}
         autoPlay={shouldAutoPlay}
         onTrackError={handleRefresh}
+        accentColor={accentColor}
       />
     </div>
   );
