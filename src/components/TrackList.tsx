@@ -766,6 +766,11 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                 const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackIds.has(row.original.id);
                                 const isMissing = row.original.missing;
+                                
+                                if (isMissing) {
+                                    console.log(`Rendering missing track: ${row.original.title}`, row.original);
+                                }
+
                                 return (
                                     <tr 
                                         key={row.id}
@@ -785,20 +790,23 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         onDoubleClick={() => !isMissing && onTrackDoubleClick?.(row.original)}
                                         style={{ 
                                             borderBottom: '1px solid var(--bg-secondary)',
-                                            background: isSelected 
-                                                ? 'rgba(59, 130, 246, 0.15)' 
-                                                : virtualRow.index % 2 === 1 
-                                                    ? 'rgba(255, 255, 255, 0.02)'
-                                                    : 'transparent',
+                                            background: isMissing 
+                                                ? 'rgba(239, 68, 68, 0.1)' 
+                                                : isSelected 
+                                                    ? 'rgba(59, 130, 246, 0.15)' 
+                                                    : virtualRow.index % 2 === 1 
+                                                        ? 'rgba(255, 255, 255, 0.02)'
+                                                        : 'transparent',
                                             color: isMissing 
-                                                ? 'var(--text-secondary)'
+                                                ? '#ef4444' // Red color
                                                 : isSelected 
                                                     ? 'var(--accent-color)' 
                                                     : 'var(--text-primary)',
-                                            opacity: isMissing ? 0.6 : 1,
+                                            opacity: isMissing ? 0.7 : 1,
                                             cursor: isMissing ? 'not-allowed' : 'pointer',
                                             userSelect: 'none',
-                                            WebkitUserSelect: 'none'
+                                            WebkitUserSelect: 'none',
+                                            textDecoration: isMissing ? 'line-through' : 'none'
                                         }}
                                         onMouseEnter={(e) => {
                                             if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
