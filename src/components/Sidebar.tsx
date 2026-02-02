@@ -15,11 +15,23 @@ interface PlaylistNode extends Playlist {
 
 export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
+    try {
+        const saved = localStorage.getItem('sidebar_expanded_folders');
+        return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch (e) {
+        console.warn("Failed to load expanded folders state", e);
+        return new Set();
+    }
+  });
 
   useEffect(() => {
     loadPlaylists();
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebar_expanded_folders', JSON.stringify(Array.from(expandedFolders)));
+  }, [expandedFolders]);
 
   async function loadPlaylists() {
     try {

@@ -31,10 +31,11 @@ function App() {
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [theme, setTheme] = useState('dark');
-  const [accentColor, setAccentColor] = useState('#3b82f6');
+  const [theme, setTheme] = useState(() => localStorage.getItem('app_theme') || 'dark');
+  const [accentColor, setAccentColor] = useState(() => localStorage.getItem('app_accent') || '#3b82f6');
 
   useEffect(() => {
+    localStorage.setItem('app_theme', theme);
     // Apply theme
     document.body.className = '';
     document.body.classList.add(`theme-${theme}`);
@@ -43,6 +44,10 @@ function App() {
     document.documentElement.style.setProperty('--accent-color', accentColor);
     document.documentElement.style.setProperty('--accent-hover', accentColor);
   }, [theme, accentColor]);
+
+  useEffect(() => {
+      localStorage.setItem('app_accent', accentColor);
+  }, [accentColor]);
 
   // Toggle handlers
   const toggleLeftPanel = () => {
