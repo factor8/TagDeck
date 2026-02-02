@@ -484,7 +484,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                     onChange={handleVolumeChange}
                     className="volume-slider"
                     style={{ 
-                        width: '80px',
+                        width: '100px',
                         cursor: 'pointer',
                         background: `linear-gradient(to right, var(--accent-color) ${(isMuted ? 0 : volume) * 100}%, var(--bg-tertiary) ${(isMuted ? 0 : volume) * 100}%)`
                     }} 
