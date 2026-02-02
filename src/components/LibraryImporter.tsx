@@ -23,9 +23,9 @@ export function LibraryImporter({ onImportComplete }: Props) {
 
             if (selected && typeof selected === 'string') {
                 setImporting(true);
-                setStatus('Parsing XML...');
+                setStatus('');
                 const count = await invoke('import_library', { xmlPath: selected });
-                setStatus(`Imported ${count} tracks from XML!`);
+                setStatus(`Imported ${count} tracks!`);
                 onImportComplete();
             }
         } catch (err: any) {
@@ -38,7 +38,7 @@ export function LibraryImporter({ onImportComplete }: Props) {
 
     const handleMusicAppImport = async () => {
         setImporting(true);
-        setStatus('Syncing with Music.app...');
+        setStatus('');
         try {
             const count = await invoke('import_from_music_app');
             setStatus(`Synced ${count} tracks!`);
@@ -72,6 +72,7 @@ export function LibraryImporter({ onImportComplete }: Props) {
             <button onClick={handleXMLImport} disabled={importing} className="btn" style={{ fontSize: '13px', padding: '6px 12px', background: 'var(--bg-tertiary)' }}>
                 Import XML
             </button>
+            {status && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{status}</span>}
         </div>
     );
 }
