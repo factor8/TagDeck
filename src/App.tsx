@@ -17,6 +17,7 @@ function App() {
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
   const [lastSelectedTrackId, setLastSelectedTrackId] = useState<number | null>(null);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
+  const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -60,6 +61,16 @@ function App() {
     setLastSelectedTrackId(lastId);
     setSelectedTrack(primaryTrack);
     setCurrentTags(commonTags);
+    setShouldAutoPlay(false); // Reset auto-play on regular selection
+  };
+  
+  const handleTrackDoubleClick = (track: Track) => {
+      // Ensure it is selected (it should be from the click, but to be sure)
+      if (selectedTrack?.id !== track.id) {
+          const newSet = new Set([track.id]);
+          handleSelectionChange(newSet, track.id, track, track.comment_raw ? track.comment_raw.split(" && ")[1]?.split(';') || [] : []);
+      }
+      setShouldAutoPlay(true);
   };
 
   const handleDeckTagClick = (tag: string) => {
@@ -204,6 +215,7 @@ function App() {
               playlistId={selectedPlaylistId}
               refreshTrigger={refreshTrigger}
               onSelectionChange={handleSelectionChange}
+              onTrackDoubleClick={handleTrackDoubleClick}
               selectedTrackIds={selectedTrackIds}
               lastSelectedTrackId={lastSelectedTrackId}
               searchTerm={searchTerm}
@@ -264,6 +276,7 @@ function App() {
         track={selectedTrack} 
         onNext={() => trackListRef.current?.selectNext()}
         onPrev={() => trackListRef.current?.selectPrev()}
+        autoPlay={shouldAutoPlay}
       />
     </div>
   );

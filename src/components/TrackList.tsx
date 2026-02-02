@@ -39,6 +39,7 @@ interface Props {
     selectedTrackIds: Set<number>;
     lastSelectedTrackId: number | null;
     onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
+    onTrackDoubleClick?: (track: Track) => void;
     searchTerm: string;
     playlistId: number | null;
 }
@@ -171,7 +172,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -730,6 +731,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         data-index={virtualRow.index} 
                                         ref={rowVirtualizer.measureElement}
                                         onClick={(e) => handleRowClick(row.original, e)}
+                                        onDoubleClick={() => onTrackDoubleClick?.(row.original)}
                                         style={{ 
                                             borderBottom: '1px solid var(--bg-secondary)',
                                             background: isSelected 
