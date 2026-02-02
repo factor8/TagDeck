@@ -18,7 +18,10 @@ function App() {
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
   const [lastSelectedTrackId, setLastSelectedTrackId] = useState<number | null>(null);
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(null);
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<number | null>(() => {
+    const saved = localStorage.getItem('app_selected_playlist_id');
+    return saved ? Number(saved) : null;
+  });
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -48,6 +51,14 @@ function App() {
   useEffect(() => {
       localStorage.setItem('app_accent', accentColor);
   }, [accentColor]);
+
+  useEffect(() => {
+    if (selectedPlaylistId !== null) {
+      localStorage.setItem('app_selected_playlist_id', selectedPlaylistId.toString());
+    } else {
+      localStorage.removeItem('app_selected_playlist_id');
+    }
+  }, [selectedPlaylistId]);
 
   // Toggle handlers
   const toggleLeftPanel = () => {

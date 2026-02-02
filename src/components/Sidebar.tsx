@@ -24,6 +24,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
         return new Set();
     }
   });
+  const [hasScrolledToSelection, setHasScrolledToSelection] = useState(false);
 
   useEffect(() => {
     loadPlaylists();
@@ -32,6 +33,42 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   useEffect(() => {
     localStorage.setItem('sidebar_expanded_folders', JSON.stringify(Array.from(expandedFolders)));
   }, [expandedFolders]);
+
+  // Expand parents of selected playlist on load or selection change
+  useEffect(() => {
+      if (playlists.length > 0 && selectedPlaylistId && !hasScrolledToSelection) {
+          const selected = playlists.find(p => p.id === selectedPlaylistId);
+          if (selected) {
+              const pMap = new Map(playlists.map(p => [p.persistent_id, p]));
+              let newExpanded: Set<string> | null = null;
+              
+              let curr = selected;
+              while(curr.parent_persistent_id) {
+                   const parent = pMap.get(curr.parent_persistent_id);
+                   if (parent && !expandedFolders.has(parent.persistent_id)) {
+                       if (!newExpanded) newExpanded = new Set(expandedFolders);
+                       newExpanded.add(parent.persistent_id);
+                       curr = parent;
+                   } else if (parent) {
+                       curr = parent;
+                   } else {
+                       break;
+                   }
+              }
+              
+              if (newExpanded) {
+                  setExpandedFolders(newExpanded);
+              }
+          }
+      }
+  }, [playlists, selectedPlaylistId, hasScrolledToSelection]);
+
+  const scrollRef = (node: HTMLDivElement | null) => {
+      if (node && !hasScrolledToSelection) {
+          node.scrollIntoView({ block: 'center' });
+          setHasScrolledToSelection(true);
+      }
+  };
 
   async function loadPlaylists() {
     try {
@@ -101,6 +138,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       return (
           <div key={node.persistent_id}>
               <div 
+                  ref={isSelected ? scrollRef : null}
                   onClick={() => {
                       if (node.is_folder) {
                           toggleFolder(node.persistent_id);
