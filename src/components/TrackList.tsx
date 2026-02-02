@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
@@ -41,6 +41,11 @@ interface Props {
     onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
     searchTerm: string;
     playlistId: number | null;
+}
+
+export interface TrackListHandle {
+    selectNext: () => void;
+    selectPrev: () => void;
 }
 
 // Helper to calculate common tags
@@ -166,7 +171,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId }: Props) {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, selectedTrackIds, lastSelectedTrackId, searchTerm, playlistId }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -533,6 +538,41 @@ export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds,
         overscan: 20,
     });
 
+    useImperativeHandle(ref, () => ({
+        selectNext: () => {
+            const currentIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
+            let nextIndex = 0;
+            if (currentIndex !== -1) {
+                nextIndex = currentIndex + 1;
+            } else if (rows.length > 0) {
+                // If nothing selected, select first
+                nextIndex = 0;
+            } else {
+                return;
+            }
+
+            if (nextIndex < rows.length) {
+                const nextTrack = rows[nextIndex].original;
+                const newSet = new Set([nextTrack.id]);
+                // Simply use nextTrack tags + logic since single select
+                const commonTags = getCommonTags([nextTrack], newSet); 
+                onSelectionChange(newSet, nextTrack.id, nextTrack, commonTags);
+                rowVirtualizer.scrollToIndex(nextIndex);
+            }
+        },
+        selectPrev: () => {
+            const currentIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
+            if (currentIndex > 0) {
+                const prevIndex = currentIndex - 1;
+                const prevTrack = rows[prevIndex].original;
+                const newSet = new Set([prevTrack.id]);
+                const commonTags = getCommonTags([prevTrack], newSet);
+                onSelectionChange(newSet, prevTrack.id, prevTrack, commonTags);
+                rowVirtualizer.scrollToIndex(prevIndex);
+            }
+        }
+    }));
+
     return (
         <div style={{ width: '100%', height: '100%', fontSize: '13px', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             {/* Pinned Settings Gear */}
@@ -748,4 +788,4 @@ export function TrackList({ refreshTrigger, onSelectionChange, selectedTrackIds,
             </DndContext>
         </div>
     );
-}
+});

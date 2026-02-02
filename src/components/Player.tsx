@@ -2,19 +2,22 @@ import { readFile } from '@tauri-apps/plugin-fs';
 import { Track } from '../types';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw } from 'lucide-react';
 
 interface Props {
     track: Track | null;
+    onNext?: () => void;
+    onPrev?: () => void;
 }
 
-export function Player({ track }: Props) {
+export function Player({ track, onNext, onPrev }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [currentUrl, setCurrentUrl] = useState<string | null>(null);
     const [isMuted, setIsMuted] = useState(false);
+    const [volume, setVolume] = useState(1);
 
     // Error toast timer
     useEffect(() => {
@@ -190,11 +193,26 @@ export function Player({ track }: Props) {
         }
     };
 
+    const skip = (seconds: number) => {
+        if (wavesurfer) {
+            wavesurfer.skip(seconds);
+        }
+    };
+
     const toggleMute = () => {
         if (wavesurfer) {
             const newMuted = !isMuted;
             setIsMuted(newMuted);
-            wavesurfer.setVolume(newMuted ? 0 : 1);
+            wavesurfer.setVolume(newMuted ? 0 : volume);
+        }
+    };
+
+    const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newVolume = parseFloat(e.target.value);
+        setVolume(newVolume);
+        setIsMuted(newVolume === 0);
+        if (wavesurfer) {
+            wavesurfer.setVolume(newVolume);
         }
     };
 
@@ -213,24 +231,48 @@ export function Player({ track }: Props) {
 
             {/* Center: Controls + Waveform */}
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '16px', margin: '0 20px', maxWidth: '800px' }}>
-                <button 
-                    onClick={togglePlayPause}
-                    style={{
-                        background: 'var(--accent-color)',
-                        border: 'none',
-                        borderRadius: '50%',
-                        width: '40px',
-                        height: '40px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        cursor: 'pointer',
-                        color: 'white',
-                        flexShrink: 0
-                    }}
-                >
-                    {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {/* Previous Track */}
+                    <button onClick={onPrev} style={styles.iconButton} title="Previous Track">
+                        <SkipBack size={20} />
+                    </button>
+
+                    {/* Rewind 5s */}
+                    <button onClick={() => skip(-5)} style={styles.iconButton} title="Rewind 5s">
+                        <RotateCcw size={18} />
+                    </button>
+
+                    {/* Play/Pause */}
+                    <button 
+                        onClick={togglePlayPause}
+                        style={{
+                            background: 'var(--accent-color)',
+                            border: 'none',
+                            borderRadius: '50%',
+                            width: '40px',
+                            height: '40px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            color: 'white',
+                            flexShrink: 0,
+                            margin: '0 8px'
+                        }}
+                    >
+                        {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '2px' }} />}
+                    </button>
+
+                    {/* Fast Forward 5s */}
+                    <button onClick={() => skip(5)} style={styles.iconButton} title="Forward 5s">
+                        <RotateCw size={18} />
+                    </button>
+
+                    {/* Next Track */}
+                    <button onClick={onNext} style={styles.iconButton} title="Next Track">
+                        <SkipForward size={20} />
+                    </button>
+                </div>
 
                 <div 
                     id="waveform"
@@ -248,13 +290,26 @@ export function Player({ track }: Props) {
             </div>
 
             {/* Right: Volume/Spacer */}
-            <div style={{ width: '200px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
+            <div style={{ width: '200px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '8px' }}>
                 <button 
                     onClick={toggleMute}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '8px' }}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '4px' }}
                 >
-                    {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                    {isMuted || volume === 0 ? <VolumeX size={20} /> : <Volume2 size={20} />}
                 </button>
+                <input 
+                    type="range" 
+                    min="0" 
+                    max="1" 
+                    step="0.01" 
+                    value={isMuted ? 0 : volume} 
+                    onChange={handleVolumeChange}
+                    style={{ 
+                        width: '80px',
+                        accentColor: 'var(--accent-color)',
+                        cursor: 'pointer'
+                    }} 
+                />
             </div>
 
             {/* Error Toast */}
@@ -307,5 +362,16 @@ const styles = {
         textOverflow: 'ellipsis',
         minWidth: '200px',
         maxWidth: '30%',
+    },
+    iconButton: {
+        background: 'transparent',
+        border: 'none',
+        color: 'var(--text-secondary)',
+        cursor: 'pointer',
+        padding: '8px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: '50%',
     }
 };

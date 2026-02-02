@@ -5,7 +5,7 @@ import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImpera
 import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import { LibraryImporter } from './components/LibraryImporter';
-import { TrackList } from './components/TrackList';
+import { TrackList, TrackListHandle } from './components/TrackList';
 import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
@@ -22,6 +22,7 @@ function App() {
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
+  const trackListRef = useRef<TrackListHandle>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
 
@@ -199,6 +200,7 @@ function App() {
             flexDirection: 'column'
             }}>
             <TrackList 
+              ref={trackListRef}
               playlistId={selectedPlaylistId}
               refreshTrigger={refreshTrigger}
               onSelectionChange={handleSelectionChange}
@@ -258,7 +260,11 @@ function App() {
       </div>
 
       {/* Player Footer */}
-      <Player track={selectedTrack} />
+      <Player 
+        track={selectedTrack} 
+        onNext={() => trackListRef.current?.selectNext()}
+        onPrev={() => trackListRef.current?.selectPrev()}
+      />
     </div>
   );
 }
