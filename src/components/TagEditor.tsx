@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { Pencil } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -18,6 +19,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     // current input for a new tag
     const [tagInput, setTagInput] = useState('');
     
+    const [isEditingComment, setIsEditingComment] = useState(false);
+
     const [saving, setSaving] = useState(false);
     
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
@@ -27,6 +30,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             setUserComment('');
             setTags(commonTags || []);
         } else if (track && track.comment_raw) {
+            setIsEditingComment(false);
             const raw = track.comment_raw;
             // Split only on the FIRST " && " to separate User Comment from Tag Block
             const splitIndex = raw.indexOf(' && ');
@@ -304,14 +308,67 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             {/* User Comment Section */}
             {!isMultiSelect && (
                 <div style={{ padding: '0px 0 5px 0' }}>
-                    <input 
-                        type="text"
-                        value={userComment}
-                        onChange={e => setUserComment(e.target.value)}
-                        style={styles.input}
-                        placeholder="Comment..."
-                        onKeyDown={e => { if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleSave(); }}
-                    />
+                    {isEditingComment ? (
+                        <input 
+                            type="text"
+                            value={userComment}
+                            onChange={e => setUserComment(e.target.value)}
+                            style={styles.input}
+                            placeholder="Comment..."
+                            autoFocus
+                            onBlur={() => setIsEditingComment(false)}
+                            onKeyDown={e => { 
+                                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                                    handleSave();
+                                    setIsEditingComment(false);
+                                } else if (e.key === 'Enter') {
+                                    setIsEditingComment(false);
+                                } else if (e.key === 'Escape') {
+                                    setIsEditingComment(false);
+                                }
+                            }}
+                        />
+                    ) : (
+                        <div style={{
+                            width: '100%',
+                            padding: '6px 8px',
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            justifyContent: 'space-between', 
+                            fontSize: '13px',
+                            marginBottom: '2px',
+                            minHeight: '30px'
+                        }}>
+                            <span 
+                                style={{ 
+                                    whiteSpace: 'nowrap', 
+                                    overflow: 'hidden', 
+                                    textOverflow: 'ellipsis', 
+                                    flex: 1,
+                                    color: userComment ? 'var(--text-primary)' : 'var(--text-secondary)',
+                                    opacity: userComment ? 1 : 0.6,
+                                    fontStyle: userComment ? 'normal' : 'italic'
+                                }}
+                                onDoubleClick={() => setIsEditingComment(true)}
+                            >
+                                {userComment || "No comment"}
+                            </span>
+                            <span 
+                                onClick={() => setIsEditingComment(true)}
+                                style={{ 
+                                    cursor: 'pointer', 
+                                    paddingLeft: '8px', 
+                                    opacity: 0.8,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    color: 'var(--accent-color)'
+                                }}
+                                title="Edit comment"
+                            >
+                                <Pencil size={12} />
+                            </span>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -409,9 +466,9 @@ const styles = {
     pill: {
         background: 'rgba(59, 130, 246, 0.2)', // Accent transparent
         color: 'var(--accent-color)',
-        padding: '2px 8px',
-        borderRadius: '10px',
-        fontSize: '11px',
+        padding: '2px 10px',
+        borderRadius: '12px',
+        fontSize: '14px',
         display: 'flex',
         alignItems: 'center',
         border: '1px solid rgba(59, 130, 246, 0.3)'
@@ -420,7 +477,7 @@ const styles = {
         border: 'none',
         background: 'transparent',
         color: 'var(--text-primary)',
-        fontSize: '12px',
+        fontSize: '14px',
         outline: 'none',
         flex: 1,
         minWidth: '50px'

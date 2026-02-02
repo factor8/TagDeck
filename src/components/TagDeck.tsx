@@ -142,9 +142,9 @@ const styles = {
         flex: 1,
     },
     pill: {
-        padding: '4px 10px',
+        padding: '2px 10px',
         borderRadius: '12px',
-        fontSize: '12px',
+        fontSize: '14px',
         cursor: 'pointer',
         transition: 'all 0.1s ease',
         userSelect: 'none' as const,
