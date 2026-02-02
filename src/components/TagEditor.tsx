@@ -239,6 +239,13 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     
     const addTag = async (valOverride?: string) => {
         const rawVal = (valOverride || tagInput).trim();
+        
+        // Validation: forbid " && "
+        if (rawVal.includes(" && ")) {
+            alert("Tags cannot contain ' && ' as it is used as a separator.");
+            return;
+        }
+
         if (rawVal) {
             // Capitalize first letter
             const val = rawVal.charAt(0).toUpperCase() + rawVal.slice(1);
