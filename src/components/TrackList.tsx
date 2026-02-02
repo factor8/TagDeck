@@ -31,7 +31,7 @@ import {
     useSortable 
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, VolumeX } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1 } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -39,7 +39,7 @@ interface Props {
     selectedTrackIds: Set<number>;
     lastSelectedTrackId: number | null;
     playingTrackId?: number | null;
-    isPlaying?: boolean;
+    isPlaying?: boolean; // New prop
     onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
     onTrackDoubleClick?: (track: Track) => void;
     searchTerm: string;
@@ -178,7 +178,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying = false, searchTerm, playlistId, onRefresh }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [loading, setLoading] = useState(false);
@@ -340,13 +340,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             id: 'artist',
             header: 'Artist',
             cell: info => {
-                const isTrackActive = playingTrackId === info.row.original.id;
+                const isCurrentTrack = playingTrackId === info.row.original.id;
                 return (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {isTrackActive && (
+                        {isCurrentTrack && (
                              isPlaying 
-                                ? <Volume2 size={12} fill="currentColor" style={{ flexShrink: 0, color: 'var(--accent-color)' }} />
-                                : <VolumeX size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)', opacity: 0.7 }} />
+                             ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                             : <Volume1 size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
                         )}
                         <span>{info.getValue()}</span>
                     </div>
@@ -810,7 +810,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             {rowVirtualizer.getVirtualItems().map(virtualRow => {
                                 const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackIds.has(row.original.id);
-                                const isRowActive = playingTrackId === row.original.id;
+                                const isPlaying = playingTrackId === row.original.id;
                                 const isMissing = row.original.missing;
                                 
                                 if (isMissing) {
@@ -843,8 +843,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                                         : 'transparent',
                                             color: isSelected 
                                                     ? 'var(--accent-color)' 
-                                                    : (isRowActive ? 'var(--accent-color)' : 'var(--text-primary)'),
-                                            fontWeight: isRowActive ? '600' : 'normal',
+                                                    : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
+                                            fontWeight: isPlaying ? '600' : 'normal',
                                             opacity: isMissing ? 0.5 : 1,
                                             cursor: isMissing ? 'default' : 'pointer',
                                             userSelect: 'none',

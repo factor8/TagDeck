@@ -19,8 +19,8 @@ interface Props {
 export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
-    // Track the latest track ID to handle race conditions in async loading
-    const latestTrackIdRef = useRef<number | undefined>(track?.id);
+    const prevTrackIdRef = useRef<number | null>(null);
+    const onPlayStateChangeRef = useRef(onPlayStateChange);
 
     // Keep refs up to date
     useEffect(() => {
@@ -28,9 +28,9 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
     }, [autoPlay]);
 
     useEffect(() => {
-        latestTrackIdRef.current = track?.id;
-    }, [track]);
-
+        onPlayStateChangeRef.current = onPlayStateChange;
+    }, [onPlayStateChange]);
+    
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -81,46 +81,76 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
 
     // Initialize WaveSurfer
     useEffect(() => {
-        if (!containerRef.current) return;
+        if (!containerRef.current) {
+            console.error("WaveSurfer container ref is null!");
+            return;
+        }
 
-        const ws = WaveSurfer.create({
-            container: containerRef.current,
-            waveColor: '#475569', // slate-600
-            progressColor: accentColor,
-            cursorColor: '#f1f5f9', // slate-100
-            barWidth: 2,
-            barGap: 1,
-            barRadius: 2,
-            height: 40,
-            normalize: true,
-            // fillParent: true, // Responsiveness issue?
-            minPxPerSec: 0, // Fit to container
-            interact: true,
-        });
+        console.log("Initializing WaveSurfer instance...");
+
+        let ws: WaveSurfer;
+        try {
+            ws = WaveSurfer.create({
+                container: containerRef.current,
+                waveColor: '#475569', // slate-600
+                progressColor: accentColor,
+                cursorColor: '#f1f5f9', // slate-100
+                barWidth: 2,
+                barGap: 1,
+                barRadius: 2,
+                height: 40,
+                normalize: true,
+                minPxPerSec: 0, // Fit to container
+                interact: true,
+            });
+        } catch (err) {
+            console.error("Failed to create WaveSurfer:", err);
+            setError(`Init Error: ${err}`);
+            return;
+        }
 
         // Event listeners
         ws.on('play', () => {
             setIsPlaying(true);
-            onPlayStateChange?.(true);
+            if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true);
         });
         ws.on('pause', () => {
-             setIsPlaying(false);
-             onPlayStateChange?.(false);
+            setIsPlaying(false);
+            if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
         });
         ws.on('finish', () => {
             setIsPlaying(false);
-            onPlayStateChange?.(false);
+            if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
+        });
+        ws.on('ready', () => {
+            console.log("WaveSurfer Ready. Duration:", ws.getDuration());
+            if (autoPlayRef.current) {
+                console.log("Auto-play triggering...");
+                ws.play().catch(e => {
+                    console.warn("Auto-play validation failed:", e);
+                    // Ignore "The user canceled the play request" etc.
+                });
+            }
         });
         
         // Initial basic error logging
         ws.on('error', (err: any) => {
-            console.error("WaveSurfer error:", err);
-            setError(`WaveSurfer Error: ${err?.message || err}`);
+            console.error("WaveSurfer internal error:", err);
+            // Don't show toast for "user aborted" etc if trivial
+            // setError(`WaveSurfer Error: ${err?.message || err}`);
         });
+
+        // Add a redraw on resize just in case
+        const resizeObserver = new ResizeObserver(() => {
+             // ws.drawBuffer(); // v7 handles this? v7 uses internal observer usually.
+        });
+        resizeObserver.observe(containerRef.current);
 
         setWavesurfer(ws);
 
         return () => {
+            console.log("Destroying WaveSurfer instance");
+            resizeObserver.disconnect();
             try {
                 ws.destroy();
             } catch (e) {
@@ -200,75 +230,66 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
         // If track is null, clear player
         if (!track) {
             setCurrentUrl(null);
+            prevTrackIdRef.current = null;
             try { wavesurfer.stop(); } catch (e) { /* ignore */ }
             return;
         }
 
-        // Setup loading state
-        setError(null);
-        setIsPlaying(false);
-        const targetId = track.id;
+        // Check if track really changed
+        if (track.id !== prevTrackIdRef.current) {
+            // Track Changed -> Load New
+            prevTrackIdRef.current = track.id;
             
-        const loadAudio = async () => {
-            try {
-                    try { wavesurfer.stop(); } catch(e) { /* ignore */ }
-                
-                console.log('Reading file for playback:', track.file_path);
-                const contents = await readFile(track.file_path);
-                
-                // Check if track changed during read
-                if (latestTrackIdRef.current !== targetId) {
-                    console.log("Loading aborted: Track changed");
-                    return; 
+            setError(null);
+            setIsPlaying(false);
+            
+            const loadAudio = async () => {
+                try {
+                     try { wavesurfer.stop(); } catch(e) { /* ignore */ }
+                    
+                    // Try reading file directly to Blob first (most robust for local files in Tauri)
+                    // This bypasses potential CORS/Range-request issues with Web Audio API + asset://
+                    console.log('Reading file for playback:', track.file_path);
+                    const contents = await readFile(track.file_path);
+                    const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
+                                   track.format === 'm4a' ? 'audio/mp4' : 
+                                   track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+                    
+                    const blob = new Blob([contents], { type: mimeType });
+                    const blobUrl = URL.createObjectURL(blob);
+                    
+                    console.log('Loading Blob URL:', blobUrl);
+                    setCurrentUrl(blobUrl);
+                    
+                    await wavesurfer.load(blobUrl);
+                    
+                } catch (err) {
+                    console.error("Error loading audio file:", err);
+                    setError(`Failed to load audio: ${err}`);
+                    
+                    // If we can't read the file, it's likely missing
+                    invoke('mark_track_missing', { id: track.id, missing: true })
+                        .then(() => {
+                            console.log(`Marked track ${track.id} as missing`);
+                            onTrackError?.();
+                        })
+                        .catch(e => console.error("Failed to mark track missing:", e));
                 }
-
-                const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
-                                track.format === 'm4a' ? 'audio/mp4' : 
-                                track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
-                
-                const blob = new Blob([new Uint8Array(contents)], { type: mimeType });
-                const blobUrl = URL.createObjectURL(blob);
-                
-                if (latestTrackIdRef.current !== targetId) {
-                    URL.revokeObjectURL(blobUrl);
-                    return;
-                }
-
-                console.log('Loading Blob URL:', blobUrl);
-                setCurrentUrl(blobUrl);
-                
-                await wavesurfer.load(blobUrl);
-                
-                if (latestTrackIdRef.current !== targetId) return;
-                
-                if (autoPlayRef.current) {
-                    console.log("AutoPlay requested, attempting play...");
-                    try {
-                        await wavesurfer.play();
-                    } catch (e) {
-                        console.warn("Auto-play failed:", e);
+            };
+    
+            loadAudio();
+        } else {
+             // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
+             if (autoPlay) {
+                 try {
+                    if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
+                        wavesurfer.play();
                     }
-                }
-                
-            } catch (err) {
-                if (latestTrackIdRef.current !== targetId) return;
-
-                console.error("Error loading audio file:", err);
-                setError(`Failed to load audio: ${err}`);
-                
-                invoke('mark_track_missing', { id: track.id, missing: true })
-                    .then(() => {
-                        console.log(`Marked track ${track.id} as missing`);
-                        onTrackError?.();
-                    })
-                    .catch(e => console.error("Failed to mark track missing:", e));
+                 } catch(e) { console.warn("AutoPlay trigger failed", e); }
             }
-        };
-
-        loadAudio();
+        }
         
-    }, [track?.id, wavesurfer, track?.file_path, track?.format]); 
-    // ^ Key Dependencies: Only ID and WS. Exclude autoPlay to prevent reload loop/cancellation.
+    }, [track, wavesurfer, autoPlay]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
@@ -289,6 +310,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                 const isPlayingNow = wavesurfer.isPlaying();
                 console.log("WaveSurfer isPlaying:", isPlayingNow);
                 setIsPlaying(isPlayingNow);
+                if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(isPlayingNow); // Manual sync just in case
             } catch (e) {
                 console.error("Error toggling playback:", e);
             }
@@ -337,15 +359,15 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [wavesurfer, isMuted, volume]);
 
-    if (!track) return <div style={styles.container}><div style={{ color: 'var(--text-secondary)' }}>Select a track to play</div></div>;
+    const hasTrack = !!track;
 
     return (
         <div style={styles.container}>
             {/* Left: Track Info */}
-            <div style={{ ...styles.info, display: 'flex', alignItems: 'center' }}>
+            <div style={{ ...styles.info, display: 'flex', alignItems: 'center', opacity: hasTrack ? 1 : 0.5 }}>
                 {/* Artwork */}
                 <div 
-                    onClick={onArtworkClick}
+                    onClick={hasTrack ? onArtworkClick : undefined}
                     style={{ 
                         width: '48px', 
                         height: '48px', 
@@ -358,7 +380,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                         justifyContent: 'center',
                         flexShrink: 0,
                         boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                        cursor: 'pointer'
+                        cursor: hasTrack ? 'pointer' : 'default'
                     }}
                     title="Toggle sidebar artwork"
                 >
@@ -371,19 +393,21 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                 
                 <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {track.title || 'Unknown Title'}
+                        {track ? track.title : 'Select a track'}
                     </div>
                     <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {track.artist || 'Unknown Artist'}
+                        {track ? track.artist : 'to start playback'}
                     </div>
+                    {track && (
                     <div style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '2px' }}>
                         {track.format} • {track.file_path.split('/').pop()}
                     </div>
+                    )}
                 </div>
             </div>
 
             {/* Center: Controls + Waveform */}
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '16px', margin: '0 20px', maxWidth: '800px' }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '16px', margin: '0 20px', maxWidth: '800px', opacity: hasTrack ? 1 : 0.5, pointerEvents: hasTrack ? 'auto' : 'none' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     {/* Previous Track */}
                     <button onClick={onPrev} style={styles.iconButton} title="Previous Track">
@@ -432,6 +456,7 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                     ref={containerRef} 
                     style={{ 
                         flex: 1, 
+                        minWidth: 0, // Fix flexbox overflow/sizing
                         height: '40px', 
                         cursor: 'pointer',
                         position: 'relative',
