@@ -30,7 +30,9 @@ export function LibraryImporter({ onImportComplete }: Props) {
             }
         } catch (err: any) {
             console.error(err);
-            setStatus(`Error: ${err.toString()}`);
+            const msg = `Error: ${err.toString()}`;
+            setStatus(msg);
+            invoke('log_error', { message: msg }).catch(console.error);
         } finally {
             setImporting(false);
         }
@@ -45,7 +47,9 @@ export function LibraryImporter({ onImportComplete }: Props) {
             onImportComplete();
         } catch (err: any) {
              console.error(err);
-             setStatus(`Error: ${err.toString()}`);
+             const msg = `Error: ${err.toString()}`;
+             setStatus(msg);
+             invoke('log_error', { message: msg }).catch(console.error);
         } finally {
             setImporting(false);
         }

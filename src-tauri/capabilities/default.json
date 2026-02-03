@@ -3,13 +3,24 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": [
-    "main"
+    "main",
+    "logs"
   ],
   "permissions": [
     "core:default",
     "opener:default",
     "dialog:default",
     "fs:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "fetch-library",
+          "cmd": "fetch-library",
+          "sidecar": true
+        }
+      ]
+    },
     {
       "identifier": "fs:allow-read",
       "allow": [

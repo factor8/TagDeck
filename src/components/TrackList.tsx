@@ -196,6 +196,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 setAllowedTrackIds(new Set(ids));
             } catch (e) {
                 console.error("Failed to load playlist tracks", e);
+                invoke('log_error', { message: `Failed to load playlist tracks: ${e}` }).catch(console.error);
                 setAllowedTrackIds(new Set());
             }
         }

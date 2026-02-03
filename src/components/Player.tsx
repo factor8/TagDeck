@@ -264,8 +264,12 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                     await wavesurfer.load(blobUrl);
                     
                 } catch (err) {
+                    const errorMessage = `Failed to load audio: ${err}`;
                     console.error("Error loading audio file:", err);
-                    setError(`Failed to load audio: ${err}`);
+                    setError(errorMessage);
+
+                    // Log error to backend
+                    invoke('log_error', { message: errorMessage }).catch(e => console.error("Failed to log error:", e));
                     
                     // If we can't read the file, it's likely missing
                     invoke('mark_track_missing', { id: track.id, missing: true })

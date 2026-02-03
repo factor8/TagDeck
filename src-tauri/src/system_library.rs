@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::Path;
-use std::process::Command;
+use tauri::AppHandle;
+use tauri_plugin_shell::ShellExt;
 
 use crate::models::{Track, Playlist};
 
@@ -64,36 +64,13 @@ impl ExternalTrack {
     }
 }
 
-pub fn fetch_system_library() -> Result<(Vec<Track>, Vec<Playlist>)> {
-    // Attempt to locate the binary relative to the current working directory
-    // This assumes running from the project root (e.g. `npm run tauri dev`)
-    let relative_path = Path::new("src-tauri/bin/fetch-library");
-    
-    // Check if we are inside the src-tauri directory (e.g. `cargo run` inside src-tauri)
-    let relative_path_inner = Path::new("bin/fetch-library");
-
-    let binary_path = if relative_path.exists() {
-        relative_path.to_path_buf()
-    } else if relative_path_inner.exists() {
-        relative_path_inner.to_path_buf()
-    } else {
-        // Fallback: try to find it relative to the executable if possible, 
-        // or just return an error if we can't find it in expected locations.
-        // For development, relative path is usually sufficient.
-        return Err(anyhow::anyhow!(
-            "Could not find fetch-library binary. Checked {:?} and {:?}",
-            relative_path,
-            relative_path_inner
-        ));
-    };
-
-    let binary_abs_path = std::env::current_dir()
-        .context("Failed to get current directory")?
-        .join(&binary_path);
-
-    let output = Command::new(&binary_abs_path)
+pub async fn fetch_system_library(app: &AppHandle) -> Result<(Vec<Track>, Vec<Playlist>)> {
+    let output = app.shell()
+        .sidecar("fetch-library")
+        .context("Failed to create sidecar command")?
         .output()
-        .with_context(|| format!("Failed to execute binary at {:?}", binary_abs_path))?;
+        .await
+        .context("Failed to execute fetch-library sidecar")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

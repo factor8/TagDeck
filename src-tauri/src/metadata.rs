@@ -13,7 +13,8 @@ const DELIMITER: &str = " && ";
 /// Also mirrors to Grouping if that's the desired behavior (or we can separate them).
 /// For the UI editor, we probably want to write exactly what the user typed.
 pub fn write_metadata<P: AsRef<Path>>(path: P, comment: &str) -> Result<()> {
-    let mut tagged_file = read_from_path(path.as_ref()).context("Failed to read file")?;
+    let path_ref = path.as_ref();
+    let mut tagged_file = read_from_path(path_ref).context(format!("Failed to read file: {:?}", path_ref))?;
 
     // Safety: Remove ID3v1 to prevent iTunes conflicts
     if tagged_file.tag(TagType::Id3v1).is_some() {

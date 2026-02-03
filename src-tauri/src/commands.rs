@@ -5,18 +5,22 @@ use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
 use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file};
 use crate::models::Track;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{State, Manager};
 
 pub struct AppState {
     pub db: Mutex<Database>,
 }
 
 #[tauri::command]
-pub async fn import_library(xml_path: String, state: State<'_, AppState>) -> Result<usize, String> {
+pub async fn import_library(app: tauri::AppHandle, xml_path: String, state: State<'_, AppState>) -> Result<usize, String> {
     println!("Importing library from: {}", xml_path);
 
     // 1. Parse XML
-    let tracks = parse_library(&xml_path).map_err(|e| e.to_string())?;
+    let tracks = parse_library(&xml_path).map_err(|e| {
+        let msg = format!("XML Parse Error: {}", e);
+        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        e.to_string()
+    })?;
     let count = tracks.len();
     println!("Found {} tracks", count);
 
@@ -27,7 +31,11 @@ pub async fn import_library(xml_path: String, state: State<'_, AppState>) -> Res
         .map_err(|_| "Failed to lock DB".to_string())?;
 
     for track in tracks {
-        db.insert_track(&track).map_err(|e| e.to_string())?;
+        if let Err(e) = db.insert_track(&track) {
+            let msg = format!("DB Error (XML Import): {}", e);
+             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+             return Err(e.to_string());
+        }
     }
 
     Ok(count)
@@ -311,11 +319,18 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
 }
 
 #[tauri::command]
-pub async fn import_from_music_app(state: State<'_, AppState>) -> Result<usize, String> {
+pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
     println!("Importing from Music.app...");
 
     // 1. Fetch from Sidecar
-    let (tracks, playlists) = fetch_system_library().map_err(|e| e.to_string())?;
+    let (tracks, playlists) = match fetch_system_library(&app).await {
+        Ok(res) => res,
+        Err(e) => {
+            let msg = format!("Sidecar Error: {}", e);
+            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            return Err(msg);
+        }
+    };
     let count = tracks.len();
     println!("Found {} tracks and {} playlists from Music.app", count, playlists.len());
 
@@ -326,11 +341,19 @@ pub async fn import_from_music_app(state: State<'_, AppState>) -> Result<usize, 
         .map_err(|_| "Failed to lock DB".to_string())?;
 
     for track in tracks {
-        db.insert_track(&track).map_err(|e| e.to_string())?;
+        if let Err(e) = db.insert_track(&track) {
+            let msg = format!("DB Error (insert track): {}", e);
+            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            return Err(msg);
+        }
     }
     
     for playlist in playlists {
-        db.insert_playlist(&playlist).map_err(|e| e.to_string())?;
+        if let Err(e) = db.insert_playlist(&playlist) {
+             let msg = format!("DB Error (insert playlist): {}", e);
+             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+             return Err(msg);
+        }
     }
 
     Ok(count)

@@ -12,6 +12,7 @@ import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
 import { Track } from './types';
+import { ToastProvider } from './components/Toast';
 
 function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -101,6 +102,18 @@ function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
+  useEffect(() => {
+    const handleLogsSnapshot = (e: KeyboardEvent) => {
+        // Cmd+Opt+L to toggle logs
+        if (e.metaKey && e.altKey && (e.key === 'l' || e.key === 'L')) {
+            e.preventDefault();
+            invoke("toggle_logs").catch(console.error);
+        }
+    };
+    window.addEventListener('keydown', handleLogsSnapshot);
+    return () => window.removeEventListener('keydown', handleLogsSnapshot);
+  }, []);
+
   // Toggle handlers
   const toggleLeftPanel = () => {
       const panel = leftPanelRef.current;
@@ -170,6 +183,7 @@ function App() {
   };
 
   return (
+    <ToastProvider>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       
       {/* Header */}
@@ -439,6 +453,7 @@ function App() {
         onPlayStateChange={setIsPlaying}
       />
     </div>
+    </ToastProvider>
   );
 }
 

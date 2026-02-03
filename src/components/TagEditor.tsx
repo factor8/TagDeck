@@ -3,6 +3,7 @@ import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Pencil } from 'lucide-react';
 import { Track } from '../types';
+import { useToast } from './Toast';
 
 interface Props {
     track: Track | null;
@@ -12,6 +13,7 @@ interface Props {
 }
 
 export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Props) {
+    const { showError } = useToast();
     // rawComment is ONLY the Left Side (User Comment)
     const [userComment, setUserComment] = useState('');
     // tags is the Right Side parsed into pills
@@ -150,7 +152,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 // We will implement `batch_add_tag` and `batch_remove_tag` for the Deck interaction.
                 
                 if (idsToUpdate.length > 1) {
-                    alert("Batch editing of raw text not yet supported. Use the Tag Deck to apply tags to multiple tracks.");
+                    showError("Batch editing of raw text not yet supported. Use the Tag Deck to apply tags to multiple tracks.");
                     return;
                 }
                 
@@ -168,7 +170,9 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             onUpdate(); 
         } catch (e) {
             console.error(e);
-            alert('Failed to save tags: ' + e);
+            const msg = 'Failed to save tags: ' + e;
+            showError(msg);
+            invoke('log_error', { message: msg }).catch(console.error);
         } finally {
             setSaving(false);
         }
@@ -219,7 +223,9 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     })
                     .catch(err => {
                         console.error(err);
-                        alert("Batch tag error: " + err);
+                        const msg = "Batch tag error: " + err;
+                        showError(msg);
+                        invoke('log_error', { message: msg }).catch(console.error);
                     });
             }
         };
@@ -261,6 +267,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     onUpdate();
                 } catch (e) {
                     console.error("Batch add failed", e);
+                    invoke('log_error', { message: `Batch add failed: ${e}` }).catch(console.error);
                 }
             } else {
                 setTags(prev => {
