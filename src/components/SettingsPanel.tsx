@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { X, Check } from 'lucide-react';
 
 interface SettingsPanelProps {
@@ -34,6 +34,29 @@ export function SettingsPanel({
     onAccentChange 
 }: SettingsPanelProps) {
     const panelRef = useRef<HTMLDivElement>(null);
+    const [syncInfo, setSyncInfo] = useState<{ date: string; count: number; type: string } | null>(null);
+
+    const loadSyncInfo = () => {
+        const saved = localStorage.getItem('app_last_sync_info');
+        if (saved) {
+            try {
+                setSyncInfo(JSON.parse(saved));
+            } catch (e) {
+                console.error("Failed to parse sync info", e);
+            }
+        }
+    };
+
+    useEffect(() => {
+        if (isOpen) {
+             loadSyncInfo();
+        }
+    }, [isOpen]);
+
+    useEffect(() => {
+        window.addEventListener('sync-info-updated', loadSyncInfo);
+        return () => window.removeEventListener('sync-info-updated', loadSyncInfo);
+    }, []);
 
     useEffect(() => {
         function handleClickOutside(event: MouseEvent) {
@@ -89,6 +112,25 @@ export function SettingsPanel({
                 >
                     <X size={18} />
                 </button>
+            </div>
+
+            {/* Sync Info Section */}
+            <div style={{ marginBottom: '28px', padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600 }}>Library Status</h4>
+                {syncInfo ? (
+                    <div style={{ fontSize: '14px', color: 'var(--text-primary)' }}>
+                        <div style={{ marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Last Synced:</span>
+                            <span>{new Date(syncInfo.date).toLocaleString()}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span style={{ color: 'var(--text-secondary)' }}>Tracks:</span>
+                            <span>{syncInfo.count.toLocaleString()}</span>
+                        </div>
+                    </div>
+                ) : (
+                    <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No sync history found.</span>
+                )}
             </div>
 
             <div style={{ marginBottom: '28px' }}>

@@ -12,6 +12,7 @@ import { TrackList, TrackListHandle } from './components/TrackList';
 import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
+import { MetadataViewer } from './components/MetadataViewer';
 import { Track } from './types';
 import { ToastProvider } from './components/Toast';
 
@@ -400,12 +401,15 @@ function App() {
             }}>
             {/* Editor Panel (Fixed at top of sidebar) */}
             {selectedTrack ? (
-                <TagEditor 
-                    track={selectedTrack} 
-                    onUpdate={handleRefresh} 
-                    selectedTrackIds={selectedTrackIds}
-                    commonTags={currentTags}
-                />
+                <>
+                    <TagEditor 
+                        track={selectedTrack} 
+                        onUpdate={handleRefresh} 
+                        selectedTrackIds={selectedTrackIds}
+                        commonTags={currentTags}
+                    />
+                    <MetadataViewer track={selectedTrack} />
+                </>
             ) : (
                 <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>
                     Select a track to edit tags

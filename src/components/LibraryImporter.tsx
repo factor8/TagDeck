@@ -26,6 +26,16 @@ export function LibraryImporter({ onImportComplete }: Props) {
                 setStatus('');
                 const count = await invoke('import_library', { xmlPath: selected });
                 setStatus(`Imported ${count} tracks!`);
+                
+                // Store sync info
+                const info = {
+                    date: new Date().toISOString(),
+                    count: count,
+                    type: 'xml'
+                };
+                localStorage.setItem('app_last_sync_info', JSON.stringify(info));
+                window.dispatchEvent(new Event('sync-info-updated'));
+                
                 onImportComplete();
             }
         } catch (err: any) {
@@ -44,6 +54,16 @@ export function LibraryImporter({ onImportComplete }: Props) {
         try {
             const count = await invoke('import_from_music_app');
             setStatus(`Synced ${count} tracks!`);
+            
+            // Store sync info
+            const info = {
+                date: new Date().toISOString(),
+                count: count,
+                type: 'music_app'
+            };
+            localStorage.setItem('app_last_sync_info', JSON.stringify(info));
+            window.dispatchEvent(new Event('sync-info-updated'));
+            
             onImportComplete();
         } catch (err: any) {
              console.error(err);
