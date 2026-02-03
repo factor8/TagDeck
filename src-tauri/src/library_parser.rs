@@ -86,10 +86,19 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             .unwrap_or_default()
             .as_secs() as i64;
 
-        let rating = track_info
+        let rating_raw = track_info
             .get("Rating")
             .and_then(|v| v.as_unsigned_integer())
             .unwrap_or(0);
+
+        // Check if the rating is computed (i.e. not explicitly set by user on this track)
+        // iTunes XML adds <key>Rating Computed</key><true/> if the rating comes from the Album Rating.
+        let rating_computed = track_info
+            .get("Rating Computed")
+            .and_then(|v| v.as_boolean()) // plist boolean
+            .unwrap_or(false);
+
+        let rating = if rating_computed { 0 } else { rating_raw };
 
         let date_added = track_info
             .get("Date Added")

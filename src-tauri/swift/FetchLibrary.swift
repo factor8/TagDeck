@@ -62,7 +62,14 @@ func main() {
             let duration = Double(item.totalTime) / 1000.0 // ms to seconds
             let size = Int64(item.fileSize)
             let bitrate = Int64(item.bitrate)
-            let rating = item.rating
+            
+            // Check if rating is computed (derived from Album Rating)
+            // We only want explicit user ratings for individual tracks.
+            var rating = item.rating
+            if item.isRatingComputed {
+                rating = 0
+            }
+            
             let dateAdded = item.addedDate?.timeIntervalSince1970 ?? 0
             let bpm = item.beatsPerMinute
             
@@ -97,7 +104,7 @@ func main() {
                 size_bytes: size,
                 bit_rate: bitrate,
                 modified_date: Int64(modDate),
-                rating: item.rating,
+                rating: rating,
                 date_added: Int64(dateAdded),
                 bpm: bpm
             )
