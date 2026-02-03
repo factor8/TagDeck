@@ -141,28 +141,37 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
 }
 
 fn decode_location(location: &str) -> String {
-    // robustly parse using url crate
-    let path_str = if let Ok(parsed) = Url::parse(location) {
-        if let Ok(file_path) = parsed.to_file_path() {
-            if let Some(s) = file_path.to_str() {
-                s.to_string()
-            } else {
-                location.to_string()
+    // 1. Try robust parsing using url crate first
+    // This handles standard file:/// paths correctly yielding system paths
+    if let Ok(parsed) = Url::parse(location) {
+        // Only accept if it has no host or host is "localhost" (which we treat as local)
+        let is_local = parsed.host_str().map(|h| h == "localhost" || h.is_empty()).unwrap_or(true);
+        
+        if is_local {
+            if let Ok(file_path) = parsed.to_file_path() {
+                if let Some(s) = file_path.to_str() {
+                    return finalize_path(s);
+                }
             }
-        } else {
-             location.to_string()
         }
-    } else {
-        // Fallback to manual if Url parse fails
-        let decoded = urlencoding::decode(location).unwrap_or(std::borrow::Cow::Borrowed(location)).to_string();
-        decoded
-            .replace("file://localhost", "")
-            .replace("file://", "")
-    };
+    }
 
+    // 2. Fallback: Manual decoding if Url crate fails or rejects strictly
+    // Common in iTunes XML: file://localhost/Users/... which standard parsers might dislike
+    let decoded = urlencoding::decode(location)
+        .unwrap_or(std::borrow::Cow::Borrowed(location))
+        .to_string();
+    
+    let cleaned = decoded
+        .replace("file://localhost", "")
+        .replace("file://", "");
+
+    finalize_path(&cleaned)
+}
+
+fn finalize_path(path_str: &str) -> String {
     // Heuristic: Strip Volume Name if it points to Users directory on boot drive
     // e.g. /Volumes/Macintosh HD/Users/... -> /Users/...
-    // e.g. /Macintosh HD/Users/... -> /Users/...
     // This handles the case where XML includes the boot volume name but the system expects root paths.
     if path_str.starts_with("/Volumes/") {
         if let Some(users_idx) = path_str.find("/Users/") {
@@ -176,5 +185,5 @@ fn decode_location(location: &str) -> String {
         }
     }
 
-    path_str
+    path_str.to_string()
 }

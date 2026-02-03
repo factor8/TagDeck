@@ -385,20 +385,26 @@ pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppStat
                      println!("  - File NOT FOUND at path.");
                      
                      // Try heuristic fix for typical "iTunes vs iTunes/Music" nesting issue
-                     if path.contains("/iTunes/") && !path.contains("/iTunes/Music/") {
-                         let fixed_path = path.replace("/iTunes/", "/iTunes/Music/");
-                         if std::path::Path::new(&fixed_path).exists() {
-                             println!("  - FOUND at corrected path: '{}'", fixed_path);
-                             println!("  - Auto-correcting database entry...");
-                             if let Err(e) = db.update_track_path(id, &fixed_path) {
-                                 println!("  - Failed to update DB: {}", e);
-                             } else {
-                                 // Recursively clear missing status if we found it?
-                                 // Or just don't mark it missing?
-                                 // Let's NOT mark it missing, and return early.
-                                 // requires restarting playback though.
-                                 println!("  - DB Updated. Next playback should work.");
-                                 return Ok(()); // Do NOT mark missing
+                     // Expanded to handle iTunes Music, iTunes Media variations
+                     if path.contains("/iTunes/") {
+                         let candidates = [
+                             "/iTunes/Music/",
+                             "/iTunes/iTunes Music/",
+                             "/iTunes/iTunes Media/Music/",
+                             "/iTunes/iTunes Media/",
+                         ];
+
+                         for candidate in candidates {
+                             let fixed_path = path.replace("/iTunes/", candidate);
+                             if fixed_path != path && std::path::Path::new(&fixed_path).exists() {
+                                 println!("  - FOUND at corrected path: '{}'", fixed_path);
+                                 println!("  - Auto-correcting database entry...");
+                                 if let Err(e) = db.update_track_path(id, &fixed_path) {
+                                     println!("  - Failed to update DB: {}", e);
+                                 } else {
+                                     println!("  - DB Updated. Next playback should work.");
+                                     return Ok(()); // Do NOT mark missing
+                                 }
                              }
                          }
                      }
