@@ -84,6 +84,7 @@ pub async fn get_global_tags(state: State<'_, AppState>) -> Result<Vec<String>, 
 
 #[tauri::command]
 pub fn show_in_finder(path: String) -> Result<(), String> {
+    println!("Revealing file at: {}", path);
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
