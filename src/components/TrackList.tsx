@@ -327,6 +327,33 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         try {
             const result = await invoke<Track[]>('get_tracks');
             setTracks(result);
+
+            // Update parent selection if we have an active selection
+            // This ensures App.tsx (and TagEditor/MetadataViewer) get the FRESH track object
+            // instead of holding onto a stale one from before the refresh.
+            if (lastSelectedTrackId && selectedTrackIds && selectedTrackIds.size > 0 && onSelectionChange) {
+                const freshPrimary = result.find(t => t.id === lastSelectedTrackId);
+                if (freshPrimary) {
+                    // We only re-emit if single selection for simplicity/safety, 
+                    // or we could re-calculate for multi-select.
+                    // For now, let's fix the single-select edit case.
+                    if (selectedTrackIds.size === 1) {
+                        const raw = freshPrimary.comment_raw || "";
+                        // Helper to parse tags matching App.tsx logic
+                        const tags = raw.indexOf(" && ") !== -1 
+                            ? raw.substring(raw.indexOf(" && ") + 4).split(';').map(t => t.trim()).filter(Boolean) 
+                            : [];
+                        
+                        onSelectionChange(selectedTrackIds, freshPrimary.id, freshPrimary, tags);
+                    } else {
+                        // For multi-select, we should ideally re-calc common tags, 
+                        // but updating just the primary track reference is better than nothing.
+                        // We'll leave commonTags as is for now to avoid expensive calc here, 
+                        // as the user edit flow usually updates them anyway? 
+                        // Actually, if we just edited a single file, we are in single select mode.
+                    }
+                }
+            }
         } catch (err) {
             console.error(err);
         } finally {

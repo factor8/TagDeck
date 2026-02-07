@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Track } from '../types';
-import { ChevronDown, ChevronRight, Info } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 interface Props {
   track: Track | null;
@@ -24,7 +24,7 @@ export const MetadataViewer: React.FC<Props> = ({ track }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const formatBitrate = (bpm: number) => {
+  const formatBitrate = (_bpm: number) => {
       // note: field is named bit_rate in interface but often stores raw kb/s
       // Assuming bpm param name was copy paste error in my own logic, using track.bit_rate
       return track.bit_rate ? `${track.bit_rate} kbps` : 'Unknown';
