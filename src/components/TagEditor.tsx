@@ -19,13 +19,10 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [userComment, setUserComment] = useState('');
     // tags is the Right Side parsed into pills
     const [tags, setTags] = useState<string[]>([]);
+
     // current input for a new tag
     const [tagInput, setTagInput] = useState('');
     
-    // We only process user comment for saving, we don't show UI anymore
-    const [isEditingComment, setIsEditingComment] = useState(false);
-
-    const [saving, setSaving] = useState(false);
     const [showInfo, setShowInfo] = useState(false);
     
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
@@ -35,7 +32,6 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             setUserComment('');
             setTags(commonTags || []);
         } else if (track && track.comment_raw) {
-            setIsEditingComment(false);
             const raw = track.comment_raw;
             // Split only on the FIRST " && " to separate User Comment from Tag Block
             const splitIndex = raw.indexOf(' && ');
@@ -64,7 +60,6 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     // We wrap it in a function that doesn't depend on stale 'tags' state if we pass overrides
     const saveTagsToBackend = async (tagsToSave: string[], currentComment: string) => {
         if (!track) return;
-        setSaving(true);
         
         try {
             const validTags = tagsToSave.map(t => t.trim()).filter(t => t.length > 0);
@@ -176,13 +171,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             const msg = 'Failed to save tags: ' + e;
             showError(msg);
             invoke('log_error', { message: msg }).catch(console.error);
-        } finally {
-            setSaving(false);
         }
     };
-
-    // Public wrapper for the manual save button
-    const handleSave = () => saveTagsToBackend(tags, userComment);
 
     // Listen for tags from the Deck
     useEffect(() => {
@@ -244,12 +234,28 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             addTag();
         } else if (e.key === 'Backspace' && tagInput === '' && tags.length > 0) {
             // Remove last tag
-            setTags(prev => prev.slice(0, -1));
-        } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-             handleSave();
+            const lastTag = tags[tags.length - 1];
+            removeTag(lastTag, tags.length - 1);
         }
     };
     
+    const removeTag = async (tagToRemove: string, index: number) => {
+        if (isMultiSelect) {
+            const ids = Array.from(selectedTrackIds || []);
+            try {
+                await invoke('batch_remove_tag', { ids, tag: tagToRemove });
+                setTags(prev => prev.filter((_, idx) => idx !== index));
+                onUpdate();
+            } catch (e) {
+                console.error(e);
+            }
+        } else {
+            const newTags = tags.filter((_, idx) => idx !== index);
+            setTags(newTags);
+            await saveTagsToBackend(newTags, userComment);
+        }
+    };
+
     const addTag = async (valOverride?: string) => {
         // Strip out "&&" to prevent separator conflicts
         const rawVal = (valOverride || tagInput).replace(/&&/g, '').trim();
@@ -273,12 +279,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     invoke('log_error', { message: `Batch add failed: ${e}` }).catch(console.error);
                 }
             } else {
-                setTags(prev => {
-                    // Case-insensitive duplicate check using the latest state
-                    const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
-                    if (exists) return prev;
-                    return [...prev, val];
-                });
+                
+                // Case-insensitive duplicate check using the latest state
+                const exists = tags.some(t => t.toLowerCase() === val.toLowerCase());
+                if (!exists) {
+                    const newTags = [...tags, val];
+                    setTags(newTags);
+                    await saveTagsToBackend(newTags, userComment);
+                }
             }
             
             if (!valOverride) setTagInput('');
@@ -370,15 +378,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                                 style={{ marginLeft: '4px', cursor: 'pointer', opacity: 0.6 }}
                                 onClick={(e) => { 
                                     e.stopPropagation(); 
-                                    if (isMultiSelect) {
-                                         const ids = Array.from(selectedTrackIds || []);
-                                         invoke('batch_remove_tag', { ids, tag }).then(() => {
-                                             setTags(tags.filter((_, idx) => idx !== i));
-                                             onUpdate();
-                                         }).catch(console.error);
-                                    } else {
-                                        setTags(tags.filter((_, idx) => idx !== i)); 
-                                    }
+                                    removeTag(tag, i);
                                 }}
                             >×</span>
                         </div>
@@ -393,19 +393,6 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                         placeholder={tags.length === 0 ? "Add tags..." : ""}
                     />
                 </div>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
-                <button onClick={handleSave} disabled={saving || isMultiSelect} className="btn btn-primary" style={{ 
-                    width: '100%', 
-                    fontSize: '11px', 
-                    padding: '4px',
-                    opacity: isMultiSelect ? 0.5 : 1,
-                    cursor: isMultiSelect ? 'default' : 'pointer',
-                    height: '24px'
-                }}>
-                    {isMultiSelect ? 'Batch Editing Active' : (saving ? 'Saving...' : 'Save Changes')}
-                </button>
             </div>
         </div>
     );
