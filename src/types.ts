@@ -25,3 +25,16 @@ export interface Playlist {
     name: string;
     is_folder: boolean;
 }
+
+export interface Tag {
+    id: number;
+    name: string;
+    usage_count: number;
+    group_id?: number | null;
+}
+
+export interface TagGroup {
+    id: number;
+    name: string;
+    position: number;
+}

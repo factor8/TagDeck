@@ -37,4 +37,12 @@ pub struct Tag {
     pub id: i64,
     pub name: String,
     pub usage_count: i64,
+    pub group_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TagGroup {
+    pub id: i64,
+    pub name: String,
+    pub position: i64,
 }

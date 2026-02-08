@@ -1,5 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { Tag, TagGroup } from '../types';
+import { ChevronRight, ChevronDown, Trash2, FolderPlus } from 'lucide-react';
 
 interface Props {
     onTagClick: (tag: string) => void;
@@ -9,60 +12,163 @@ interface Props {
 }
 
 export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboardMode = false }: Props) {
-    const [tags, setTags] = useState<string[]>([]);
+    const [tags, setTags] = useState<Tag[]>([]);
+    const [groups, setGroups] = useState<TagGroup[]>([]);
     const [filter, setFilter] = useState('');
-    const [selectedIndex, setSelectedIndex] = useState(0);
+    const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
+    const [newGroupName, setNewGroupName] = useState('');
+    const [draggedTagId, setDraggedTagId] = useState<number | null>(null);
+    const [isAddingGroup, setIsAddingGroup] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    // Keyboard navigation
-    useEffect(() => {
-        if (!keyboardMode) return;
-        
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                setSelectedIndex(prev => Math.min(prev + 1, filteredTags.length - 1));
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                setSelectedIndex(prev => Math.max(prev - 1, 0));
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (filteredTags[selectedIndex]) {
-                    onTagClick(filteredTags[selectedIndex]);
-                }
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [keyboardMode, selectedIndex, filter]); // Needs filteredTags dep implicitly through render? No, needs filteredTags from state or memo
-
+    const sensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                distance: 8,
+            },
+        })
+    );
 
     useEffect(() => {
-        loadTags();
+        loadData();
     }, [refreshTrigger]);
 
-    const loadTags = async () => {
+    const loadData = async () => {
         try {
-            const allTags = await invoke<string[]>('get_global_tags');
-            setTags(allTags);
-        } catch (e) {
-            console.error('Failed to load global tags:', e);
+            setError(null);
+            const [fetchedTags, fetchedGroups] = await Promise.all([
+                invoke<Tag[]>('get_all_tags'),
+                invoke<TagGroup[]>('get_tag_groups')
+            ]);
+            console.log("Loaded tags:", fetchedTags.length, "groups:", fetchedGroups.length);
+            setTags(fetchedTags);
+            setGroups(fetchedGroups);
+        } catch (e: any) {
+            console.error('Failed to load tag data:', e);
+            setError(e.toString());
         }
     };
 
-    const filteredTags = tags.filter(t => 
-        t.toLowerCase().includes(filter.toLowerCase())
-    );
+    const handleCreateGroup = async () => {
+        if (!newGroupName.trim()) return;
+        try {
+            await invoke('create_tag_group', { name: newGroupName });
+            setNewGroupName('');
+            setIsAddingGroup(false);
+            loadData();
+        } catch (e) {
+            console.error('Failed to create group:', e);
+        }
+    };
 
-    // Reset selection when filter changes
+    const handleDeleteGroup = async (id: number) => {
+        if (!confirm('Are you sure you want to delete this group? Tags will be ungrouped.')) return;
+        try {
+            await invoke('delete_tag_group', { id });
+            loadData();
+        } catch (e) {
+            console.error('Failed to delete group:', e);
+        }
+    };
+
+    const toggleGroupCollapse = (id: number) => {
+        const newCollapsed = new Set(collapsedGroups);
+        if (newCollapsed.has(id)) {
+            newCollapsed.delete(id);
+        } else {
+            newCollapsed.add(id);
+        }
+        setCollapsedGroups(newCollapsed);
+    };
+
+    const onDragStart = (event: DragStartEvent) => {
+        setDraggedTagId(Number(event.active.id));
+    };
+
+    const onDragEnd = async (event: DragEndEvent) => {
+        const { active, over } = event;
+        setDraggedTagId(null);
+
+        if (!over) return;
+
+        const tagId = Number(active.id);
+        // over.id is either "uncategorized" or "group-{id}"
+        let newGroupId: number | null = null;
+        
+        if (over.id !== 'uncategorized') {
+            const parts = String(over.id).split('-');
+            if (parts[0] === 'group') {
+                newGroupId = Number(parts[1]);
+            }
+        }
+
+        // Optimistic update
+        setTags(prev => prev.map(t => t.id === tagId ? { ...t, group_id: newGroupId } : t));
+
+        try {
+            await invoke('set_tag_group', { tagId, groupId: newGroupId });
+            // Ideally reload to confirm, or just stay optimistic
+        } catch (e) {
+            console.error('Failed to move tag:', e);
+            loadData(); // Revert on fail
+        }
+    };
+
+    // Organizing tags
+    const organizedTags = useMemo(() => {
+        const filtered = tags.filter(t => t.name.toLowerCase().includes(filter.toLowerCase()));
+        
+        const uncategorized = filtered.filter(t => !t.group_id);
+        const grouped: Record<number, Tag[]> = {};
+        
+        groups.forEach(g => {
+            grouped[g.id] = filtered.filter(t => t.group_id === g.id);
+        });
+
+        return { uncategorized, grouped };
+    }, [tags, groups, filter]);
+
+    const activeTag = tags.find(t => t.id === draggedTagId);
+
+    // Keyboard navigation support 
+    // Ideally update this to traverse filtered tags linearly regardless of groups
+    // For now, disabling keyboard list nav in favor of drag and drop focus
+    // Or implementing simple "Enter selects first match"
     useEffect(() => {
-        setSelectedIndex(0);
-    }, [filter]);
+        if (!keyboardMode) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+             // Simplified keyboard support for now
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [keyboardMode]);
 
     return (
         <div style={styles.container} className="no-select">
             <div style={styles.header}>
-                <h3 style={styles.title}>Tag Deck</h3>
+                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 10}}>
+                     <h3 style={styles.title}>Tag Deck</h3>
+                     <button onClick={() => setIsAddingGroup(!isAddingGroup)} style={styles.iconBtn} title="Add Group">
+                        <FolderPlus size={16} />
+                     </button>
+                </div>
+                
+                {error && <div style={{color: 'red', fontSize: '12px', marginBottom: 5}}>{error}</div>}
+
+                {isAddingGroup && (
+                    <div style={{display: 'flex', gap: 5, marginBottom: 10}}>
+                        <input 
+                            value={newGroupName}
+                            onChange={e => setNewGroupName(e.target.value)}
+                            placeholder="Group Name"
+                            style={styles.searchInput}
+                            onKeyDown={e => e.key === 'Enter' && handleCreateGroup()}
+                            autoFocus
+                        />
+                        <button onClick={handleCreateGroup} style={styles.saveBtn}>Save</button>
+                    </div>
+                )}
+
                 <input 
                     type="text" 
                     value={filter}
@@ -72,43 +178,134 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                 />
             </div>
             
-            <div style={styles.grid}>
-                {filteredTags.map((tag, index) => {
-                    const isActive = currentTrackTags.includes(tag);
-                    const isSelected = keyboardMode && index === selectedIndex;
-                    return (
-                        <div 
-                            key={tag}
-                            onClick={() => onTagClick(tag)}
-                            style={{
-                                ...styles.pill,
-                                background: isSelected 
-                                    ? 'var(--accent-color)' 
-                                    : isActive ? 'rgba(59, 130, 246, 0.5)' : 'rgba(255,255,255,0.05)',
-                                color: isActive || isSelected ? '#fff' : 'var(--text-secondary)',
-                                border: isActive ? '1px solid var(--accent-color)' : isSelected ? '1px solid #fff' : '1px solid rgba(255,255,255,0.1)',
-                                transform: isSelected ? 'scale(1.05)' : 'scale(1)',
-                            }}
+            <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+                <div style={styles.grid}>
+                    {/* Uncategorized Section */}
+                    <DroppableSection id="uncategorized" title="Uncategorized" isUncategorized>
+                        {organizedTags.uncategorized.map(tag => (
+                            <DraggableTag 
+                                key={tag.id} 
+                                tag={tag} 
+                                isActive={currentTrackTags.includes(tag.name)}
+                                onClick={() => onTagClick(tag.name)}
+                            />
+                        ))}
+                        {organizedTags.uncategorized.length === 0 && !filter && (
+                           <div style={styles.emptyText}>Drop tags here to ungroup</div>
+                        )}
+                    </DroppableSection>
+
+                    {/* Groups */}
+                    {groups.map(group => (
+                        <DroppableSection
+                            key={group.id}
+                            id={`group-${group.id}`}
+                            title={group.name}
+                            onDelete={() => handleDeleteGroup(group.id)}
+                            collapsed={collapsedGroups.has(group.id)}
+                            onToggle={() => toggleGroupCollapse(group.id)}
                         >
-                            {tag}
+                            {organizedTags.grouped[group.id]?.map(tag => (
+                                <DraggableTag 
+                                    key={tag.id} 
+                                    tag={tag} 
+                                    isActive={currentTrackTags.includes(tag.name)}
+                                    onClick={() => onTagClick(tag.name)}
+                                />
+                            ))}
+                        </DroppableSection>
+                    ))}
+                </div>
+                
+                <DragOverlay>
+                    {activeTag ? (
+                         <div style={{...styles.pill, background: 'var(--accent-color)', color: '#fff', transform: 'scale(1.05)',  maxWidth: 'fit-content'}}>
+                            {activeTag.name}
                         </div>
-                    );
-                })}
-                {filteredTags.length === 0 && (
-                    <div style={{ color: 'var(--text-secondary)', fontSize: '13px', fontStyle: 'italic', padding: '10px' }}>
-                        No tags found. Add tags to tracks to build your deck.
-                    </div>
+                    ) : null}
+                </DragOverlay>
+            </DndContext>
+        </div>
+    );
+}
+
+// Subcomponents
+
+function DroppableSection({ id, title, children, isUncategorized, onDelete, collapsed, onToggle }: any) {
+    const { setNodeRef, isOver } = useDroppable({ id });
+    
+    return (
+        <div 
+            ref={setNodeRef} 
+            style={{ 
+                marginBottom: 15, 
+                backgroundColor: isOver ? 'rgba(255,255,255,0.03)' : 'transparent',
+                borderRadius: 8,
+                transition: 'background 0.2s',
+            }}
+        >
+            <div style={styles.sectionHeader}>
+                <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} onClick={onToggle}>
+                    {!isUncategorized && (
+                        collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>
+                    )}
+                    <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)'}}>{title}</span>
+                </div>
+                {!isUncategorized && onDelete && (
+                    <button onClick={onDelete} style={{...styles.iconBtn, opacity: 0.5}} className="delete-group-btn">
+                        <Trash2 size={12} />
+                    </button>
                 )}
+            </div>
+            
+            {(!collapsed || isUncategorized) && (
+                <div style={styles.tagContainer}>
+                    {children}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function DraggableTag({ tag, isActive, onClick }: { tag: Tag, isActive: boolean, onClick: () => void }) {
+    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+        id: tag.id,
+    });
+    
+    const style = transform ? {
+        transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        zIndex: 999,
+        opacity: isDragging ? 0 : 1, // Hide original when dragging
+    } : undefined;
+
+    return (
+        <div 
+            ref={setNodeRef}
+            {...listeners}
+            {...attributes}
+            style={{...styles.pillWrapper, ...style}}
+        >
+             <div 
+                onClick={onClick}
+                style={{
+                    ...styles.pill,
+                    background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
+                    color: isActive ? '#fff' : 'var(--text-secondary)',
+                    border: isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)',
+                }}
+            >
+                {tag.name}
             </div>
         </div>
     );
 }
 
-const styles = {
+
+const styles: Record<string, React.CSSProperties> = {
     container: {
         height: '100%',
         display: 'flex',
-        flexDirection: 'column' as const,
+        flexDirection: 'column',
         background: 'var(--bg-secondary)',
     },
     header: {
@@ -116,12 +313,21 @@ const styles = {
         borderBottom: '1px solid var(--border-color)',
     },
     title: {
-        margin: '0 0 10px 0',
+        margin: 0,
         fontSize: '14px',
         fontWeight: 600,
-        textTransform: 'uppercase' as const,
+        textTransform: 'uppercase',
         letterSpacing: '1px',
         color: 'var(--text-secondary)',
+    },
+    iconBtn: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--text-secondary)',
+        cursor: 'pointer',
+        padding: 4,
+        display: 'flex',
+        alignItems: 'center',
     },
     searchInput: {
         width: '100%',
@@ -134,12 +340,12 @@ const styles = {
     },
     grid: {
         padding: '15px',
-        overflowY: 'auto' as const,
-        display: 'flex',
-        flexWrap: 'wrap' as const,
-        gap: '8px',
-        alignContent: 'flex-start' as const,
+        overflowY: 'auto',
         flex: 1,
+    },
+    pillWrapper: {
+        display: 'inline-block',
+        touchAction: 'none', 
     },
     pill: {
         padding: '2px 10px',
@@ -147,6 +353,35 @@ const styles = {
         fontSize: '14px',
         cursor: 'pointer',
         transition: 'all 0.1s ease',
-        userSelect: 'none' as const,
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
+    },
+    sectionHeader: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+        padding: '0 5px'
+    },
+    tagContainer: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '8px',
+        minHeight: '20px', // Drop target area
+    },
+    emptyText: {
+        color: 'var(--text-secondary)', 
+        fontSize: '12px', 
+        fontStyle: 'italic', 
+        padding: '5px'
+    },
+    saveBtn: {
+        background: 'var(--accent-color)',
+        border: 'none',
+        color: '#fff',
+        borderRadius: 4,
+        padding: '0 10px',
+        cursor: 'pointer',
+        fontSize: '12px',
     }
 };

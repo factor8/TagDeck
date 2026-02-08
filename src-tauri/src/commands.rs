@@ -38,6 +38,12 @@ pub async fn import_library(app: tauri::AppHandle, xml_path: String, state: Stat
         }
     }
 
+    // Sync tags
+    if let Err(e) = db.sync_tags() {
+        let msg = format!("Tag Sync Error: {}", e);
+        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+    }
+
     Ok(count)
 }
 
@@ -429,4 +435,49 @@ pub async fn get_track_artwork(id: i64, state: State<'_, AppState>) -> Result<Op
     drop(db); // Release lock before doing IO
     
     get_artwork(&path).map_err(|e| e.to_string())
+}
+
+// Tag Group Commands
+
+#[tauri::command]
+pub async fn get_tag_groups(state: State<'_, AppState>) -> Result<Vec<crate::models::TagGroup>, String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .get_tag_groups().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_tag_group(name: String, state: State<'_, AppState>) -> Result<crate::models::TagGroup, String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .create_tag_group(&name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_tag_group(id: i64, name: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .update_tag_group(id, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_tag_group(id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .delete_tag_group(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_tag_group(tag_id: i64, group_id: Option<i64>, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .set_tag_group(tag_id, group_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reorder_tag_groups(ordered_ids: Vec<i64>, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .reorder_tag_groups(ordered_ids).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::models::Tag>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.sync_tags().map_err(|e| e.to_string())?;
+    db.get_all_tags().map_err(|e| e.to_string())
 }

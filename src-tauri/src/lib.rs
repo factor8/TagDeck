@@ -114,7 +114,14 @@ pub fn run() {
             commands::get_playlists,
             commands::get_playlist_track_ids,
             commands::mark_track_missing,
-            commands::get_track_artwork
+            commands::get_track_artwork,
+            commands::get_tag_groups,
+            commands::create_tag_group,
+            commands::update_tag_group,
+            commands::delete_tag_group,
+            commands::set_tag_group,
+            commands::reorder_tag_groups,
+            commands::get_all_tags
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

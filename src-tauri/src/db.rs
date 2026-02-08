@@ -41,10 +41,17 @@ const DB_SCHEMA: &str = r#"
         PRIMARY KEY (playlist_id, track_id)
     );
 
+    CREATE TABLE IF NOT EXISTS tag_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE,
+        position INTEGER DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS tags (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE COLLATE NOCASE,
-        usage_count INTEGER DEFAULT 0
+        usage_count INTEGER DEFAULT 0,
+        group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL
     );
 "#;
 
@@ -57,6 +64,14 @@ impl Database {
         let conn = Connection::open(path)?;
         conn.execute_batch(DB_SCHEMA)?;
         
+        // Explicitly ensure tag_groups exists because execute_batch might not create it if it stops early (though it shouldn't)
+        // or if DB_SCHEMA was only partially applied in previous versions.
+        let _ = conn.execute("CREATE TABLE IF NOT EXISTS tag_groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE,
+            position INTEGER DEFAULT 0
+        )", []);
+
         // Migration: Attempt to add columns for existing databases
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN bit_rate INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN rating INTEGER DEFAULT 0", []);
@@ -65,6 +80,9 @@ impl Database {
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN is_folder BOOLEAN DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN parent_persistent_id TEXT", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN missing BOOLEAN DEFAULT 0", []);
+        
+        // Add columns to existing tags table
+        let _ = conn.execute("ALTER TABLE tags ADD COLUMN group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL", []);
         
         Ok(Self { conn })
     }
@@ -296,5 +314,110 @@ impl Database {
             params![missing, id],
         )?;
         Ok(())
+    }
+
+    // TAG GROUP METHODS
+
+    pub fn get_tag_groups(&self) -> Result<Vec<crate::models::TagGroup>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, position FROM tag_groups ORDER BY position ASC")?;
+        let group_iter = stmt.query_map([], |row| {
+            Ok(crate::models::TagGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                position: row.get(2)?,
+            })
+        })?;
+
+        let mut groups = Vec::new();
+        for group in group_iter {
+            groups.push(group?);
+        }
+        Ok(groups)
+    }
+
+    pub fn create_tag_group(&self, name: &str) -> Result<crate::models::TagGroup> {
+        self.conn.execute(
+            "INSERT INTO tag_groups (name, position) VALUES (?1, (SELECT COALESCE(MAX(position), 0) + 1 FROM tag_groups))",
+            params![name],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        let position: i64 = self.conn.query_row("SELECT position FROM tag_groups WHERE id = ?1", params![id], |row| row.get(0))?;
+        
+        Ok(crate::models::TagGroup {
+            id,
+            name: name.to_string(),
+            position,
+        })
+    }
+    
+    pub fn update_tag_group(&self, id: i64, name: &str) -> Result<()> {
+        self.conn.execute("UPDATE tag_groups SET name = ?1 WHERE id = ?2", params![name, id])?;
+        Ok(())
+    }
+
+    pub fn delete_tag_group(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM tag_groups WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn reorder_tag_groups(&self, ordered_ids: Vec<i64>) -> Result<()> {
+        for (index, id) in ordered_ids.iter().enumerate() {
+            self.conn.execute("UPDATE tag_groups SET position = ?1 WHERE id = ?2", params![index as i64, id])?;
+        }
+        Ok(())
+    }
+
+    // TAG METHODS
+
+    pub fn get_all_tags(&self) -> Result<Vec<crate::models::Tag>> {
+        let mut stmt = self.conn.prepare("SELECT id, name, usage_count, group_id FROM tags ORDER BY name ASC")?;
+        let tag_iter = stmt.query_map([], |row| {
+            Ok(crate::models::Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                usage_count: row.get(2)?,
+                group_id: row.get(3)?,
+            })
+        })?;
+
+        let mut tags = Vec::new();
+        for tag in tag_iter {
+            tags.push(tag?);
+        }
+        Ok(tags)
+    }
+
+    pub fn set_tag_group(&self, tag_id: i64, group_id: Option<i64>) -> Result<()> {
+        self.conn.execute("UPDATE tags SET group_id = ?1 WHERE id = ?2", params![group_id, tag_id])?;
+        Ok(())
+    }
+    
+    pub fn sync_tags(&self) -> Result<()> {
+         let tracks = self.get_all_tracks()?;
+         let mut tag_counts = std::collections::HashMap::new();
+         
+         for track in tracks {
+            if let Some(raw) = track.comment_raw {
+                if let Some(idx) = raw.find(" && ") {
+                    let tag_part = &raw[idx + 4..];
+                    for tag in tag_part.split(';') {
+                        let trimmed = tag.trim();
+                        if !trimmed.is_empty() {
+                           *tag_counts.entry(trimmed.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+         }
+         
+         for (name, count) in tag_counts {
+             self.conn.execute(
+                 "INSERT INTO tags (name, usage_count) VALUES (?1, ?2) 
+                  ON CONFLICT(name) DO UPDATE SET usage_count = ?3",
+                 params![name, count, count],
+             )?;
+         }
+         
+         Ok(())
     }
 }
