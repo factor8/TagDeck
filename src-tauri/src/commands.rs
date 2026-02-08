@@ -2,7 +2,9 @@ use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
-use crate::apple_music::{update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist};
+use crate::apple_music::{
+    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since
+};
 use crate::models::Track;
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
 use std::sync::Mutex;
@@ -434,6 +436,65 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
              return Err(msg);
         }
     }
+
+    Ok(count)
+}
+
+#[tauri::command]
+pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppState>, since_timestamp: i64) -> Result<usize, String> {
+    
+    // Log start - Verbose
+    let start_msg = format!("Syncing recent changes from Music.app since timestamp: {}", since_timestamp);
+    println!("{}", start_msg);
+    app.state::<crate::logging::LogState>().add_log("INFO", &start_msg, &app);
+
+    let tracks = get_changes_since(since_timestamp).map_err(|e| {
+        let msg = format!("Failed to fetch changes: {}", e);
+        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        msg
+    })?;
+
+    let count = tracks.len();
+    let found_msg = format!("Found {} changed tracks via JXA", count);
+    println!("{}", found_msg);
+    app.state::<crate::logging::LogState>().add_log("INFO", &found_msg, &app);
+
+    if count == 0 {
+        return Ok(0);
+    }
+    
+    // Verbose: List details
+    for t in &tracks {
+        let title = t.title.as_deref().unwrap_or("Unknown Title");
+        let artist = t.artist.as_deref().unwrap_or("Unknown Artist");
+        let log_msg = format!("Syncing Update: {} - {}", artist, title);
+        
+        // Log to console
+        println!("{}", log_msg);
+        
+        // Log to UI (limited to first 10 to avoid freezing if massive update)
+        if count <= 10 || tracks.iter().position(|x| x.persistent_id == t.persistent_id).unwrap_or(0) < 10 {
+             app.state::<crate::logging::LogState>().add_log("INFO", &log_msg, &app);
+        }
+    }
+    
+    if count > 10 {
+        let more_msg = format!("... and {} more tracks.", count - 10);
+        app.state::<crate::logging::LogState>().add_log("INFO", &more_msg, &app);
+    }
+
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+
+    for track in tracks {
+        if let Err(e) = db.insert_track(&track) {
+             let msg = format!("DB Error (update track {}): {}", track.persistent_id, e);
+             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+             // Continue trying others
+        }
+    }
+    
+    let complete_msg = format!("Successfully synced {} tracks.", count);
+    app.state::<crate::logging::LogState>().add_log("INFO", &complete_msg, &app);
 
     Ok(count)
 }

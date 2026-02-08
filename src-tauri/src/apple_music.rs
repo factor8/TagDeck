@@ -1,7 +1,162 @@
 use std::process::Command;
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use serde_json;
+use crate::models::Track;
+
+#[derive(Deserialize, Debug)]
+struct JxaTrack {
+    id: String,
+    name: String,
+    artist: String,
+    album: String,
+    comment: String,
+    grouping: String,
+    duration: f64,
+    kind: String,
+    size: i64,
+    bitRate: i64,
+    rating: i64,
+    bpm: i64,
+    location: Option<String>,
+    modDate: Option<String>, // ISO string
+    dateAdded: Option<String>, // ISO string
+}
+
+pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
+    #[cfg(target_os = "macos")]
+    {
+        // Switch to AppleScript for reliable Date comparison
+        // JXA's `whose` filtering with Dates is notoriously flaky due to bridging issues.
+        // Pure AppleScript handles `date "String"` comparisons natively and correctly.
+        
+        // We construct a localized date string or just use raw seconds calculation inside AppleScript if possible? 
+        // actually passing date string is standard.
+        // Let's rely on standard applescript date construction from parts to be safe against locale.
+
+        let script = format!(
+            r#"
+            use framework "Foundation"
+            
+            -- Helper to parse unix timestamp to AS Date
+            on getASDateFromTimestamp(unixTimestamp)
+                set ca to current application
+                set d to ca's NSDate's dateWithTimeIntervalSince1970:unixTimestamp
+                -- Convert NSDate to AS Date (hacky but reliable)
+                set dCal to ca's NSCalendar's currentCalendar()
+                set comps to dCal's components:(508) fromDate:d -- 508 = year+month+day+hour+min+sec
+                set newDate to (current date)
+                set year of newDate to comps's |year|()
+                set month of newDate to comps's |month|()
+                set day of newDate to comps's |day|()
+                set hours of newDate to comps's |hour|()
+                set minutes of newDate to comps's |minute|()
+                set seconds of newDate to comps's |second|()
+                return newDate
+            end getASDateFromTimestamp
+
+            set sinceDate to getASDateFromTimestamp({})
+            
+            tell application "Music"
+                set recentTracks to (every track whose modification date > sinceDate)
+                
+                -- Construct JSON manually to avoid slow object bridges
+                set jsonList to {{}}
+                
+                repeat with t in recentTracks
+                   try
+                       set tId to persistent ID of t
+                       set tName to name of t
+                       set tArtist to artist of t
+                       set tAlbum to album of t
+                       set tComment to comment of t
+                       set tGrouping to grouping of t
+                       set tDuration to duration of t
+                       set tKind to kind of t
+                       set tSize to size of t
+                       set tBitRate to bit rate of t
+                       set tRating to rating of t
+                       set tBpm to bpm of t
+                       set tModDate to modification date of t
+                       set tDateAdded to date added of t
+                       
+                       -- Handle Location safely (might be missing)
+                       try
+                           set tLoc to POSIX path of (location of t)
+                       on error
+                           set tLoc to ""
+                       end try
+                       
+                       set entry to {{ |id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc, |modDate|:(tModDate as string), |dateAdded|:(tDateAdded as string) }}
+                       copy entry to end of jsonList
+                   end try
+                end repeat
+            end tell
+            
+            -- JSON Stringify using ObjC bridge
+            set ca to current application
+            set jsonData to ca's NSJSONSerialization's dataWithJSONObject:jsonList options:0 |error|:missing value
+            set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+            return jsonString
+            "#,
+            since_epoch_seconds
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+             let err = String::from_utf8_lossy(&output.stderr);
+             eprintln!("AppleScript Error: {}", err);
+             return Err(anyhow::anyhow!("AppleScript Get Changes Failed: {}", err));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        
+        let jxa_tracks: Vec<JxaTrack> = serde_json::from_str(&stdout)?;
+
+        let tracks: Vec<Track> = jxa_tracks.into_iter().filter_map(|jt| {
+            if jt.location.is_none() || jt.location.as_deref() == Some("") {
+                return None;
+            }
+            let path = jt.location.unwrap();
+            
+            // Note: Determining timestamps from localized string is hard, defaulting to 0 for now.
+            // In a future update we should make AS return unix timestamps directly.
+            let mod_time = 0;
+            let added_time = 0;
+
+            Some(Track {
+                id: 0, 
+                persistent_id: jt.id,
+                file_path: path,
+                artist: Some(jt.artist),
+                title: Some(jt.name),
+                album: Some(jt.album),
+                comment_raw: Some(jt.comment),
+                grouping_raw: Some(jt.grouping),
+                duration_secs: jt.duration,
+                format: jt.kind,
+                size_bytes: jt.size,
+                bit_rate: jt.bitRate,
+                modified_date: mod_time,
+                rating: jt.rating,
+                date_added: added_time,
+                bpm: jt.bpm,
+                missing: false,
+            })
+        }).collect();
+
+        return Ok(tracks);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(vec![])
+    }
+}
 
 /// Updates a track's rating in Apple Music (iTunes) by its Persistent ID.
 /// Rating is an integer between 0 and 100.

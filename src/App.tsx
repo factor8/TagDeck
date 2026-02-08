@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSensors, PointerSensor, closestCenter } from '@dnd-kit/core';
 import './App.css';
 import './Panel.css';
@@ -80,6 +81,70 @@ function App() {
       })
       .catch(console.error);
   }, [refreshTrigger]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    let isMounted = true;
+
+    const setupListener = async () => {
+      console.log("[App] Setting up music-library-changed listener");
+      const unlisten = await listen('music-library-changed', async () => {
+        if (!isMounted) return;
+        
+        console.log("[App] music-library-changed event received!");
+        showSuccess('Library change detected. Syncing...');
+        
+        try {
+          const lastSync = localStorage.getItem('app_last_sync_time');
+          // Default to 24 hours ago if no record to be safe
+          const defaultTime = Math.floor(Date.now() / 1000) - 86400;
+          let timestamp = (lastSync && !isNaN(parseInt(lastSync))) ? parseInt(lastSync) : defaultTime;
+          
+          // Safety Buffer: Go back 600 seconds (10 minutes) to ensure we catch everything.
+          // Since our DB operation is an upsert, reprocessing unchanged tracks is cheap and safe.
+          const bufferSeconds = 600; 
+          const bufferTimestamp = Math.max(0, timestamp - bufferSeconds);
+
+          console.log(`[App] Requesting sync since timestamp: ${bufferTimestamp} (Original: ${timestamp})`);
+
+          const updatedCount = await invoke<number>('sync_recent_changes', { 
+            sinceTimestamp: bufferTimestamp 
+          });
+
+          console.log(`[App] Sync complete. Updated tracks: ${updatedCount}`);
+
+          if (updatedCount > 0) {
+            showSuccess(`Synced ${updatedCount} altered tracks.`);
+            setRefreshTrigger(p => p + 1);
+            // Only update the last sync time if we actually found something? 
+            // Or always? Always is better to forward the window, but we keep the buffer.
+            localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
+          } else {
+             // If nothing found, still update time so we don't query forever in the past, 
+             // but maybe we missed it? 
+             // With the 10 min buffer, updating this is fine.
+             localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
+          }
+        } catch (e) {
+          console.error("Auto-sync failed:", e);
+          showError(`Auto-sync failed: ${e}`);
+        }
+      });
+
+      if (isMounted) {
+        unlistenFn = unlisten;
+      } else {
+        unlisten();
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      isMounted = false;
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
 
   const sensors = useSensors(
       useSensor(PointerSensor, {

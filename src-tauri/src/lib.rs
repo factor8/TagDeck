@@ -8,6 +8,7 @@ pub mod logging;
 pub mod models;
 pub mod toggle_logs;
 pub mod undo;
+pub mod library_watcher;
 
 use commands::AppState;
 use db::Database;
@@ -99,6 +100,10 @@ pub fn run() {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()) 
             });
+
+            // Start Library Watcher
+            library_watcher::start_library_watcher(app.handle().clone());
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -130,7 +135,8 @@ pub fn run() {
             commands::get_all_tags,
             commands::undo,
             commands::redo,
-            commands::update_rating
+            commands::update_rating,
+            commands::sync_recent_changes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
