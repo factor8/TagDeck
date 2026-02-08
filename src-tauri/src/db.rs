@@ -451,6 +451,25 @@ impl Database {
         Ok(())
     }
 
+    /// Returns all playlists that contain the given track, with playlist id, persistent_id, and name.
+    pub fn get_playlists_for_track(&self, track_id: i64) -> Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id, p.persistent_id, p.name 
+             FROM playlist_tracks pt
+             JOIN playlists p ON p.id = pt.playlist_id
+             WHERE pt.track_id = ?1
+             ORDER BY p.name ASC"
+        )?;
+        let rows = stmt.query_map(params![track_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(rows)
+    }
+
     pub fn get_track_path(&self, id: i64) -> Result<String> {
         self.conn.query_row(
             "SELECT file_path FROM tracks WHERE id = ?1",

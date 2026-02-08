@@ -135,6 +135,8 @@ pub fn run() {
             commands::set_tag_group,
             commands::reorder_tag_groups,
             commands::get_all_tags,
+            commands::get_playlists_for_track,
+            commands::copy_playlist_memberships,
             commands::undo,
             commands::redo,
             commands::update_rating,

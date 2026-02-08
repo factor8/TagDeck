@@ -3,7 +3,8 @@ use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
 use crate::apple_music::{
-    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot
+    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot,
+    remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count
 };
 use crate::models::{Track, Playlist};
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
@@ -456,13 +457,19 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
     Ok(count)
 }
 
+#[derive(serde::Serialize)]
+pub struct SyncResult {
+    pub tracks_updated: usize,
+    pub playlists_updated: usize,
+}
+
 #[tauri::command]
-pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppState>, since_timestamp: i64) -> Result<usize, String> {
+pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppState>, since_timestamp: i64) -> Result<SyncResult, String> {
     
     // Check if full sync is running, but don't error out hard—just skip
     if state.is_syncing.load(Ordering::SeqCst) {
         println!("Sync skipped: Full sync in progress");
-        return Ok(0);
+        return Ok(SyncResult { tracks_updated: 0, playlists_updated: 0 });
     }
     // We do NOT set the lock for real-time sync (unless we want to block full sync?)
     // Actually, we should probably lock it too to prevent concurrent real-time syncs?
@@ -471,7 +478,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     
     if state.is_syncing.swap(true, Ordering::SeqCst) {
         // Race condition caught
-        return Ok(0);
+        return Ok(SyncResult { tracks_updated: 0, playlists_updated: 0 });
     }
 
     struct SyncGuard<'a>(&'a AtomicBool);
@@ -675,7 +682,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     app.state::<crate::logging::LogState>().add_log("INFO", &complete_msg, &app);
 
     // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
-    Ok(total_updated + playlist_changes)
+    Ok(SyncResult { tracks_updated: total_updated, playlists_updated: playlist_changes })
 }
 
 #[tauri::command]
@@ -880,4 +887,114 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::model
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.sync_tags().map_err(|e| e.to_string())?;
     db.get_all_tags().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct PlaylistInfo {
+    pub id: i64,
+    pub persistent_id: String,
+    pub name: String,
+}
+
+#[tauri::command]
+pub async fn get_playlists_for_track(track_id: i64, state: State<'_, AppState>) -> Result<Vec<PlaylistInfo>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let rows = db.get_playlists_for_track(track_id).map_err(|e| e.to_string())?;
+    Ok(rows.into_iter().map(|(id, persistent_id, name)| PlaylistInfo { id, persistent_id, name }).collect())
+}
+
+#[tauri::command]
+pub async fn copy_playlist_memberships(
+    app: tauri::AppHandle,
+    target_track_id: i64,
+    source_track_id: i64,
+    playlist_ids: Vec<i64>,
+    combine_play_counts: bool,
+    remove_source: bool,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let (target_pid, source_pid, playlist_data) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let t_pid = db.get_track_persistent_id(target_track_id).map_err(|e| format!("Target track not found: {}", e))?;
+        let s_pid = db.get_track_persistent_id(source_track_id).map_err(|e| format!("Source track not found: {}", e))?;
+        
+        let mut pdata = Vec::new();
+        for pid in &playlist_ids {
+            if let Ok(ppid) = db.get_playlist_persistent_id(*pid) {
+                pdata.push((*pid, ppid));
+            }
+        }
+        (t_pid, s_pid, pdata)
+    };
+
+    let mut added_count = 0;
+
+    // 1. Add target track to each selected playlist (Apple Music + DB)
+    for (db_id, ppid) in &playlist_data {
+        // Apple Music
+        if let Err(e) = add_track_to_playlist(&target_pid, ppid) {
+            let msg = format!("Failed to add track to playlist in Music.app: {}", e);
+            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        }
+
+        // Local DB
+        {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            if let Err(e) = db.add_track_to_playlist_db(*db_id, target_track_id) {
+                let msg = format!("Failed to add track to playlist in DB: {}", e);
+                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            }
+        }
+        added_count += 1;
+    }
+
+    // 2. Combine play counts if requested
+    if combine_play_counts {
+        match get_play_count(&source_pid) {
+            Ok(source_count) => {
+                match get_play_count(&target_pid) {
+                    Ok(target_count) => {
+                        let combined = source_count + target_count;
+                        if let Err(e) = set_play_count(&target_pid, combined) {
+                            let msg = format!("Failed to set combined play count: {}", e);
+                            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                        } else {
+                            let msg = format!("Combined play counts: {} + {} = {}", source_count, target_count, combined);
+                            app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+                        }
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to get target play count: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                    }
+                }
+            }
+            Err(e) => {
+                let msg = format!("Failed to get source play count: {}", e);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            }
+        }
+    }
+
+    // 3. Remove source track from selected playlists if requested
+    if remove_source {
+        for (db_id, ppid) in &playlist_data {
+            // Apple Music
+            if let Err(e) = apple_remove_from_playlist(&source_pid, ppid) {
+                let msg = format!("Failed to remove source from playlist in Music.app: {}", e);
+                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            }
+
+            // Local DB
+            {
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                if let Err(e) = db.remove_track_from_playlist(*db_id, source_track_id) {
+                    let msg = format!("Failed to remove source from playlist in DB: {}", e);
+                    app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                }
+            }
+        }
+    }
+
+    Ok(format!("Added to {} playlist{}", added_count, if added_count != 1 { "s" } else { "" }))
 }

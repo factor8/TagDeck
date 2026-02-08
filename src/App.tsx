@@ -15,6 +15,7 @@ import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
 import { BpmCounter } from './components/BpmCounter';
+import { CopyPlaylistsModal } from './components/CopyPlaylistsModal';
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 
@@ -49,6 +50,7 @@ function App() {
     return saved ? saved === 'true' : false;
   });
   const [syncEnabledTrigger, setSyncEnabledTrigger] = useState(0);
+  const [copyPlaylistsTarget, setCopyPlaylistsTarget] = useState<Track | null>(null);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -127,22 +129,44 @@ function App() {
 
           console.log(`[App] Requesting sync since timestamp: ${bufferTimestamp} (Original: ${timestamp})`);
 
-          const updatedCount = await invoke<number>('sync_recent_changes', { 
+          interface SyncResult {
+              tracks_updated: number;
+              playlists_updated: number;
+          }
+
+          const result = await invoke<SyncResult | number>('sync_recent_changes', { 
             sinceTimestamp: bufferTimestamp 
           });
 
-          console.log(`[App] Sync complete. Updated tracks: ${updatedCount}`);
+          console.log('[App] Raw sync result:', result);
 
-          if (updatedCount > 0) {
-            showSuccess(`Synced ${updatedCount} altered tracks.`);
+          // Handle potential legacy return (number) if backend didn't update/recompile yet
+          let tracksVal = 0;
+          let playlistsVal = 0;
+
+          if (typeof result === 'number') {
+              tracksVal = result;
+              playlistsVal = 0;
+          } else if (result && typeof result === 'object') {
+              tracksVal = result.tracks_updated || 0;
+              playlistsVal = result.playlists_updated || 0;
+          }
+
+          const totalUpdated = tracksVal + playlistsVal;
+          
+          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Playlists=${playlistsVal}, Total=${totalUpdated}`);
+
+          if (totalUpdated > 0) {
+            const parts: string[] = [];
+            if (tracksVal > 0) parts.push(`${tracksVal} track${tracksVal > 1 ? 's' : ''}`);
+            if (playlistsVal > 0) parts.push(`${playlistsVal} playlist${playlistsVal > 1 ? 's' : ''}`);
+            
+            showSuccess(`Synced ${parts.join(' and ')}`);
             setRefreshTrigger(p => p + 1);
-            // Only update the last sync time if we actually found something? 
-            // Or always? Always is better to forward the window, but we keep the buffer.
             localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
           } else {
-             // If nothing found, still update time so we don't query forever in the past, 
-             // but maybe we missed it? 
-             // With the 10 min buffer, updating this is fine.
+             // If nothing found, show feedback so user knows it finished
+             showSuccess("Sync complete. No changes detected.");
              localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
           }
         } catch (e) {
@@ -279,11 +303,24 @@ function App() {
             setIsSettingsOpen(prev => !prev);
         }
 
-        // Undo / Redo
-        // If focusing input, let browser handle native text undo
         const target = e.target as HTMLElement;
         const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-        
+
+        // Escape Handling
+        if (e.key === 'Escape') {
+            if (document.activeElement === searchInputRef.current) {
+                searchInputRef.current?.blur();
+            } else if (!isInput) {
+                // If not in an input, deselect
+                setSelectedTrackIds(prev => prev.size > 0 ? new Set() : prev);
+                setSelectedTrack(null);
+                setLastSelectedTrackId(null);
+                setCurrentTags(prev => prev.length > 0 ? [] : prev);
+            }
+        }
+
+        // Undo / Redo
+        // If focusing input, let browser handle native text undo
         if (!isInput && (e.metaKey || e.ctrlKey)) {
              if (e.key.toLowerCase() === 'z') {
                  if (e.shiftKey) {
@@ -404,7 +441,7 @@ function App() {
   };
 
   return (
-    // Removed ToastProvider here as it is now in main.tsx
+    <>
       <DndContext 
           collisionDetection={closestCenter} 
           onDragEnd={handleDragEnd}  
@@ -627,6 +664,7 @@ function App() {
               isPlaying={isPlaying}
               searchTerm={searchTerm}
               onRefresh={handleRefresh}
+              onCopyPlaylistMemberships={setCopyPlaylistsTarget}
             />
             </div>
         </Panel>
@@ -743,7 +781,21 @@ function App() {
            ) : null}
         </DragOverlay>
       </DndContext>
-    // </ToastProvider>
+
+      {/* Copy Playlist Memberships Modal */}
+      {copyPlaylistsTarget && (
+        <CopyPlaylistsModal
+          targetTrack={copyPlaylistsTarget}
+          onClose={() => setCopyPlaylistsTarget(null)}
+          onComplete={(msg) => {
+            showSuccess(msg);
+            setCopyPlaylistsTarget(null);
+          }}
+          onError={showError}
+          onRefresh={handleRefresh}
+        />
+      )}
+    </>
   );
 }
 

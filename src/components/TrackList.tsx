@@ -34,7 +34,7 @@ import {
     arrayMove
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1 } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -48,6 +48,13 @@ interface Props {
     searchTerm: string;
     playlistId: number | null;
     onRefresh?: () => void;
+    onCopyPlaylistMemberships?: (track: Track) => void;
+}
+
+interface ContextMenuState {
+    x: number;
+    y: number;
+    track: Track;
 }
 
 export interface TrackListHandle {
@@ -317,11 +324,12 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
     const [loading, setLoading] = useState(false);
+    const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     
     const sensors = useSensors(
         useSensor(PointerSensor, {
@@ -1078,6 +1086,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             {/* DndContext removed */}
                 <div 
                     ref={parentRef}
+                    onScroll={() => contextMenu && setContextMenu(null)}
                     style={{ 
                         overflow: 'auto', 
                         width: '100%',
@@ -1138,14 +1147,16 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         handleRowClick={handleRowClick}
                                         onTrackDoubleClick={onTrackDoubleClick}
                                         onContextMenu={(e) => {
+                                            e.preventDefault();
                                             if (isMissing) {
-                                                e.preventDefault();
                                                 const shouldReset = window.confirm("Reset missing file status?");
                                                 if (shouldReset) {
                                                      invoke('mark_track_missing', { id: row.original.id, missing: false })
                                                         .then(() => onRefresh?.());
                                                 }
+                                                return;
                                             }
+                                            setContextMenu({ x: e.clientX, y: e.clientY, track: row.original });
                                         }}
                                     />
                                 );
@@ -1170,6 +1181,46 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         </tbody>
                     </table>
                 </div>
+
+            {/* Context Menu */}
+            {contextMenu && (
+                <>
+                    <div
+                        style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
+                        onClick={() => setContextMenu(null)}
+                        onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+                    />
+                    <div
+                        className="context-menu"
+                        style={{
+                            left: Math.min(contextMenu.x, window.innerWidth - 240),
+                            top: Math.min(contextMenu.y, window.innerHeight - 100),
+                        }}
+                    >
+                        <div
+                            className="context-menu-item"
+                            onClick={() => {
+                                invoke('show_in_finder', { path: contextMenu.track.file_path });
+                                setContextMenu(null);
+                            }}
+                        >
+                            <Folder size={14} className="context-menu-icon" />
+                            <span>Show in Finder</span>
+                        </div>
+                        <div className="context-menu-separator" />
+                        <div
+                            className="context-menu-item"
+                            onClick={() => {
+                                onCopyPlaylistMemberships?.(contextMenu.track);
+                                setContextMenu(null);
+                            }}
+                        >
+                            <ListMusic size={14} className="context-menu-icon" />
+                            <span>Copy Playlist Memberships From…</span>
+                        </div>
+                    </div>
+                </>
+            )}
         </div>
     );
 });

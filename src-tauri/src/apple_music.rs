@@ -530,3 +530,91 @@ pub fn add_track_to_playlist(track_pid: &str, playlist_pid: &str) -> Result<()> 
     }
     Ok(())
 }
+
+/// Removes a track from a playlist in Apple Music by their Persistent IDs.
+pub fn remove_track_from_playlist(track_pid: &str, playlist_pid: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        set thePlaylist to (first playlist whose persistent ID is "{}")
+                        delete (every track of thePlaylist whose persistent ID is "{}")
+                    end try
+                end tell
+            end if
+            "#,
+            playlist_pid, track_pid
+        );
+
+        Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+    }
+    Ok(())
+}
+
+/// Gets the played count for a track in Apple Music by its Persistent ID.
+pub fn get_play_count(track_pid: &str) -> Result<i64> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"
+            tell application "Music"
+                try
+                    set theTrack to (first track whose persistent ID is "{}")
+                    return played count of theTrack
+                on error
+                    return 0
+                end try
+            end tell
+            "#,
+            track_pid
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Ok(stdout.parse::<i64>().unwrap_or(0));
+        }
+        return Ok(0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(0)
+    }
+}
+
+/// Sets the played count for a track in Apple Music by its Persistent ID.
+pub fn set_play_count(track_pid: &str, count: i64) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        set theTrack to (first track whose persistent ID is "{}")
+                        set played count of theTrack to {}
+                    end try
+                end tell
+            end if
+            "#,
+            track_pid, count
+        );
+
+        Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+    }
+    Ok(())
+}
