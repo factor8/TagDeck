@@ -212,6 +212,70 @@ impl Database {
         Ok(())
     }
 
+    /// Returns a snapshot of all playlists in the DB for diffing.
+    /// Maps persistent_id → (name, is_folder, parent_persistent_id, vec of track persistent_ids)
+    pub fn get_playlist_snapshot(&self) -> Result<std::collections::HashMap<String, (String, bool, Option<String>, Vec<String>)>> {
+        use std::collections::HashMap;
+
+        let mut map: HashMap<String, (String, bool, Option<String>, Vec<String>)> = HashMap::new();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let pid: String = row.get(1)?;
+            let parent_pid: Option<String> = row.get(2)?;
+            let name: String = row.get(3)?;
+            let is_folder: bool = row.get(4)?;
+            Ok((id, pid, parent_pid, name, is_folder))
+        })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+        for (db_id, pid, parent_pid, name, is_folder) in &rows {
+            // Get track persistent IDs for this playlist
+            let mut track_stmt = self.conn.prepare(
+                "SELECT t.persistent_id FROM playlist_tracks pt 
+                 JOIN tracks t ON t.id = pt.track_id 
+                 WHERE pt.playlist_id = ?1 
+                 ORDER BY pt.position ASC"
+            )?;
+            let track_pids = track_stmt.query_map(params![db_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+            map.insert(pid.clone(), (name.clone(), *is_folder, parent_pid.clone(), track_pids));
+        }
+
+        Ok(map)
+    }
+
+    /// Removes playlists from the DB that are no longer present in Music.app.
+    /// Also removes associated playlist_tracks entries.
+    pub fn remove_playlists_by_persistent_ids(&self, pids: &[String]) -> Result<usize> {
+        let mut removed = 0;
+        for pid in pids {
+            // First get the playlist DB id to clean up playlist_tracks
+            let db_id: Option<i64> = self.conn.query_row(
+                "SELECT id FROM playlists WHERE persistent_id = ?1",
+                params![pid],
+                |row| row.get(0),
+            ).ok();
+
+            if let Some(id) = db_id {
+                self.conn.execute(
+                    "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                    params![id],
+                )?;
+            }
+
+            let rows = self.conn.execute(
+                "DELETE FROM playlists WHERE persistent_id = ?1",
+                params![pid],
+            )?;
+            removed += rows;
+        }
+        Ok(removed)
+    }
+
     pub fn get_playlists(&self) -> Result<Vec<crate::models::Playlist>> {
         let mut stmt = self.conn.prepare("SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists ORDER BY is_folder DESC, name ASC")?;
         let playlists = stmt.query_map([], |row| {

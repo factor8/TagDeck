@@ -3,9 +3,9 @@ use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
 use crate::apple_music::{
-    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields
+    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot
 };
-use crate::models::Track;
+use crate::models::{Track, Playlist};
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
 use std::sync::Mutex;
 use tauri::{State, Manager};
@@ -522,6 +522,90 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         }
         Err(e) => {
             let msg = format!("Snapshot diff failed (non-fatal): {}", e);
+            eprintln!("{}", msg);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+        }
+    }
+
+    // --- Phase 3: Playlist snapshot diff ---
+    // Detect added, removed, renamed, reordered playlists and membership changes.
+    let playlist_msg = "Fetching playlist snapshot from Music.app for diff...";
+    println!("{}", playlist_msg);
+    app.state::<crate::logging::LogState>().add_log("INFO", playlist_msg, &app);
+
+    match get_playlist_snapshot() {
+        Ok(music_playlists) => {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            let db_snapshot = db.get_playlist_snapshot().map_err(|e| e.to_string())?;
+
+            let mut playlist_changes = 0;
+
+            // Build a set of persistent IDs from Music.app for deletion detection
+            let music_pids: std::collections::HashSet<String> = music_playlists.iter()
+                .map(|p| p.persistent_id.clone())
+                .collect();
+
+            // Detect deleted playlists (in DB but not in Music.app)
+            let deleted_pids: Vec<String> = db_snapshot.keys()
+                .filter(|pid| !music_pids.contains(*pid))
+                .cloned()
+                .collect();
+
+            if !deleted_pids.is_empty() {
+                let del_count = deleted_pids.len();
+                if let Err(e) = db.remove_playlists_by_persistent_ids(&deleted_pids) {
+                    let msg = format!("DB Error removing deleted playlists: {}", e);
+                    app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                } else {
+                    let msg = format!("Removed {} deleted playlists", del_count);
+                    println!("{}", msg);
+                    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+                    playlist_changes += del_count;
+                }
+            }
+
+            // Detect added or changed playlists
+            for mp in &music_playlists {
+                let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
+                    None => true, // New playlist
+                    Some((db_name, db_is_folder, db_parent_pid, db_track_ids)) => {
+                        // Check if any field changed
+                        db_name != &mp.name
+                            || db_is_folder != &mp.is_folder
+                            || db_parent_pid != &mp.parent_persistent_id
+                            || db_track_ids != &mp.track_ids
+                    }
+                };
+
+                if needs_upsert {
+                    let playlist = Playlist {
+                        id: 0,
+                        persistent_id: mp.persistent_id.clone(),
+                        parent_persistent_id: mp.parent_persistent_id.clone(),
+                        name: mp.name.clone(),
+                        is_folder: mp.is_folder,
+                        track_ids: Some(mp.track_ids.clone()),
+                    };
+                    if let Err(e) = db.insert_playlist(&playlist) {
+                        let msg = format!("DB Error upserting playlist {}: {}", mp.name, e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    } else {
+                        playlist_changes += 1;
+                        if playlist_changes <= 10 {
+                            let detail = format!("Playlist synced: \"{}\"", mp.name);
+                            println!("{}", detail);
+                            app.state::<crate::logging::LogState>().add_log("INFO", &detail, &app);
+                        }
+                    }
+                }
+            }
+
+            let pl_msg = format!("Playlist diff found {} changes", playlist_changes);
+            println!("{}", pl_msg);
+            app.state::<crate::logging::LogState>().add_log("INFO", &pl_msg, &app);
+        }
+        Err(e) => {
+            let msg = format!("Playlist snapshot diff failed (non-fatal): {}", e);
             eprintln!("{}", msg);
             app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
         }

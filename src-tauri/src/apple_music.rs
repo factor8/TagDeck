@@ -381,6 +381,115 @@ pub fn get_snapshot_fields() -> Result<Vec<SnapshotEntry>> {
     }
 }
 
+/// Struct representing a playlist snapshot entry from Music.app.
+#[derive(Debug, Deserialize)]
+pub struct PlaylistSnapshotEntry {
+    pub persistent_id: String,
+    pub parent_persistent_id: Option<String>,
+    pub name: String,
+    pub is_folder: bool,
+    pub track_ids: Vec<String>,
+}
+
+/// Fetches a snapshot of ALL playlists from Music.app with their track lists.
+/// Used for Phase 3 of sync to detect playlist additions, renames, reordering, etc.
+pub fn get_playlist_snapshot() -> Result<Vec<PlaylistSnapshotEntry>> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+            use framework "Foundation"
+            use scripting additions
+
+            tell application "Music"
+                set allPlaylists to every playlist
+                set resultList to {}
+
+                repeat with p in allPlaylists
+                    try
+                        -- Skip the master Library playlist (special class)
+                        if class of p is library playlist then
+                            -- skip
+                        else
+                            set pName to name of p
+                            set pId to persistent ID of p
+                            set isFldr to false
+                            if class of p is folder playlist then
+                                set isFldr to true
+                            end if
+
+                            -- Parent persistent ID (if nested)
+                            set parentId to missing value
+                            try
+                                set parentPlaylist to parent of p
+                                if parentPlaylist is not missing value then
+                                    set parentId to persistent ID of parentPlaylist
+                                end if
+                            end try
+
+                            -- Track persistent IDs (folders have no tracks)
+                            set tIds to {}
+                            if not isFldr then
+                                try
+                                    set tIds to persistent ID of every track of p
+                                end try
+                            end if
+
+                            set entry to {|id|:pId, |name|:pName, |parent_id|:parentId, |is_folder|:isFldr, |track_ids|:tIds}
+                            copy entry to end of resultList
+                        end if
+                    end try
+                end repeat
+            end tell
+
+            -- JSON Stringify using ObjC bridge
+            set ca to current application
+            set jsonData to ca's NSJSONSerialization's dataWithJSONObject:resultList options:0 |error|:missing value
+            set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+            return jsonString
+        "#;
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("AppleScript Playlist Snapshot Failed: {}", err));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        #[derive(Deserialize)]
+        struct RawPlaylist {
+            id: String,
+            name: String,
+            parent_id: Option<String>,
+            is_folder: bool,
+            track_ids: Vec<String>,
+        }
+
+        let raw: Vec<RawPlaylist> = serde_json::from_str(&stdout)?;
+
+        let entries: Vec<PlaylistSnapshotEntry> = raw.into_iter()
+            .map(|p| PlaylistSnapshotEntry {
+                persistent_id: p.id,
+                parent_persistent_id: p.parent_id,
+                name: p.name,
+                is_folder: p.is_folder,
+                track_ids: p.track_ids,
+            })
+            .collect();
+
+        return Ok(entries);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(vec![])
+    }
+}
+
 /// Helper to "touch" a file, updating its modification time.
 /// This helps Rekordbox and Finder notice that the file has changed.
 pub fn touch_file(path: &str) -> Result<()> {

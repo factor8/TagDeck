@@ -3,7 +3,8 @@
 > **✅ STATUS: WORKING**
 > Fixed February 2026. The original date-based query missed rating/BPM changes because
 > Apple Music does NOT update `modification date` for those fields. The system now uses
-> a two-phase approach: date-based query for metadata + snapshot diff for rating/BPM.
+> a three-phase approach: date-based query for metadata + snapshot diff for rating/BPM
+> + playlist snapshot diff for playlist changes.
 
 System for keeping TagDeck in sync with Apple Music (Music.app) changes in real-time.
 
@@ -12,7 +13,7 @@ System for keeping TagDeck in sync with Apple Music (Music.app) changes in real-
 The system relies on three components:
 1.  **File System Watcher (`library_watcher.rs`)**: Monitors the Music.app database files.
 2.  **Debounce Logic**: Coalesces rapid writes into a single event.
-3.  **Two-Phase Delta Sync (`apple_music.rs` + `commands.rs`)**: Fetches changes using two complementary strategies.
+3.  **Three-Phase Delta Sync (`apple_music.rs` + `commands.rs`)**: Fetches changes using three complementary strategies.
 
 ### 1. Library Watcher
 We use the `notify` crate to watch for recursive changes in the file system.
@@ -26,7 +27,7 @@ Music.app often writes to the database multiple times for a single user action. 
 *   **Implementation**: When an event is detected, we start a timer. Every subsequent event resets the timer. We only emit a `music-library-changed` event if **2 seconds** of silence have passed since the last file system event.
 *   **Why**: This ensures we don't trigger a sync in the middle of a large write operation (e.g., editing multiple tags).
 
-### 3. Two-Phase Delta Sync
+### 3. Three-Phase Delta Sync
 
 > **Key Discovery**: Apple Music's `modification date` property is only updated for metadata
 > changes (title, artist, album, comment, grouping). It is **NOT** updated for rating, BPM,
@@ -44,13 +45,26 @@ batch property access (parallel list fetching). Takes ~2 seconds for 20k tracks.
 Compares against our DB and upserts only the differences.
 Good for: rating, BPM — any field that `modification date` ignores.
 
+**Phase 3 — Playlist Snapshot Diff**
+Fetches all playlists from Music.app with their names, folder status, parent relationships,
+and track membership lists. Compares against our DB snapshot to detect:
+- **Added playlists** (in Music.app but not in DB)
+- **Removed playlists** (in DB but not in Music.app — cascade-deletes playlist_tracks)
+- **Renamed playlists** (name changed)
+- **Reordered/changed membership** (track list differs)
+- **Folder hierarchy changes** (parent_persistent_id changed)
+
+Uses AppleScript to iterate all non-library playlists. Folder playlists are detected via
+`class of p is folder playlist`. Track membership is fetched via `persistent ID of every track of p`.
+
 **The Workflow:**
 1.  Frontend receives `music-library-changed`.
 2.  Frontend retrieves `last_sync_time` from `localStorage`.
 3.  Frontend calculates `since_timestamp` with a **1-hour safety buffer** (querying `Now - 1h`).
 4.  Backend runs **Phase 1**: AppleScript date-based query → upserts changed tracks.
 5.  Backend runs **Phase 2**: Batch-fetches all `(id, rating, bpm)` → diffs against DB → upserts changes.
-6.  Frontend receives the total count of updated tracks.
+6.  Backend runs **Phase 3**: Fetches all playlists → diffs against DB → upserts/deletes playlists.
+7.  Frontend receives the total count of updated tracks and refreshes.
 
 ### Why AppleScript?
 Initial attempts used JXA (JavaScript for Automation). However, JXA has a known bug/limitation where comparing `modificationDate` objects with external dates is flaky and often returns 0 results. Pure AppleScript handles the date coercion correctly `(date "...")`.
