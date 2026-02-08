@@ -18,11 +18,18 @@ import {
     Table
 } from '@tanstack/react-table';
 import { 
-    useDraggable
+    useDraggable,
+    DndContext,
+    DragEndEvent,
+    closestCenter,
+    PointerSensor,
+    useSensor,
+    useSensors
 } from '@dnd-kit/core';
 import { 
     SortableContext, 
     horizontalListSortingStrategy, 
+    verticalListSortingStrategy,
     useSortable,
     arrayMove
 } from '@dnd-kit/sortable';
@@ -259,12 +266,80 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
     );
 };
 
+const SortableMenuItem = ({ column, label }: { column: any, label: string }) => {
+    const {
+        attributes,
+        listeners,
+        setNodeRef,
+        transform,
+        transition,
+        isDragging
+    } = useSortable({ id: column.id });
+
+    const style = {
+        transform: CSS.Translate.toString(transform),
+        transition,
+        padding: '6px 8px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        cursor: isDragging ? 'grabbing' : 'pointer',
+        userSelect: 'none' as const,
+        zIndex: isDragging ? 10 : 1,
+        position: 'relative' as const,
+        opacity: isDragging ? 0.5 : 1,
+        backgroundColor: isDragging ? 'var(--bg-tertiary)' : 'transparent',
+    };
+
+    return (
+        <div 
+            ref={setNodeRef} 
+            style={style} 
+            {...attributes} 
+            {...listeners}
+            onClick={() => column.toggleVisibility()}
+            onMouseEnter={(e) => !isDragging && (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
+            onMouseLeave={(e) => !isDragging && (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+            <input
+                type="checkbox"
+                checked={column.getIsVisible()}
+                onChange={() => {}} 
+                style={{ cursor: 'pointer', pointerEvents: 'none' }}
+            />
+            <span style={{ textTransform: 'capitalize' }}>
+                {label}
+            </span>
+        </div>
+    );
+};
+
 export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
     const [loading, setLoading] = useState(false);
     
+    const sensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                delay: 200,
+                tolerance: 5,
+            },
+        })
+    );
+
+    const handleMenuDragEnd = (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (active.id !== over?.id) {
+            setColumnOrder((items) => {
+                const oldIndex = items.indexOf(active.id as string);
+                const newIndex = items.indexOf(over?.id as string);
+                return arrayMove(items, oldIndex, newIndex);
+            });
+        }
+    };
+
     // Load playlist filter
     useEffect(() => {
         async function loadPlaylistFilter() {
@@ -968,38 +1043,27 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
                         minWidth: '200px'
                     }}>
-                        <div style={{ marginBottom: '8px', fontWeight: 600, fontSize: '12px', padding: '0 4px' }}>
-                            Toggle Columns
+                        <div style={{ marginBottom: '8px', padding: '0 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontWeight: 600, fontSize: '12px' }}>Toggle Columns</span>
+                            <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>hold to reorder</span>
                         </div>
-                        {table.getAllLeafColumns().map(column => {
-                            const label = column.id === 'actions' ? 'File Link' 
-                                : (typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id);
-                            
-                            return (
-                                <div key={column.id} className="column-menu-item" style={{
-                                    padding: '6px 8px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '8px',
-                                    cursor: 'pointer',
-                                    userSelect: 'none'
-                                }}
-                                onClick={() => column.toggleVisibility()}
-                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'}
-                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                                >
-                                    <input
-                                        type="checkbox"
-                                        checked={column.getIsVisible()}
-                                        onChange={() => {}} // handled by div click
-                                        style={{ cursor: 'pointer', pointerEvents: 'none' }}
-                                    />
-                                    <span style={{ textTransform: 'capitalize' }}>
-                                        {label}
-                                    </span>
-                                </div>
-                            );
-                        })}
+                        <DndContext 
+                            sensors={sensors} 
+                            collisionDetection={closestCenter} 
+                            onDragEnd={handleMenuDragEnd}
+                        >
+                            <SortableContext 
+                                items={table.getAllLeafColumns().map(c => c.id)}
+                                strategy={verticalListSortingStrategy}
+                            >
+                                {table.getAllLeafColumns().map(column => {
+                                    const label = column.id === 'actions' ? 'File Link' 
+                                        : (typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id);
+                                    
+                                    return <SortableMenuItem key={column.id} column={column} label={label as string} />;
+                                })}
+                            </SortableContext>
+                        </DndContext>
                     </div>
                 </>
             )}
