@@ -465,7 +465,7 @@ function SortableGroupSection({ id, title, children, onDelete, onRename, collaps
                     <button onClick={() => setIsEditing(true)} style={styles.iconBtn} title="Rename">
                         <Pencil size={12} />
                     </button>
-                    <button onClick={onDelete} style={{...styles.iconBtn, color: 'var(--error-color)'}} title="Delete Group">
+                    <button onClick={onDelete} style={styles.iconBtn} title="Delete Group">
                         <Trash2 size={12} />
                     </button>
                 </div>
