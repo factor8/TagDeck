@@ -228,13 +228,6 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     return (
         <div style={styles.container} className="no-select">
             <div style={styles.header}>
-                <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom: 10}}>
-                     <h3 style={styles.title}>Tag Deck</h3>
-                     <button onClick={() => setIsAddingGroup(!isAddingGroup)} style={styles.iconBtn} title="Add Group">
-                        <FolderPlus size={16} />
-                     </button>
-                </div>
-                
                 {error && <div style={{color: 'red', fontSize: '12px', marginBottom: 5}}>{error}</div>}
 
                 {isAddingGroup && (
@@ -251,13 +244,18 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                     </div>
                 )}
 
-                <input 
-                    type="text" 
-                    value={filter}
-                    onChange={(e) => setFilter(e.target.value)}
-                    placeholder="Filter tags..."
-                    style={styles.searchInput}
-                />
+                <div style={{ position: 'relative', width: '100%', display: 'flex', gap: '8px' }}>
+                     <input 
+                        type="text" 
+                        value={filter}
+                        onChange={(e) => setFilter(e.target.value)}
+                        placeholder="Filter tags..."
+                        style={{ ...styles.searchInput, flex: 1 }}
+                    />
+                    <button onClick={() => setIsAddingGroup(!isAddingGroup)} style={styles.iconBtn} title="Add Group">
+                        <FolderPlus size={16} />
+                    </button>
+                </div>
             </div>
             
             <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
