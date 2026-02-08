@@ -202,7 +202,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
   const scrollRef = (node: HTMLDivElement | null) => {
       if (node && !hasScrolledToSelection) {
-          node.scrollIntoView({ block: 'center' });
+          node.scrollIntoView({ block: 'nearest' });
           setHasScrolledToSelection(true);
       }
   };
