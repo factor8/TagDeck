@@ -250,15 +250,20 @@ impl Database {
 
     /// Removes playlists from the DB that are no longer present in Music.app.
     /// Also removes associated playlist_tracks entries.
-    pub fn remove_playlists_by_persistent_ids(&self, pids: &[String]) -> Result<usize> {
-        let mut removed = 0;
+    /// Returns a list of names of the deleted playlists for logging.
+    pub fn remove_playlists_by_persistent_ids(&self, pids: &[String]) -> Result<Vec<String>> {
+        let mut deleted_names = Vec::new();
         for pid in pids {
-            // First get the playlist DB id to clean up playlist_tracks
-            let db_id: Option<i64> = self.conn.query_row(
-                "SELECT id FROM playlists WHERE persistent_id = ?1",
+            // Get name and ID before deletion
+            let (db_id, name): (Option<i64>, Option<String>) = self.conn.query_row(
+                "SELECT id, name FROM playlists WHERE persistent_id = ?1",
                 params![pid],
-                |row| row.get(0),
-            ).ok();
+                |row| Ok((row.get(0).ok(), row.get(1).ok()))
+            ).unwrap_or((None, None));
+
+            if let Some(n) = name {
+                deleted_names.push(n);
+            }
 
             if let Some(id) = db_id {
                 self.conn.execute(
@@ -267,13 +272,12 @@ impl Database {
                 )?;
             }
 
-            let rows = self.conn.execute(
+            self.conn.execute(
                 "DELETE FROM playlists WHERE persistent_id = ?1",
                 params![pid],
             )?;
-            removed += rows;
         }
-        Ok(removed)
+        Ok(deleted_names)
     }
 
     pub fn get_playlists(&self) -> Result<Vec<crate::models::Playlist>> {

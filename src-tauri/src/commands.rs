@@ -529,6 +529,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
 
     // --- Phase 3: Playlist snapshot diff ---
     // Detect added, removed, renamed, reordered playlists and membership changes.
+    let mut playlist_changes = 0;
     let playlist_msg = "Fetching playlist snapshot from Music.app for diff...";
     println!("{}", playlist_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", playlist_msg, &app);
@@ -537,8 +538,6 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         Ok(music_playlists) => {
             let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
             let db_snapshot = db.get_playlist_snapshot().map_err(|e| e.to_string())?;
-
-            let mut playlist_changes = 0;
 
             // Build a set of persistent IDs from Music.app for deletion detection
             let music_pids: std::collections::HashSet<String> = music_playlists.iter()
@@ -552,15 +551,22 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 .collect();
 
             if !deleted_pids.is_empty() {
-                let del_count = deleted_pids.len();
-                if let Err(e) = db.remove_playlists_by_persistent_ids(&deleted_pids) {
-                    let msg = format!("DB Error removing deleted playlists: {}", e);
-                    app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
-                } else {
-                    let msg = format!("Removed {} deleted playlists", del_count);
-                    println!("{}", msg);
-                    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
-                    playlist_changes += del_count;
+                match db.remove_playlists_by_persistent_ids(&deleted_pids) {
+                    Ok(names) => {
+                        let count = names.len();
+                        let msg = if count <= 5 {
+                            format!("Removed {} deleted playlists: {}", count, names.join(", "))
+                        } else {
+                            format!("Removed {} deleted playlists", count)
+                        };
+                        println!("{}", msg);
+                        app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+                        playlist_changes += count;
+                    },
+                    Err(e) => {
+                        let msg = format!("DB Error removing deleted playlists: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    }
                 }
             }
 
@@ -611,11 +617,12 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         }
     }
 
-    let complete_msg = format!("Sync complete. Total updated: {} tracks.", total_updated);
+    let complete_msg = format!("Sync complete. Total updated: {} tracks, {} playlist events.", total_updated, playlist_changes);
     println!("{}", complete_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", &complete_msg, &app);
 
-    Ok(total_updated)
+    // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
+    Ok(total_updated + playlist_changes)
 }
 
 #[tauri::command]
