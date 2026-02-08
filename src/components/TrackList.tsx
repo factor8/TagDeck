@@ -364,7 +364,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             }
         }
         loadPlaylistFilter();
-    }, [playlistId]);
+    }, [playlistId, refreshTrigger]);
 
 
 
