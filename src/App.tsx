@@ -3,8 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
-import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X } from 'lucide-react';
+import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X, Info } from 'lucide-react';
 import { SettingsPanel } from './components/SettingsPanel';
+import { SearchHelpPanel } from './components/SearchHelpPanel';
 import { AppLogo } from './components/AppLogo';
 import Sidebar from './components/Sidebar';
 import { LibraryImporter } from './components/LibraryImporter';
@@ -44,6 +45,7 @@ function App() {
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSearchHelpOpen, setIsSearchHelpOpen] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('app_theme') || 'dark');
   const [accentColor, setAccentColor] = useState(() => localStorage.getItem('app_accent') || '#3b82f6');
 
@@ -260,6 +262,28 @@ function App() {
                 </button>
             )}
         </div>
+
+        <button
+            onClick={() => setIsSearchHelpOpen(!isSearchHelpOpen)}
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                padding: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                marginRight: '10px'
+            }}
+            title="Search Syntax Help"
+        >
+            <Info size={18} />
+        </button>
+        <SearchHelpPanel 
+            isOpen={isSearchHelpOpen} 
+            onClose={() => setIsSearchHelpOpen(false)} 
+        />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
              {/* Toggle Buttons */}

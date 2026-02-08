@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
+import { parseSearchQuery } from '../utils/searchParser';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
@@ -203,6 +204,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         loadPlaylistFilter();
     }, [playlistId]);
 
+
+
     // Filter tracks based on search term and playlist
     const filteredTracks = useMemo(() => {
         let result = tracks;
@@ -214,23 +217,89 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
 
         if (!searchTerm) return result;
         
-        // Split search terms by whitespace
-        const terms = searchTerm.toLowerCase().split(/\s+/).filter(t => t.length > 0);
-        if (terms.length === 0) return result;
+        const query = parseSearchQuery(searchTerm);
 
         return result.filter(track => {
-            // Combine all searchable text into one string
-            const haystack = [
-                track.title, 
-                track.artist, 
-                track.album, 
-                track.comment_raw,
-                track.grouping_raw,
-                track.bpm ? track.bpm.toString() : ''
-            ].filter(Boolean).join(' ').toLowerCase();
+            // 1. Check Numeric Filters
+            for (const filter of query.numericFilters) {
+                // Only BPM is supported in Track for now
+                let val: number | undefined;
+                if (filter.field === 'bpm') val = track.bpm;
+                // Add year support if available in Track interface
+                // if (filter.field === 'year') val = ...; 
+                
+                if (val === undefined) return false; 
 
-            // All terms must be present in the haystack
-            return terms.every(term => haystack.includes(term));
+                if (filter.operator === 'range') {
+                    if (val < filter.value || (filter.maxValue !== undefined && val > filter.maxValue)) return false;
+                } else if (filter.operator === '>') {
+                    if (val <= filter.value) return false;
+                } else if (filter.operator === '>=') {
+                    if (val < filter.value) return false;
+                } else if (filter.operator === '<') {
+                    if (val >= filter.value) return false;
+                } else if (filter.operator === '<=') {
+                    if (val > filter.value) return false;
+                } else if (filter.operator === '=') {
+                    if (val !== filter.value) return false;
+                }
+            }
+
+            // 2. Check String Filters
+            for (const filter of query.stringFilters) {
+                const targetValue = filter.value.toLowerCase();
+                let match = false;
+
+                if (filter.field === 'any') {
+                    // Search all fields
+                    const haystack = [
+                        track.title, 
+                        track.artist, 
+                        track.album, 
+                        track.comment_raw,
+                        track.grouping_raw,
+                        track.bpm ? track.bpm.toString() : ''
+                    ].filter(Boolean).join(' ').toLowerCase();
+
+                    // If exact is true (quoted), simple includes matches the phrase "house music"
+                    // If exact is false (unquoted), simple includes matches the token "house"
+                    match = haystack.includes(targetValue);
+
+                } else {
+                    // Specific field
+                    let fieldValue: string | undefined = '';
+                    switch (filter.field) {
+                        case 'artist': fieldValue = track.artist; break;
+                        case 'title': fieldValue = track.title; break;
+                        case 'album': fieldValue = track.album; break;
+                        case 'tag': fieldValue = track.comment_raw; break;
+                        case 'label': fieldValue = track.grouping_raw; break;
+                        case 'key': 
+                            // Try parsing key from comment or look for future key field
+                            // For now, if we match in comment or grouping?
+                            // Let's treat key searches as searching the 'key' substring in comment/grouping as fallback?
+                            // Or just fail. Let's fail safe:
+                            fieldValue = undefined; 
+                            break;
+                        default: fieldValue = undefined;
+                    }
+
+                    if (fieldValue) {
+                        const val = fieldValue.toLowerCase();
+                        match = val.includes(targetValue);
+                    } else {
+                        match = false;
+                    }
+                }
+
+                if (filter.negate) {
+                    if (match) return false;
+                } else {
+                    if (!match) return false;
+                }
+            }
+
+            return true;
         });
     }, [tracks, searchTerm, allowedTrackIds]);
 
