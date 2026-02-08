@@ -164,6 +164,10 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   }, [refreshTrigger]);
 
   useEffect(() => {
+    setHasScrolledToSelection(false);
+  }, [selectedPlaylistId]);
+
+  useEffect(() => {
     localStorage.setItem('sidebar_expanded_folders', JSON.stringify(Array.from(expandedFolders)));
   }, [expandedFolders]);
 
@@ -290,6 +294,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
         <div 
+          ref={(node) => {
+              if (selectedPlaylistId === null) scrollRef(node);
+          }}
           onClick={() => onSelectPlaylist(null)}
           style={{
             padding: '6px 16px',
