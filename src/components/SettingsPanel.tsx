@@ -13,6 +13,13 @@ interface SettingsPanelProps {
     onRefresh: () => void;
 }
 
+interface SyncInfo {
+    date: string;
+    count: number;
+    type: string;
+    duration?: number;
+}
+
 const THEMES = [
     { id: 'dark', name: 'Dark', color: '#0f172a' },
     { id: 'light', name: 'Light', color: '#ffffff' },
@@ -38,7 +45,7 @@ export function SettingsPanel({
     onRefresh 
 }: SettingsPanelProps) {
     const panelRef = useRef<HTMLDivElement>(null);
-    const [syncInfo, setSyncInfo] = useState<{ date: string; count: number; type: string } | null>(null);
+    const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
     const [importing, setImporting] = useState(false);
     const [status, setStatus] = useState('');
 
@@ -98,14 +105,17 @@ export function SettingsPanel({
             if (selected && typeof selected === 'string') {
                 setImporting(true);
                 setStatus('');
-                const count = await invoke('import_library', { xmlPath: selected });
+                const startTime = performance.now();
+                const count = await invoke<number>('import_library', { xmlPath: selected });
+                const duration = (performance.now() - startTime) / 1000;
                 setStatus(`Imported ${count} tracks!`);
                 
                 // Store sync info
-                const info = {
+                const info: SyncInfo = {
                     date: new Date().toISOString(),
                     count: count,
-                    type: 'xml'
+                    type: 'xml',
+                    duration
                 };
                 localStorage.setItem('app_last_sync_info', JSON.stringify(info));
                 window.dispatchEvent(new Event('sync-info-updated'));
@@ -127,14 +137,17 @@ export function SettingsPanel({
         setImporting(true);
         setStatus('');
         try {
-            const count = await invoke('import_from_music_app');
+            const startTime = performance.now();
+            const count = await invoke<number>('import_from_music_app');
+            const duration = (performance.now() - startTime) / 1000;
             setStatus(`Synced ${count} tracks!`);
             
             // Store sync info
-            const info = {
+            const info: SyncInfo = {
                 date: new Date().toISOString(),
                 count: count,
-                type: 'music_app'
+                type: 'music_app',
+                duration
             };
             localStorage.setItem('app_last_sync_info', JSON.stringify(info));
             window.dispatchEvent(new Event('sync-info-updated'));
@@ -199,6 +212,12 @@ export function SettingsPanel({
                             <span style={{ color: 'var(--text-secondary)' }}>Tracks:</span>
                             <span>{syncInfo.count.toLocaleString()}</span>
                         </div>
+                        {syncInfo.duration !== undefined && (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+                                <span style={{ color: 'var(--text-secondary)' }}>Sync Time:</span>
+                                <span>{syncInfo.duration.toFixed(2)}s</span>
+                            </div>
+                        )}
                     </div>
                 ) : (
                     <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No sync history found.</span>
