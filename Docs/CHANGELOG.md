@@ -11,4 +11,7 @@
 - **Build Errors**: Resolved unused variable warnings in MetadataViewer causing build failures.
 
 ### Added
+- **Real-time Library Monitoring**: Implemented a background file system watcher that detects changes in the Apple Music library database (`Music Library.musiclibrary` and legacy `iTunes Library.xml` files).
+- **Smart Auto-Sync**: Automatically synchronizes metadata changes from Apple Music to TagDeck within seconds of the edit. Uses a 5-second debounce and ignore logic for temporary files.
+- **AppleScript Delta Query**: Replaced full library re-scans with a targeted AppleScript query that fetches only tracks modified in the last 10 minutes (plus safety buffer).
 - **Metadata Viewer**: Added a new collapsible panel in the sidebar to view detailed technical metadata for selected tracks (Bitrate, File Path, Format, etc.).
