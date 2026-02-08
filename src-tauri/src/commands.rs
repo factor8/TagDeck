@@ -2,7 +2,7 @@ use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
-use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file};
+use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file, add_track_to_playlist};
 use crate::models::Track;
 use std::sync::Mutex;
 use tauri::{State, Manager};
@@ -370,6 +370,48 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
 pub async fn get_playlists(state: State<'_, AppState>) -> Result<Vec<crate::models::Playlist>, String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.get_playlists().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_to_playlist(
+    app: tauri::AppHandle,
+    track_ids: Vec<i64>,
+    playlist_id: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    
+    let playlist_pid = db.get_playlist_persistent_id(playlist_id)
+        .map_err(|e| format!("Failed to get playlist: {}", e))?;
+
+    let mut track_pids = Vec::new();
+    // Keep track valid IDs to add to local DB
+    let mut valid_track_ids = Vec::new();
+
+    for tid in track_ids {
+        if let Ok(pid) = db.get_track_persistent_id(tid) {
+            track_pids.push(pid);
+            valid_track_ids.push(tid);
+        }
+    }
+    
+    // Apple Music Sync
+    for pid in &track_pids {
+        if let Err(e) = add_track_to_playlist(pid, &playlist_pid) {
+             let msg = format!("Failed to add track {} to playlist: {}", pid, e);
+             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        }
+    }
+
+    // Local DB Sync
+    for tid in valid_track_ids {
+        if let Err(e) = db.add_track_to_playlist_db(playlist_id, tid) {
+             let msg = format!("Failed to update local playlist: {}", e);
+             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

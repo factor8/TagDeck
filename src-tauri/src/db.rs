@@ -208,6 +208,24 @@ impl Database {
         Ok(ids)
     }
 
+    pub fn add_track_to_playlist_db(&self, playlist_id: i64, track_id: i64) -> Result<()> {
+        // Get max position
+        let max_pos: Option<i64> = self.conn.query_row(
+            "SELECT MAX(position) FROM playlist_tracks WHERE playlist_id = ?1",
+            params![playlist_id],
+            |row| row.get(0)
+        ).unwrap_or(None);
+
+        let new_pos = max_pos.map(|p| p + 1).unwrap_or(0);
+
+        // Attempt insert, ignoring if already exists (due to PK constraint)
+        self.conn.execute(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+            params![playlist_id, track_id, new_pos]
+        )?;
+        Ok(())
+    }
+
     pub fn insert_playlist(&self, playlist: &crate::models::Playlist) -> Result<()> {
         // Use a transaction for atomicity
         // Note: For simple methods we don't strictly need a transaction object if we handle it carefully, 
@@ -245,6 +263,24 @@ impl Database {
         }
         
         Ok(())
+    }
+
+    pub fn get_track_persistent_id(&self, id: i64) -> Result<String> {
+        let pid: String = self.conn.query_row(
+            "SELECT persistent_id FROM tracks WHERE id = ?1",
+            params![id],
+            |row| row.get(0)
+        )?;
+        Ok(pid)
+    }
+
+    pub fn get_playlist_persistent_id(&self, id: i64) -> Result<String> {
+        let pid: String = self.conn.query_row(
+            "SELECT persistent_id FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0)
+        )?;
+        Ok(pid)
     }
 
     pub fn update_track_metadata(&self, id: i64, comment: &str) -> Result<()> {

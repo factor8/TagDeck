@@ -13,6 +13,7 @@ import {
     ColumnSizingState,
     ColumnDef,
     Header,
+    Row,
     Table
 } from '@tanstack/react-table';
 import { 
@@ -22,7 +23,8 @@ import {
     PointerSensor, 
     useSensor, 
     useSensors, 
-    DragEndEvent 
+    DragEndEvent,
+    useDraggable
 } from '@dnd-kit/core';
 import { 
     arrayMove, 
@@ -53,7 +55,98 @@ export interface TrackListHandle {
     selectPrev: () => void;
     getNextTrack: (fromId: number | null) => Track | null;
     getPrevTrack: (fromId: number | null) => Track | null;
+    handleColumnReorder: (activeId: string, overId: string) => void;
 }
+
+interface TrackRowProps {
+    row: Row<Track>;
+    virtualRow: any; // VirtualItem type not easily imported without adding import. Let's use any or update import.
+    measureElement: (element: Element | null) => void;
+    isSelected: boolean;
+    isPlaying: boolean;
+    isMissing: boolean;
+    handleRowClick: (track: Track, event: React.MouseEvent) => void;
+    onTrackDoubleClick?: (track: Track) => void;
+    onContextMenu: (e: React.MouseEvent) => void;
+}
+
+const TrackRow = ({ 
+    row, 
+    virtualRow, 
+    measureElement, 
+    isSelected, 
+    isPlaying, 
+    isMissing, 
+    handleRowClick, 
+    onTrackDoubleClick,
+    onContextMenu 
+}: TrackRowProps) => {
+    const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+        id: `track-${row.original.id}`,
+        data: {
+            type: 'Track',
+            track: row.original,
+            id: row.original.id
+        }
+    });
+
+    const style: React.CSSProperties = {
+        transform: CSS.Translate.toString(transform),
+        borderBottom: '1px solid var(--bg-secondary)',
+        background: isSelected 
+                ? 'rgba(59, 130, 246, 0.15)' 
+                : virtualRow.index % 2 === 1 
+                    ? 'rgba(255, 255, 255, 0.02)'
+                    : 'transparent',
+        color: isSelected 
+                ? 'var(--accent-color)' 
+                : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
+        fontWeight: isPlaying ? '600' : 'normal',
+        opacity: isDragging ? 0.5 : (isMissing ? 0.5 : 1),
+        cursor: isMissing ? 'default' : 'pointer',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        position: 'relative',
+        zIndex: isDragging ? 100 : 'auto',
+    };
+
+    return (
+        <tr 
+            key={row.id}
+            data-index={virtualRow.index} 
+            ref={(node) => {
+                measureElement(node);
+                setNodeRef(node);
+            }}
+            onClick={(e) => handleRowClick(row.original, e)}
+            onContextMenu={onContextMenu}
+            onDoubleClick={() => !isMissing && onTrackDoubleClick?.(row.original)}
+            style={style}
+             onMouseEnter={(e) => {
+                if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
+            }}
+            onMouseLeave={(e) => {
+                if (!isSelected) e.currentTarget.style.background = virtualRow.index % 2 === 1 ? 'rgba(255, 255, 255, 0.02)' : 'transparent';
+            }}
+            {...attributes} 
+            {...listeners}
+        >
+            {row.getVisibleCells().map(cell => (
+                <td 
+                    key={cell.id} 
+                    style={{ 
+                        padding: '8px 10px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                    }}
+                >
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </td>
+            ))}
+        </tr>
+    );
+};
 
 // Helper to calculate common tags
 const getCommonTags = (tracks: Track[], selectedIds: Set<number>): string[] => {
@@ -604,28 +697,6 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     });
 
     // Drag and Drop Sensors
-    const sensors = useSensors(
-        useSensor(PointerSensor, {
-            activationConstraint: {
-                distance: 2, // Require slight movement to start drag, allowing clicks
-            },
-        }),
-        useSensor(KeyboardSensor, {
-            coordinateGetter: sortableKeyboardCoordinates,
-        })
-    );
-
-    function handleDragEnd(event: DragEndEvent) {
-        const { active, over } = event;
-        if (active && over && active.id !== over.id) {
-            setColumnOrder((order) => {
-                const oldIndex = order.indexOf(active.id as string);
-                const newIndex = order.indexOf(over.id as string);
-                return arrayMove(order, oldIndex, newIndex);
-            });
-        }
-    }
-
     // Selection Handler
     const handleRowClick = (track: Track, event: React.MouseEvent) => {
         try {
@@ -753,6 +824,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 return rows[currentIndex - 1].original;
             }
             return null;
+        },
+        handleColumnReorder: (activeId: string, overId: string) => {
+             setColumnOrder((order) => {
+                const oldIndex = order.indexOf(activeId);
+                const newIndex = order.indexOf(overId);
+                return arrayMove(order, oldIndex, newIndex);
+            });
         }
     }));
 
@@ -857,11 +935,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 </>
             )}
             
-            <DndContext 
-                collisionDetection={closestCenter} 
-                onDragEnd={handleDragEnd} 
-                sensors={sensors}
-            >
+            {/* DndContext removed */}
                 <div 
                     ref={parentRef}
                     style={{ 
@@ -910,16 +984,17 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                 const isPlaying = playingTrackId === row.original.id;
                                 const isMissing = row.original.missing;
                                 
-                                if (isMissing) {
-                                    // console.log(`Rendering missing track: ${row.original.title}`, row.original);
-                                }
-
                                 return (
-                                    <tr 
+                                    <TrackRow
                                         key={row.id}
-                                        data-index={virtualRow.index} 
-                                        ref={rowVirtualizer.measureElement}
-                                        onClick={(e) => handleRowClick(row.original, e)}
+                                        row={row}
+                                        virtualRow={virtualRow}
+                                        measureElement={rowVirtualizer.measureElement}
+                                        isSelected={isSelected}
+                                        isPlaying={isPlaying}
+                                        isMissing={isMissing}
+                                        handleRowClick={handleRowClick}
+                                        onTrackDoubleClick={onTrackDoubleClick}
                                         onContextMenu={(e) => {
                                             if (isMissing) {
                                                 e.preventDefault();
@@ -930,44 +1005,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                                 }
                                             }
                                         }}
-                                        onDoubleClick={() => !isMissing && onTrackDoubleClick?.(row.original)}
-                                        style={{ 
-                                            borderBottom: '1px solid var(--bg-secondary)',
-                                            background: isSelected 
-                                                    ? 'rgba(59, 130, 246, 0.15)' 
-                                                    : virtualRow.index % 2 === 1 
-                                                        ? 'rgba(255, 255, 255, 0.02)'
-                                                        : 'transparent',
-                                            color: isSelected 
-                                                    ? 'var(--accent-color)' 
-                                                    : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
-                                            fontWeight: isPlaying ? '600' : 'normal',
-                                            opacity: isMissing ? 0.5 : 1,
-                                            cursor: isMissing ? 'default' : 'pointer',
-                                            userSelect: 'none',
-                                            WebkitUserSelect: 'none',
-                                        }}
-                                        onMouseEnter={(e) => {
-                                            if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                            if (!isSelected) e.currentTarget.style.background = virtualRow.index % 2 === 1 ? 'rgba(255, 255, 255, 0.02)' : 'transparent';
-                                        }}
-                                    >
-                                        {row.getVisibleCells().map(cell => (
-                                            <td 
-                                                key={cell.id} 
-                                                style={{ 
-                                                    padding: '8px 10px',
-                                                    overflow: 'hidden',
-                                                    textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap'
-                                                }}
-                                            >
-                                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                            </td>
-                                        ))}
-                                    </tr>
+                                    />
                                 );
                             })}
                             {rowVirtualizer.getVirtualItems().length > 0 && (
@@ -990,7 +1028,6 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         </tbody>
                     </table>
                 </div>
-            </DndContext>
         </div>
     );
 });

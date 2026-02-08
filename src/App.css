@@ -51,6 +51,16 @@ body {
   background: var(--text-secondary);
 }
 
+@keyframes flashHighlight {
+  0% { background-color: rgba(59, 130, 246, 0.6); }
+  100% { background-color: transparent; }
+}
+
+.flash-highlight {
+  animation: flashHighlight 1.5s ease-out;
+}
+
+
 /* Utilities */
 .btn {
   background-color: var(--bg-secondary);

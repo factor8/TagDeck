@@ -112,6 +112,7 @@ pub fn run() {
             commands::batch_remove_tag,
             commands::import_from_music_app,
             commands::get_playlists,
+            commands::add_to_playlist,
             commands::get_playlist_track_ids,
             commands::mark_track_missing,
             commands::get_track_artwork,

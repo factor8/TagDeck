@@ -122,3 +122,32 @@ pub fn touch_file(path: &str) -> Result<()> {
    }
    Ok(())
 }
+
+/// Adds a track to a playlist in Apple Music (iTunes) by their Persistent IDs.
+pub fn add_track_to_playlist(track_pid: &str, playlist_pid: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        set theTrack to (first track whose persistent ID is "{}")
+                        set thePlaylist to (first playlist whose persistent ID is "{}")
+                        duplicate theTrack to thePlaylist
+                    on error errMsg
+                         -- ignore errors
+                    end try
+                end tell
+            end if
+            "#,
+            track_pid, playlist_pid
+        );
+
+        Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+    }
+    Ok(())
+}

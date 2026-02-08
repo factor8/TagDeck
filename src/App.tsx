@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSensors, PointerSensor, closestCenter } from '@dnd-kit/core';
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
@@ -13,9 +14,10 @@ import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
 import { Track } from './types';
-import { ToastProvider } from './components/Toast';
+import { useToast } from './components/Toast';
 
 function App() {
+  const { showSuccess, showError } = useToast();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [playingTrack, setPlayingTrack] = useState<Track | null>(null);
@@ -28,7 +30,9 @@ function App() {
   });
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
   const [currentTags, setCurrentTags] = useState<string[]>([]);
+  const [activeDragItem, setActiveDragItem] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [highlightedPlaylistId, setHighlightedPlaylistId] = useState<number | null>(null);
   const [isSidebarArtworkVisible, setIsSidebarArtworkVisible] = useState(() => {
     // Default to true or load from storage
     const saved = localStorage.getItem('app_show_sidebar_artwork');
@@ -41,6 +45,63 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  const sensors = useSensors(
+      useSensor(PointerSensor, {
+          activationConstraint: {
+              distance: 8,
+          },
+      })
+  );
+
+  const handleDragStart = (event: DragStartEvent) => {
+      setActiveDragItem(event.active.data.current);
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+      setActiveDragItem(null);
+      const { active, over } = event;
+      if (!over) return;
+      
+      const activeId = String(active.id);
+      const overId = String(over.id);
+
+      // Track -> Playlist
+      if (activeId.startsWith('track-') && overId.startsWith('playlist-')) {
+          const trackId = Number(activeId.replace('track-', ''));
+          const playlistId = Number(overId.replace('playlist-', ''));
+          
+          let idsToAdd: number[] = [trackId];
+          if (selectedTrackIds.has(trackId)) {
+              idsToAdd = Array.from(selectedTrackIds);
+          }
+          
+          invoke('add_to_playlist', { trackIds: idsToAdd, playlistId })
+              .then(() => {
+                  showSuccess(`Added ${idsToAdd.length} track${idsToAdd.length > 1 ? 's' : ''} to playlist`);
+                  setHighlightedPlaylistId(playlistId);
+                  // Clear highlight after animation
+                  setTimeout(() => setHighlightedPlaylistId(null), 2000);
+
+                  // If we added to the currently viewed playlist, refresh the view
+                  if (selectedPlaylistId === playlistId) {
+                      setRefreshTrigger(p => p + 1);
+                  }
+              })
+              .catch(err => {
+                  console.error("Failed to add to playlist", err);
+                  showError("Failed to add tracks to playlist");
+              });
+          return;
+      }
+      
+      // Column Reorder
+      if (trackListRef.current) {
+          if (!activeId.startsWith('track-') && !activeId.startsWith('playlist-')) {
+              trackListRef.current.handleColumnReorder(activeId, overId);
+          }
+      }
+  };
 
   // Settings State
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -185,8 +246,14 @@ function App() {
   };
 
   return (
-    <ToastProvider>
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+    // Removed ToastProvider here as it is now in main.tsx
+      <DndContext 
+          collisionDetection={closestCenter} 
+          onDragEnd={handleDragEnd}  
+          onDragStart={handleDragStart}
+          sensors={sensors}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       
       {/* Header */}
       <header 
@@ -374,6 +441,7 @@ function App() {
             refreshTrigger={refreshTrigger}
             selectedTrack={playingTrack}
             showArtwork={isSidebarArtworkVisible}
+            highlightedPlaylistId={highlightedPlaylistId}
             />
         </Panel>
         
@@ -481,7 +549,28 @@ function App() {
         onPlayStateChange={setIsPlaying}
       />
     </div>
-    </ToastProvider>
+        <DragOverlay>
+           {activeDragItem ? (
+                activeDragItem.type === 'Track' ? (
+                   <div style={{
+                       padding: '8px 12px',
+                       background: 'var(--bg-tertiary)',
+                       border: '1px solid var(--border-color)',
+                       borderRadius: '4px',
+                       boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+                       color: 'var(--text-primary)',
+                       opacity: 0.9,
+                       width: '300px',
+                       pointerEvents: 'none'
+                   }}>
+                       <div style={{ fontWeight: 600, fontSize: '13px' }}>{activeDragItem.track.title}</div>
+                       <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{activeDragItem.track.artist}</div>
+                   </div>
+                ) : null
+           ) : null}
+        </DragOverlay>
+      </DndContext>
+    // </ToastProvider>
   );
 }
 

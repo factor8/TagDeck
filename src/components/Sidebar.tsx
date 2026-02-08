@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
 import { ChevronRight, ChevronDown, Folder, ListMusic } from 'lucide-react';
 
@@ -9,13 +10,143 @@ interface SidebarProps {
   refreshTrigger?: number;
   selectedTrack?: Track | null;
   showArtwork?: boolean;
+  highlightedPlaylistId?: number | null;
 }
 
 interface PlaylistNode extends Playlist {
     children: PlaylistNode[];
 }
 
-export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork }: SidebarProps) {
+interface PlaylistRowProps {
+    node: PlaylistNode;
+    level: number;
+    expandedFolders: Set<string>;
+    selectedPlaylistId: number | null;
+    onSelectPlaylist: (id: number | null) => void;
+    toggleFolder: (id: string) => void;
+    scrollRef: (node: HTMLDivElement | null) => void;
+    highlightedPlaylistId?: number | null;
+}
+
+const PlaylistRow = ({ 
+    node, 
+    level, 
+    expandedFolders, 
+    selectedPlaylistId, 
+    onSelectPlaylist, 
+    toggleFolder, 
+    scrollRef,
+    highlightedPlaylistId,
+}: PlaylistRowProps) => {
+    const { isOver, setNodeRef } = useDroppable({
+        id: `playlist-${node.id}`,
+        data: {
+            type: 'Playlist',
+            playlist: node
+        },
+        disabled: node.is_folder
+    });
+
+    const isExpanded = expandedFolders.has(node.persistent_id);
+    const isSelected = selectedPlaylistId === node.id;
+    const isHighlighted = highlightedPlaylistId === node.id;
+    const paddingLeft = 16 + (level * 16);
+
+    return (
+        <div key={node.persistent_id}>
+              <div 
+                  ref={(el) => {
+                      setNodeRef(el);
+                      if (isSelected) scrollRef(el);
+                  }}
+                  onClick={() => {
+                      if (node.is_folder) {
+                          toggleFolder(node.persistent_id);
+                      } else {
+                          onSelectPlaylist(node.id);
+                      }
+                  }}
+                  className={isHighlighted ? 'flash-highlight' : ''}
+                  style={{
+                      padding: `6px 16px 6px ${paddingLeft}px`,
+                      fontSize: '13px',
+                      cursor: 'default',
+                      backgroundColor: isSelected 
+                        ? 'var(--accent-color)' 
+                        : (isOver ? 'rgba(59, 130, 246, 0.3)' : 'transparent'),
+                      color: isSelected ? '#fff' : 'var(--text-primary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      userSelect: 'none',
+                      transition: 'background-color 0.2s ease',
+                      // Override transition if highlighted to allow flash
+                  }}
+                  onMouseEnter={(e) => {
+                      if (!isSelected && !isOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
+                  }}
+                  onMouseLeave={(e) => {
+                       if (!isSelected && !isOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+              >
+                  {node.is_folder ? (
+                      <div 
+                        style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', minWidth: 14, flexShrink: 0 }}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            toggleFolder(node.persistent_id);
+                        }}
+                      >
+                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      </div>
+                  ) : <div style={{ width: 14, minWidth: 14, flexShrink: 0 }}></div>}
+                  
+                  {node.is_folder ? (
+                     <Folder size={16} 
+                        style={{ minWidth: 16, flexShrink: 0 }}
+                        fill={isSelected ? "currentColor" : "var(--text-secondary)"} 
+                        color={isSelected ? "currentColor" : "var(--text-secondary)"} 
+                     />
+                  ) : (
+                     <ListMusic size={16} style={{ minWidth: 16, flexShrink: 0 }} />
+                  )}
+                  
+                  <span style={{ 
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: '13px',
+                      fontWeight: 400,
+                      lineHeight: '20px',
+                      whiteSpace: 'nowrap', 
+                      overflow: 'hidden', 
+                      textOverflow: 'ellipsis'
+                  }}>
+                      {node.name}
+                  </span>
+              </div>
+              
+              {node.is_folder && isExpanded && (
+                  <div>
+                      {node.children.map(child => (
+                        <PlaylistRow 
+                            key={child.persistent_id} 
+                            node={child} 
+                            level={level + 1}
+                            expandedFolders={expandedFolders}
+                            selectedPlaylistId={selectedPlaylistId}
+                            onSelectPlaylist={onSelectPlaylist}
+                            toggleFolder={toggleFolder}
+                            scrollRef={scrollRef}
+                            highlightedPlaylistId={highlightedPlaylistId}
+                        />
+                      ))}
+                  </div>
+              )}
+        </div>
+    );
+};
+
+export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -131,85 +262,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       return roots;
   }, [playlists]);
 
-  const renderNode = (node: PlaylistNode, level: number) => {
-      const isExpanded = expandedFolders.has(node.persistent_id);
-      const isSelected = selectedPlaylistId === node.id;
-      
-      const paddingLeft = 16 + (level * 16);
 
-      return (
-          <div key={node.persistent_id}>
-              <div 
-                  ref={isSelected ? scrollRef : null}
-                  onClick={() => {
-                      if (node.is_folder) {
-                          toggleFolder(node.persistent_id);
-                      } else {
-                          onSelectPlaylist(node.id);
-                      }
-                  }}
-                  style={{
-                      padding: `6px 16px 6px ${paddingLeft}px`,
-                      fontSize: '13px',
-                      cursor: 'default',
-                      backgroundColor: isSelected ? 'var(--accent-color)' : 'transparent',
-                      color: isSelected ? '#fff' : 'var(--text-primary)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                      userSelect: 'none'
-                  }}
-                  onMouseEnter={(e) => {
-                      if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
-                  }}
-                  onMouseLeave={(e) => {
-                       if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-              >
-                  {node.is_folder ? (
-                      <div 
-                        style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', minWidth: 14, flexShrink: 0 }}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            toggleFolder(node.persistent_id);
-                        }}
-                      >
-                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </div>
-                  ) : <div style={{ width: 14, minWidth: 14, flexShrink: 0 }}></div>}
-                  
-                  {node.is_folder ? (
-                     <Folder size={16} 
-                        style={{ minWidth: 16, flexShrink: 0 }}
-                        fill={isSelected ? "currentColor" : "var(--text-secondary)"} 
-                        color={isSelected ? "currentColor" : "var(--text-secondary)"} 
-                     />
-                  ) : (
-                     <ListMusic size={16} style={{ minWidth: 16, flexShrink: 0 }} />
-                  )}
-                  
-                  <span style={{ 
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: '13px',
-                      fontWeight: 400,
-                      lineHeight: '20px',
-                      whiteSpace: 'nowrap', 
-                      overflow: 'hidden', 
-                      textOverflow: 'ellipsis'
-                  }}>
-                      {node.name}
-                  </span>
-              </div>
-              
-              {node.is_folder && isExpanded && (
-                  <div>
-                      {node.children.map(child => renderNode(child, level + 1))}
-                  </div>
-              )}
-          </div>
-      );
-  };
 
   return (
     <div className="no-select" style={{
@@ -275,7 +328,19 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           Playlists
         </div>
 
-        {playlistTree.map(node => renderNode(node, 0))}
+        {playlistTree.map(node => (
+          <PlaylistRow 
+              key={node.persistent_id}
+              node={node}
+              level={0}
+              expandedFolders={expandedFolders}
+              selectedPlaylistId={selectedPlaylistId}
+              onSelectPlaylist={onSelectPlaylist}
+              toggleFolder={toggleFolder}
+              scrollRef={scrollRef}
+              highlightedPlaylistId={highlightedPlaylistId}
+          />
+        ))}
       </div>
       
       {showArtwork && selectedTrack && (
