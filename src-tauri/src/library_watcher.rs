@@ -77,6 +77,7 @@ pub fn start_library_watcher(app: AppHandle) {
         // We wait for an event. Once received, we wait for silence for 'debounce_duration'.
         let debounce_duration = Duration::from_secs(2);
         let mut last_activity: Option<Instant> = None;
+        let mut coalesced_count: u32 = 0;
 
         loop {
             // Determine behavior based on whether we have a pending change
@@ -99,8 +100,12 @@ pub fn start_library_watcher(app: AppHandle) {
                             });
 
                             if is_relevant {
-                                println!("[WATCHER] Activity detected: {:?} -> Resetting debounce timer.", event.kind);
+                                if last_activity.is_none() {
+                                    // First event in a burst — log it
+                                    println!("[WATCHER] Change detected: {:?}. Waiting for activity to settle...", event.kind);
+                                }
                                 last_activity = Some(Instant::now());
+                                coalesced_count += 1;
                             }
                         }
                         Err(e) => eprintln!("[WATCHER] Watch error: {:?}", e),
@@ -109,14 +114,15 @@ pub fn start_library_watcher(app: AppHandle) {
                 Err(RecvTimeoutError::Timeout) => {
                     // Timeout hit! This means 'debounce_duration' passed without new events.
                     if let Some(_) = last_activity {
-                        println!("[WATCHER] Debounce silence period reached. Emitting music-library-changed event.");
+                        println!("[WATCHER] Settled after {} events. Emitting sync.", coalesced_count);
                         let _ = app_handle.emit("music-library-changed", ());
                         
-                        let msg = "Library changes stabilized. Triggering sync.";
-                        app_handle.state::<crate::logging::LogState>().add_log("INFO", msg, &app_handle);
+                        let msg = format!("Library changes stabilized ({} events coalesced). Triggering sync.", coalesced_count);
+                        app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
                         
                         // Reset
                         last_activity = None;
+                        coalesced_count = 0;
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
