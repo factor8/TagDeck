@@ -1041,7 +1041,9 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         borderRadius: '6px',
                         padding: '8px',
                         boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                        minWidth: '200px'
+                        minWidth: '200px',
+                        userSelect: 'none',
+                        WebkitUserSelect: 'none'
                     }}>
                         <div style={{ marginBottom: '8px', padding: '0 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                             <span style={{ fontWeight: 600, fontSize: '12px' }}>Toggle Columns</span>
