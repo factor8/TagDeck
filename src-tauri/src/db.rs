@@ -291,6 +291,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_track_rating(&self, id: i64, rating: u32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET rating = ?1 WHERE id = ?2",
+            params![rating, id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_all_tracks(&self) -> Result<Vec<crate::models::Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 

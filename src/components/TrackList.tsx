@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
+import { StarRating } from './StarRating';
 import { parseSearchQuery } from '../utils/searchParser';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -17,21 +18,13 @@ import {
     Table
 } from '@tanstack/react-table';
 import { 
-    DndContext, 
-    closestCenter, 
-    KeyboardSensor, 
-    PointerSensor, 
-    useSensor, 
-    useSensors, 
-    DragEndEvent,
     useDraggable
 } from '@dnd-kit/core';
 import { 
-    arrayMove, 
     SortableContext, 
-    sortableKeyboardCoordinates, 
     horizontalListSortingStrategy, 
-    useSortable 
+    useSortable,
+    arrayMove
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1 } from 'lucide-react';
@@ -193,12 +186,6 @@ const formatSize = (bytes: number) => {
 const formatDate = (timestamp: number) => {
     if (!timestamp) return '';
     return new Date(timestamp * 1000).toLocaleDateString();
-};
-
-const formatRating = (rating: number) => {
-    if (!rating) return '';
-    const stars = Math.round(rating / 20);
-    return '★'.repeat(stars) + '☆'.repeat(5 - stars);
 };
 
 const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, table: Table<Track> }) => {
@@ -480,11 +467,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     useEffect(() => { localStorage.setItem('table_order_v3', JSON.stringify(columnOrder)); }, [columnOrder]);
     useEffect(() => { localStorage.setItem('table_sizing_v3', JSON.stringify(columnSizing)); }, [columnSizing]);
 
-    useEffect(() => {
-        loadTracks();
-    }, [refreshTrigger]);
-
-    const loadTracks = async () => {
+    const loadTracks = useCallback(async () => {
         setLoading(true);
         try {
             const result = await invoke<Track[]>('get_tracks');
@@ -520,6 +503,23 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             console.error(err);
         } finally {
             setLoading(false);
+        }
+    }, [lastSelectedTrackId, selectedTrackIds, onSelectionChange]);
+
+    useEffect(() => {
+        loadTracks();
+    }, [refreshTrigger, loadTracks]); // Added loadTracks to deps
+
+    const handleRatingChange = async (trackId: number, newRating: number) => {
+        setTracks(prev => prev.map(t => 
+            t.id === trackId ? { ...t, rating: newRating } : t
+        ));
+
+        try {
+           await invoke('update_rating', { trackId, rating: newRating });
+        } catch (error) {
+           console.error("Failed to update rating", error);
+           loadTracks();
         }
     };
 
@@ -605,7 +605,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         columnHelper.accessor('rating', {
             id: 'rating',
             header: 'Rating',
-            cell: info => <span style={{ color: 'var(--accent-color)', letterSpacing: '2px' }}>{formatRating(info.getValue())}</span>,
+            cell: info => (
+                <div onClick={(e) => e.stopPropagation()}>
+                    <StarRating 
+                        value={info.getValue() || 0} 
+                        onChange={(val) => handleRatingChange(info.row.original.id, val)}
+                    />
+                </div>
+            ),
             size: 100,
         }),
         columnHelper.accessor('bpm', {
@@ -676,7 +683,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 </div>
             )
         })
-    ], [isMenuOpen, playingTrackId, isPlaying]);
+    ], [isMenuOpen, playingTrackId, isPlaying, handleRatingChange]);
 
     const table = useReactTable({
         data: filteredTracks,
@@ -871,11 +878,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 <Settings size={16} />
             </div>
 
-            {loading && (
-                <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                    Loading library...
-                </div>
-            )}
+            {/* Loading indicator removed per user request to prevent jitter */}
 
             {/* Column Menu Overlay */}
             {isMenuOpen && (
@@ -992,7 +995,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         measureElement={rowVirtualizer.measureElement}
                                         isSelected={isSelected}
                                         isPlaying={isPlaying}
-                                        isMissing={isMissing}
+                                        isMissing={Boolean(isMissing)}
                                         handleRowClick={handleRowClick}
                                         onTrackDoubleClick={onTrackDoubleClick}
                                         onContextMenu={(e) => {

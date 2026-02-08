@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, DragOverlay, PointerSensor, useSensor, useSensors, KeyboardSensor } from '@dnd-kit/core';
+import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Tag, TagGroup } from '../types';
@@ -218,11 +218,11 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     // Or implementing simple "Enter selects first match"
     useEffect(() => {
         if (!keyboardMode) return;
-        const handleKeyDown = (e: KeyboardEvent) => {
+        const _handleKeyDown = (_e: KeyboardEvent) => {
              // Simplified keyboard support for now
         };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
+        window.addEventListener('keydown', _handleKeyDown);
+        return () => window.removeEventListener('keydown', _handleKeyDown);
     }, [keyboardMode]);
 
     return (

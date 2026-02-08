@@ -19,7 +19,7 @@ interface Props {
     onPlayStateChange?: (isPlaying: boolean) => void;
 }
 
-export function Player({ track, playlistId, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
+export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
     const prevTrackIdRef = useRef<number | null>(null);

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSensors, PointerSensor, closestCenter } from '@dnd-kit/core';
 import './App.css';
@@ -256,14 +256,14 @@ function App() {
     setRefreshTrigger(prev => prev + 1);
   };
   
-  const handleSelectionChange = (ids: Set<number>, lastId: number | null, primaryTrack: Track | null, commonTags: string[]) => {
+  const handleSelectionChange = useCallback((ids: Set<number>, lastId: number | null, primaryTrack: Track | null, commonTags: string[]) => {
     setSelectedTrackIds(ids);
     setLastSelectedTrackId(lastId);
     setSelectedTrack(primaryTrack);
     setCurrentTags(commonTags);
-  };
+  }, []);
   
-  const handleTrackDoubleClick = (track: Track) => {
+  const handleTrackDoubleClick = useCallback((track: Track) => {
       // Ensure it is selected (it should be from the click, but to be sure)
       if (selectedTrack?.id !== track.id) {
           const newSet = new Set([track.id]);
@@ -272,7 +272,7 @@ function App() {
       setPlayingTrack(track);
       setPlayingPlaylistId(selectedPlaylistId);
       setShouldAutoPlay(true);
-  };
+  }, [selectedTrack, selectedPlaylistId, handleSelectionChange]);
 
   const handleDeckTagClick = (tag: string) => {
       if (selectedTrackIds.size === 0) {

@@ -46,27 +46,11 @@ export function parseSearchQuery(query: string): SearchQuery {
   // 3. Simple terms with optional negation/field: (-?field:value or -value or value)
   
   // We'll iterate through the string to pull out tokens
-  const tokenRegex = /(?:(-?)([a-z]+):)?(?:"([^"]*)"|([^"\s]+))/gi;
+  // const tokenRegex = /(?:(-?)([a-z]+):)?(?:"([^"]*)"|([^"\s]+))/gi;
   
-  let match;
-  while ((match = tokenRegex.exec(query)) !== null) {
-    // match[0] is full match
-    // match[1] is negation "-" specific to the field prefix context, but strictly we handle negation generally
-    
-    // Let's break down the structure cleaner.
-    // The regex above is a bit ambiguous with the negation placement. 
-    // Let's refine the parsing strategy.
-    // Instead of one giant regex, let's identify logical chunks.
-    // However, regex execution is standard for this.
-    
-    // Groups in the regex:
-    // 1: Negation "-" (if present before field) - actually, standard syntax is -field:value or field:-value? 
-    //    Usually -field:value means "NOT field matches value". 
-    //    Our specs say "-term" excludes term. 
-    //    Let's assume -field:value is valid.
-    
-    // Let's use a simpler tokenizing approach that splits manually respecting quotes, then parses tokens.
-  }
+  // let match: RegExpExecArray | null;
+  // while ((match = tokenRegex.exec(query)) !== null) {
+  // }
   
   const tokens = tokenize(query);
 

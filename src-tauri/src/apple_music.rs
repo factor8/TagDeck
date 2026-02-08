@@ -3,6 +3,41 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json;
 
+/// Updates a track's rating in Apple Music (iTunes) by its Persistent ID.
+/// Rating is an integer between 0 and 100.
+pub fn update_track_rating(persistent_id: &str, rating: u32) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        -- Find track by persistent ID
+                        set myTracks to (every track whose persistent ID is "{}")
+                        if (count of myTracks) > 0 then
+                            set myTrack to item 1 of myTracks
+                            set rating of myTrack to {}
+                        end if
+                    end try
+                end tell
+            end if
+            "#,
+            persistent_id, rating
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+            
+        if !output.status.success() {
+             eprintln!("AppleScript error: {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+    Ok(())
+}
+
 /// Updates a track's comment in Apple Music (iTunes) by its Persistent ID.
 /// Uses AppleScript to directly set the comment property.
 /// Only runs if Music is already running.

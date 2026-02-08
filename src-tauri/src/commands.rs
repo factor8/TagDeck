@@ -2,7 +2,7 @@ use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
-use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file, add_track_to_playlist};
+use crate::apple_music::{update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist};
 use crate::models::Track;
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
 use std::sync::Mutex;
@@ -502,6 +502,32 @@ pub async fn add_to_playlist(
             });
         }
     }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_rating(
+    app: tauri::AppHandle,
+    track_id: i64,
+    rating: u32,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+
+    // 1. Get Persistent ID
+    let persistent_id = db.get_track_persistent_id(track_id).map_err(|e| e.to_string())?;
+
+    // 2. Update Music.app
+    if let Err(e) = update_track_rating(&persistent_id, rating) {
+        let msg = format!("Failed to update Apple Music rating: {}", e);
+        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        return Err(msg);
+    }
+
+    // 3. Update Local DB
+    db.update_track_rating(track_id, rating).map_err(|e| e.to_string())?;
 
     Ok(())
 }

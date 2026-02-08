@@ -129,7 +129,8 @@ pub fn run() {
             commands::reorder_tag_groups,
             commands::get_all_tags,
             commands::undo,
-            commands::redo
+            commands::redo,
+            commands::update_rating
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
