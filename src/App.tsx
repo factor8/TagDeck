@@ -21,8 +21,14 @@ function App() {
   const { showSuccess, showError } = useToast();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
-  const [playingTrack, setPlayingTrack] = useState<Track | null>(null);
-  const [playingPlaylistId, setPlayingPlaylistId] = useState<number | null>(null);
+  const [playingTrack, setPlayingTrack] = useState<Track | null>(() => {
+    const saved = localStorage.getItem('app_playing_track');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [playingPlaylistId, setPlayingPlaylistId] = useState<number | null>(() => {
+    const saved = localStorage.getItem('app_playing_playlist_id');
+    return saved ? Number(saved) : null;
+  });
   const [playlistNames, setPlaylistNames] = useState<Map<number, string>>(new Map());
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
@@ -48,6 +54,22 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (playingTrack) {
+      localStorage.setItem('app_playing_track', JSON.stringify(playingTrack));
+    } else {
+      localStorage.removeItem('app_playing_track');
+    }
+  }, [playingTrack]);
+
+  useEffect(() => {
+    if (playingPlaylistId !== null) {
+      localStorage.setItem('app_playing_playlist_id', String(playingPlaylistId));
+    } else {
+      localStorage.removeItem('app_playing_playlist_id');
+    }
+  }, [playingPlaylistId]);
 
   useEffect(() => {
     invoke<Playlist[]>('get_playlists')
