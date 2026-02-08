@@ -4,7 +4,7 @@ import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, D
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Tag, TagGroup } from '../types';
-import { ChevronRight, ChevronDown, Trash2, FolderPlus, Pencil, Check, GripVertical } from 'lucide-react';
+import { ChevronRight, ChevronDown, Trash2, FolderPlus, Pencil, Check } from 'lucide-react';
 
 interface Props {
     onTagClick: (tag: string) => void;
@@ -428,11 +428,6 @@ function SortableGroupSection({ id, title, children, onDelete, onRename, collaps
     return (
         <div ref={setNodeRef} style={style}>
             <div style={styles.sectionHeader}>
-                {/* Drag Handle */}
-                <div {...attributes} {...listeners} style={{cursor: 'grab', marginRight: 8, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center'}}>
-                    <GripVertical size={14} />
-                </div>
-                
                 <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} >
                     <div onClick={onToggle} style={{display:'flex', alignItems:'center'}}>
                         {collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>}
@@ -460,7 +455,9 @@ function SortableGroupSection({ id, title, children, onDelete, onRename, collaps
                              </button>
                         </div>
                     ) : (
-                        <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)'}}>{title}</span>
+                        <div {...attributes} {...listeners} style={{flex: 1, cursor: 'grab', touchAction: 'none'}}>
+                            <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)'}}>{title}</span>
+                        </div>
                     )}
                 </div>
                 
