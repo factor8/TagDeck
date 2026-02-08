@@ -6,7 +6,7 @@ export function BpmCounter() {
     const [bpm, setBpm] = useState<number | null>(null);
     const [showNumbers, setShowNumbers] = useState(false);
     const [isDull, setIsDull] = useState(false);
-    const [isButtonDull, setIsButtonDull] = useState(false);
+    const [isButtonDull, setIsButtonDull] = useState(true);
     
     const idleTimeoutRef = useRef<number | null>(null);
     const dullTimeoutRef = useRef<number | null>(null);

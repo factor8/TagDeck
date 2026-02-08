@@ -325,7 +325,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     <span 
                         title={isMultiSelect ? `${selectedTrackIds?.size} Files Selected` : `${track.artist} - ${track.title}`}
                         style={{ 
-                            fontSize: '12px', 
+                            fontSize: '14px', 
                             color: 'var(--accent-color)', 
                             fontWeight: 600,
                             whiteSpace: 'nowrap', 

@@ -349,6 +349,23 @@ function App() {
         
         {/* Search Bar */}
         <div style={{ flex: 1, maxWidth: '700px', margin: '0 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+                onClick={() => setIsSearchHelpOpen(!isSearchHelpOpen)}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}
+                title="Search Syntax Help"
+            >
+                <Info size={18} />
+            </button>
+
             <div style={{ position: 'relative', flex: 1 }}>
                 <div style={{ 
                     position: 'absolute', 
@@ -404,23 +421,6 @@ function App() {
             </div>
             
             <BpmCounter />
-
-            <button
-                onClick={() => setIsSearchHelpOpen(!isSearchHelpOpen)}
-                onMouseDown={(e) => e.stopPropagation()}
-                style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-secondary)',
-                    cursor: 'pointer',
-                    padding: '4px',
-                    display: 'flex',
-                    alignItems: 'center'
-                }}
-                title="Search Syntax Help"
-            >
-                <Info size={18} />
-            </button>
         </div>
         
         <SearchHelpPanel 
