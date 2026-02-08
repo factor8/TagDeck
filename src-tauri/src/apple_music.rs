@@ -80,11 +80,21 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                        set tRating to rating of t
                        set tBpm to bpm of t
                        
-                       -- Handle Location safely (might be missing)
+                       -- Handle Location safely
+                       -- NOTE: `use framework "Foundation"` breaks `POSIX path of` on file refs.
+                       -- We must coerce to alias first, or use NSURL as a fallback.
+                       set tLoc to ""
                        try
-                           set tLoc to POSIX path of (location of t)
+                           set tLoc to POSIX path of (location of t as alias)
                        on error
-                           set tLoc to ""
+                           try
+                               -- Fallback: use NSURL via ObjC bridge
+                               set fileRef to location of t
+                               set fileURL to current application's NSURL's fileURLWithPath:(POSIX path of (fileRef as text))
+                               set tLoc to (fileURL's |path|()) as text
+                           on error
+                               set tLoc to ""
+                           end try
                        end try
                        
                        set entry to {{ |id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc }}
@@ -122,18 +132,10 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
         
         let as_tracks: Vec<JxaTrack> = serde_json::from_str(&stdout)?;
 
-        let tracks: Vec<Track> = as_tracks.into_iter().filter_map(|jt| {
-            if jt.location.is_none() || jt.location.as_deref() == Some("") {
-                return None;
-            }
-            let path = jt.location.unwrap();
+        let tracks: Vec<Track> = as_tracks.into_iter().map(|jt| {
+            let path = jt.location.unwrap_or_default();
             
-            // Note: Determining timestamps from localized string is hard, defaulting to 0 for now.
-            // In a future update we should make AS return unix timestamps directly.
-            let mod_time = 0;
-            let added_time = 0;
-
-            Some(Track {
+            Track {
                 id: 0, 
                 persistent_id: jt.id,
                 file_path: path,
@@ -146,12 +148,12 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                 format: jt.kind,
                 size_bytes: jt.size,
                 bit_rate: jt.bit_rate,
-                modified_date: mod_time,
+                modified_date: 0,
                 rating: jt.rating,
-                date_added: added_time,
+                date_added: 0,
                 bpm: jt.bpm,
                 missing: false,
-            })
+            }
         }).collect();
 
         return Ok(tracks);
@@ -304,6 +306,79 @@ pub fn batch_update_track_comments(updates: Vec<(String, String)>) -> Result<()>
     }
     
     Ok(())
+}
+
+/// Lightweight struct for snapshot-based diffing of fields that Music.app
+/// does NOT include in `modification date` (e.g. rating, BPM).
+#[derive(Debug, Deserialize)]
+pub struct SnapshotEntry {
+    pub persistent_id: String,
+    pub rating: i64,
+    pub bpm: i64,
+}
+
+/// Fetches persistent_id, rating, and BPM for ALL tracks from Music.app
+/// using efficient batch property access (parallel list fetching).
+/// Returns ~20k entries in ~2 seconds for large libraries.
+pub fn get_snapshot_fields() -> Result<Vec<SnapshotEntry>> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+            use framework "Foundation"
+            use scripting additions
+
+            tell application "Music"
+                set allIds to persistent ID of every track
+                set allRatings to rating of every track
+                set allBpms to bpm of every track
+            end tell
+
+            -- Build a single JSON object with parallel arrays (instant serialization)
+            set ca to current application
+            set payload to {|ids|:allIds, |ratings|:allRatings, |bpms|:allBpms}
+            set jsonData to ca's NSJSONSerialization's dataWithJSONObject:payload options:0 |error|:missing value
+            set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+            return jsonString
+        "#;
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("AppleScript Snapshot Fetch Failed: {}", err));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        #[derive(Deserialize)]
+        struct ParallelArrays {
+            ids: Vec<String>,
+            ratings: Vec<i64>,
+            bpms: Vec<i64>,
+        }
+
+        let arrays: ParallelArrays = serde_json::from_str(&stdout)?;
+
+        let entries: Vec<SnapshotEntry> = arrays.ids.into_iter()
+            .zip(arrays.ratings.into_iter())
+            .zip(arrays.bpms.into_iter())
+            .map(|((id, rating), bpm)| SnapshotEntry {
+                persistent_id: id,
+                rating,
+                bpm,
+            })
+            .collect();
+
+        return Ok(entries);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(vec![])
+    }
 }
 
 /// Helper to "touch" a file, updating its modification time.

@@ -87,6 +87,34 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Returns a HashMap of persistent_id -> (rating, bpm) for all tracks in the DB.
+    /// Used for efficient snapshot-based diffing against Music.app.
+    pub fn get_rating_bpm_snapshot(&self) -> Result<std::collections::HashMap<String, (i64, i64)>> {
+        let mut stmt = self.conn.prepare("SELECT persistent_id, rating, bpm FROM tracks")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (pid, rating, bpm) = row?;
+            map.insert(pid, (rating, bpm));
+        }
+        Ok(map)
+    }
+
+    /// Updates only the rating and BPM for a track identified by persistent_id.
+    pub fn update_rating_bpm(&self, persistent_id: &str, rating: i64, bpm: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET rating = ?1, bpm = ?2 WHERE persistent_id = ?3",
+            params![rating, bpm, persistent_id],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_track(&self, track: &crate::models::Track) -> Result<()> {
         self.conn.execute(
             "INSERT INTO tracks (
@@ -95,7 +123,7 @@ impl Database {
                 size_bytes, bit_rate, modified_date, rating, date_added, bpm
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(persistent_id) DO UPDATE SET
-                file_path=excluded.file_path,
+                file_path=CASE WHEN excluded.file_path = '' THEN tracks.file_path ELSE excluded.file_path END,
                 artist=excluded.artist,
                 title=excluded.title,
                 album=excluded.album,
@@ -105,9 +133,9 @@ impl Database {
                 format=excluded.format,
                 size_bytes=excluded.size_bytes,
                 bit_rate=excluded.bit_rate,
-                modified_date=excluded.modified_date,
+                modified_date=CASE WHEN excluded.modified_date = 0 THEN tracks.modified_date ELSE excluded.modified_date END,
                 rating=excluded.rating,
-                date_added=excluded.date_added,
+                date_added=CASE WHEN excluded.date_added = 0 THEN tracks.date_added ELSE excluded.date_added END,
                 bpm=excluded.bpm
             ",
             params![
