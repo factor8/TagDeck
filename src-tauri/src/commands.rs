@@ -4,11 +4,27 @@ use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
 use crate::apple_music::{update_track_comment, batch_update_track_comments, touch_file, add_track_to_playlist};
 use crate::models::Track;
+use crate::undo::{UndoStack, Action, TrackState, TrackRef};
 use std::sync::Mutex;
 use tauri::{State, Manager};
 
 pub struct AppState {
     pub db: Mutex<Database>,
+    pub undo_stack: Mutex<UndoStack>,
+}
+
+#[tauri::command]
+pub async fn undo(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let mut undo_stack = state.undo_stack.lock().map_err(|_| "Failed to lock undo stack")?;
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    undo_stack.undo(&db).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn redo(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let mut undo_stack = state.undo_stack.lock().map_err(|_| "Failed to lock undo stack")?;
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    undo_stack.redo(&db).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -133,6 +149,18 @@ pub async fn write_tags(
     let mut track = db.get_track(id).map_err(|e| e.to_string())?
         .ok_or("Track not found")?;
 
+    // Prepare Undo
+    let old_comment = track.comment_raw.clone().unwrap_or_default();
+    let undo_action = Action::UpdateTrackComments { 
+        tracks: vec![TrackState {
+            id: track.id,
+            persistent_id: track.persistent_id.clone(),
+            file_path: track.file_path.clone(),
+            old_comment: old_comment.clone(),
+            new_comment: new_tags.clone(),
+        }]
+    };
+
     // 2. Write to File
     write_tags_to_file(&track.file_path, &new_tags).map_err(|e| e.to_string())?;
 
@@ -149,6 +177,12 @@ pub async fn write_tags(
     // 3. Update DB
     track.comment_raw = Some(new_tags);
     db.update_track(&track).map_err(|e| e.to_string())?;
+
+    // 4. Push Undo
+    drop(db); // Drop DB lock before locking Undo Stack to prevent deadlocks (though different mutexes, good practice)
+    if let Ok(mut stack) = state.undo_stack.lock() {
+        stack.push(undo_action);
+    }
 
     Ok(())
 }
@@ -175,9 +209,12 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
     drop(db_mutex); 
 
     let mut apple_music_updates = Vec::new();
+    let mut undo_track_states = Vec::new();
 
     for mut track in tracks_to_update {
         let current_comment = track.comment_raw.clone().unwrap_or_default();
+        let old_comment_val = current_comment.clone(); // Capture for undo
+
         let (user_comment, tag_block) = if let Some(idx) = current_comment.find(" && ") {
             (&current_comment[..idx], &current_comment[idx + 4..])
         } else {
@@ -205,6 +242,15 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
             } else {
                 user_comment.to_string()
             };
+
+            // Prepare Undo State
+            undo_track_states.push(TrackState {
+                id: track.id,
+                persistent_id: track.persistent_id.clone(),
+                file_path: track.file_path.clone(),
+                old_comment: old_comment_val,
+                new_comment: new_full_comment.clone(),
+            });
 
             // WRITE
             // 1. File
@@ -237,6 +283,13 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
         }
     }
 
+    // Push Undo Action
+    if !undo_track_states.is_empty() {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::UpdateTrackComments { tracks: undo_track_states });
+        }
+    }
+
     Ok(())
 }
 
@@ -259,10 +312,13 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
     } // Drop lock
 
     let mut apple_music_updates = Vec::new();
+    let mut undo_track_states = Vec::new();
 
     for mut track in tracks_to_update {
         // Parse Comments
         let current_comment = track.comment_raw.clone().unwrap_or_default();
+        let old_comment_val = current_comment.clone();
+
         let (user_comment, tag_block) = if let Some(idx) = current_comment.find(" && ") {
             (&current_comment[..idx], &current_comment[idx + 4..])
         } else {
@@ -292,6 +348,15 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                 user_comment.to_string()
             };
 
+            // Prepare Undo State
+            undo_track_states.push(TrackState {
+                id: track.id,
+                persistent_id: track.persistent_id.clone(),
+                file_path: track.file_path.clone(),
+                old_comment: old_comment_val,
+                new_comment: new_full_comment.clone(),
+            });
+
             // WRITE
             if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
                 println!("Failed to write file {}: {}", track.id, e);
@@ -319,6 +384,13 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
     if !apple_music_updates.is_empty() {
         if let Err(e) = batch_update_track_comments(apple_music_updates) {
              println!("Batch update to Music app failed: {}", e);
+        }
+    }
+
+    // Push Undo Action
+    if !undo_track_states.is_empty() {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::UpdateTrackComments { tracks: undo_track_states });
         }
     }
 
@@ -379,35 +451,55 @@ pub async fn add_to_playlist(
     playlist_id: i64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    
-    let playlist_pid = db.get_playlist_persistent_id(playlist_id)
-        .map_err(|e| format!("Failed to get playlist: {}", e))?;
+    // 1. Get IDs
+    let (playlist_pid, track_data) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let pid = db.get_playlist_persistent_id(playlist_id)
+            .map_err(|e| format!("Failed to get playlist: {}", e))?;
 
-    let mut track_pids = Vec::new();
-    // Keep track valid IDs to add to local DB
-    let mut valid_track_ids = Vec::new();
-
-    for tid in track_ids {
-        if let Ok(pid) = db.get_track_persistent_id(tid) {
-            track_pids.push(pid);
-            valid_track_ids.push(tid);
+        let mut data = Vec::new();
+        for tid in &track_ids {
+            if let Ok(pid) = db.get_track_persistent_id(*tid) {
+                data.push((*tid, pid));
+            }
         }
-    }
+        (pid, data)
+    };
+
+    let valid_track_ids: Vec<i64> = track_data.iter().map(|(t, _)| *t).collect();
     
-    // Apple Music Sync
-    for pid in &track_pids {
+    // 2. Apple Music Sync
+    for (_, pid) in &track_data {
         if let Err(e) = add_track_to_playlist(pid, &playlist_pid) {
              let msg = format!("Failed to add track {} to playlist: {}", pid, e);
              app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
         }
     }
 
-    // Local DB Sync
-    for tid in valid_track_ids {
-        if let Err(e) = db.add_track_to_playlist_db(playlist_id, tid) {
-             let msg = format!("Failed to update local playlist: {}", e);
-             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+    // 3. Local DB Sync
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        for tid in &valid_track_ids {
+            if let Err(e) = db.add_track_to_playlist_db(playlist_id, *tid) {
+                 let msg = format!("Failed to update local playlist: {}", e);
+                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            }
+        }
+    }
+
+    // 4. Push Undo Action
+    if !track_data.is_empty() {
+        let undo_tracks: Vec<TrackRef> = track_data.iter().map(|(id, pid)| TrackRef {
+            id: *id,
+            persistent_id: pid.clone(),
+        }).collect();
+
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::AddToPlaylist {
+                playlist_id,
+                playlist_persistent_id: playlist_pid.clone(),
+                tracks: undo_tracks,
+            });
         }
     }
 

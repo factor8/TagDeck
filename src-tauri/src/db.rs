@@ -328,6 +328,14 @@ impl Database {
         Ok(tracks)
     }
 
+    pub fn remove_track_from_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist_id, track_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_track_path(&self, id: i64) -> Result<String> {
         self.conn.query_row(
             "SELECT file_path FROM tracks WHERE id = ?1",

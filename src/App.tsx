@@ -147,7 +147,7 @@ function App() {
             }
         }
 
-        // Cmd+0 or Cmd+1 -> Select All Tracks (playlistId = null)
+        // Cmd+0 -> Select All Tracks (playlistId = null)
         if ((e.metaKey || e.ctrlKey) && e.key === '0') {
              e.preventDefault();
              setSelectedPlaylistId(null);
@@ -158,12 +158,49 @@ function App() {
             e.preventDefault();
             setIsSettingsOpen(prev => !prev);
         }
+
+        // Undo / Redo
+        // If focusing input, let browser handle native text undo
+        const target = e.target as HTMLElement;
+        const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
         
+        if (!isInput && (e.metaKey || e.ctrlKey)) {
+             if (e.key.toLowerCase() === 'z') {
+                 if (e.shiftKey) {
+                     // Redo
+                     e.preventDefault();
+                     invoke('redo')
+                        .then(() => {
+                            setRefreshTrigger(p => p + 1);
+                            showSuccess("Redone");
+                        })
+                        .catch(err => console.error(err));
+                 } else {
+                     // Undo
+                     e.preventDefault();
+                     invoke('undo')
+                        .then(() => {
+                            setRefreshTrigger(p => p + 1);
+                            showSuccess("Undone");
+                        })
+                        .catch(err => console.error(err));
+                 }
+             } else if (e.key.toLowerCase() === 'y' && !navigator.platform.toUpperCase().includes('MAC')) {
+                 // Windows/Linux Redo (Ctrl+Y)
+                 e.preventDefault();
+                 invoke('redo')
+                    .then(() => {
+                        setRefreshTrigger(p => p + 1);
+                        showSuccess("Redone");
+                    })
+                    .catch(err => console.error(err));
+             }
+        }
     };
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, []);
+  }, [showSuccess, showError]);
 
   useEffect(() => {
     const handleLogsSnapshot = (e: KeyboardEvent) => {

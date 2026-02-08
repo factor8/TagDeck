@@ -7,9 +7,11 @@ pub mod metadata;
 pub mod logging;
 pub mod models;
 pub mod toggle_logs;
+pub mod undo;
 
 use commands::AppState;
 use db::Database;
+use undo::UndoStack;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -93,7 +95,10 @@ pub fn run() {
 
             let db = Database::new(db_path).expect("failed to initialize database");
 
-            app.manage(AppState { db: Mutex::new(db) });
+            app.manage(AppState { 
+                db: Mutex::new(db),
+                undo_stack: Mutex::new(UndoStack::new()) 
+            });
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())
@@ -122,7 +127,9 @@ pub fn run() {
             commands::delete_tag_group,
             commands::set_tag_group,
             commands::reorder_tag_groups,
-            commands::get_all_tags
+            commands::get_all_tags,
+            commands::undo,
+            commands::redo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
