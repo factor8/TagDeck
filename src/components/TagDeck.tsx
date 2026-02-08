@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { Tag, TagGroup } from '../types';
-import { ChevronRight, ChevronDown, Trash2, FolderPlus } from 'lucide-react';
+import { ChevronRight, ChevronDown, Trash2, FolderPlus, Pencil, Check } from 'lucide-react';
 
 interface Props {
     onTagClick: (tag: string) => void;
@@ -68,6 +68,16 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
             loadData();
         } catch (e) {
             console.error('Failed to delete group:', e);
+        }
+    };
+
+    const handleRenameGroup = async (id: number, newName: string) => {
+        if (!newName.trim()) return;
+        try {
+            await invoke('update_tag_group', { id, name: newName });
+            loadData();
+        } catch (e) {
+            console.error('Failed to rename group:', e);
         }
     };
 
@@ -202,6 +212,7 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                             id={`group-${group.id}`}
                             title={group.name}
                             onDelete={() => handleDeleteGroup(group.id)}
+                            onRename={(newName: string) => handleRenameGroup(group.id, newName)}
                             collapsed={collapsedGroups.has(group.id)}
                             onToggle={() => toggleGroupCollapse(group.id)}
                         >
@@ -231,8 +242,37 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
 
 // Subcomponents
 
-function DroppableSection({ id, title, children, isUncategorized, onDelete, collapsed, onToggle }: any) {
+function DroppableSection({ id, title, children, isUncategorized, onDelete, onRename, collapsed, onToggle }: any) {
     const { setNodeRef, isOver } = useDroppable({ id });
+    const [isEditing, setIsEditing] = useState(false);
+    const [editName, setEditName] = useState(title);
+
+    // Update editName if title prop changes
+    useEffect(() => {
+        setEditName(title);
+    }, [title]);
+
+    const handleSave = () => {
+        if (editName !== title) {
+            onRename(editName);
+        }
+        setIsEditing(false);
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        // Stop propagation consistently to prevent global shortcuts like Play/Pause
+        e.stopPropagation();
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleSave();
+        }
+        if (e.key === 'Escape') {
+             e.preventDefault();
+             setEditName(title);
+             setIsEditing(false);
+        }
+    };
     
     return (
         <div 
@@ -245,16 +285,50 @@ function DroppableSection({ id, title, children, isUncategorized, onDelete, coll
             }}
         >
             <div style={styles.sectionHeader}>
-                <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} onClick={onToggle}>
-                    {!isUncategorized && (
-                        collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>
-                    )}
-                    <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)'}}>{title}</span>
+                <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} >
+                    <div onClick={onToggle} style={{display:'flex', alignItems:'center'}}>
+                        {!isUncategorized && (
+                            collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>
+                        )}
+                    </div>
+                    {isEditing ? (
+                        <div style={{display:'flex', alignItems: 'center', width: '100%'}}>
+                             <input 
+                                value={editName} 
+                                onChange={e => setEditName(e.target.value)}
+                                onBlur={handleSave}
+                                onKeyDown={handleKeyDown}
+                                autoFocus
+                                onClick={(e) => e.stopPropagation()} 
+                                style={styles.editInput}
+                             />
+                             <button 
+                                onMouseDown={(e) => {
+                                    // Use onMouseDown to prevent blur from firing first on the input
+                                    e.preventDefault(); 
+                                    handleSave();
+                                }}
+                                style={{...styles.iconBtn, marginLeft: 5, color: 'var(--accent-color)'}} 
+                                title="Save"
+                             >
+                                <Check size={14} />
+                             </button>
+                         </div>
+                     ) : (
+                         <span onClick={onToggle} style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)'}}>{title}</span>
+                     )}
                 </div>
-                {!isUncategorized && onDelete && (
-                    <button onClick={onDelete} style={{...styles.iconBtn, opacity: 0.5}} className="delete-group-btn">
-                        <Trash2 size={12} />
-                    </button>
+                {!isUncategorized && !isEditing && (
+                    <div style={{display:'flex', gap: 5}}>
+                         <button onClick={() => setIsEditing(true)} style={styles.iconBtn} title="Rename Group">
+                            <Pencil size={12} />
+                         </button>
+                        {onDelete && (
+                            <button onClick={onDelete} style={{...styles.iconBtn, opacity: 0.5}} className="delete-group-btn" title="Delete Group">
+                                <Trash2 size={12} />
+                            </button>
+                        )}
+                    </div>
                 )}
             </div>
             
@@ -383,5 +457,16 @@ const styles: Record<string, React.CSSProperties> = {
         padding: '0 10px',
         cursor: 'pointer',
         fontSize: '12px',
-    }
+    },
+    editInput: {
+        background: 'var(--bg-primary)',
+        border: '1px solid var(--accent-color)',
+        borderRadius: '2px',
+        color: '#fff',
+        fontSize: '13px',
+        fontWeight: 600,
+        padding: '2px 5px',
+        width: '100%',
+        marginLeft: '5px',
+    },
 };
