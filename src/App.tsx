@@ -8,7 +8,6 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { SearchHelpPanel } from './components/SearchHelpPanel';
 import { AppLogo } from './components/AppLogo';
 import Sidebar from './components/Sidebar';
-import { LibraryImporter } from './components/LibraryImporter';
 import { TrackList, TrackListHandle } from './components/TrackList';
 import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
@@ -209,81 +208,84 @@ function App() {
         </div>
         
         {/* Search Bar */}
-        <div style={{ flex: 1, maxWidth: '500px', margin: '0 20px', position: 'relative' }}>
-            <div style={{ 
-                position: 'absolute', 
-                left: '10px', 
-                top: '50%', 
-                transform: 'translateY(-50%)',
-                color: 'var(--text-secondary)',
-                pointerEvents: 'none'
-            }}>
-                <Search size={16} />
-            </div>
-            <input 
-                ref={searchInputRef}
-                type="text" 
-                placeholder="Search library..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                    width: '100%',
-                    padding: '8px 30px 8px 36px',
-                    borderRadius: '6px',
-                    border: '1px solid var(--border-color)',
-                    background: 'var(--bg-tertiary)',
-                    color: 'var(--text-primary)',
-                    fontSize: '13px',
-                    outline: 'none'
-                }}
-                onFocus={(e) => e.target.style.borderColor = 'var(--accent-color)'}
-                onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
-            />
-            {searchTerm && (
-                <button
-                    onClick={() => setSearchTerm('')}
+        <div style={{ flex: 1, maxWidth: '500px', margin: '0 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+                <div style={{ 
+                    position: 'absolute', 
+                    left: '10px', 
+                    top: '50%', 
+                    transform: 'translateY(-50%)',
+                    color: 'var(--text-secondary)',
+                    pointerEvents: 'none'
+                }}>
+                    <Search size={16} />
+                </div>
+                <input 
+                    ref={searchInputRef}
+                    type="text" 
+                    placeholder="Search library..." 
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
                     style={{
-                        position: 'absolute',
-                        right: '8px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        background: 'transparent',
-                        border: 'none',
-                        color: 'var(--text-secondary)',
-                        cursor: 'pointer',
-                        padding: '2px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
+                        width: '100%',
+                        padding: '8px 30px 8px 36px',
+                        borderRadius: '6px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--bg-tertiary)',
+                        color: 'var(--text-primary)',
+                        fontSize: '13px',
+                        outline: 'none'
                     }}
-                    title="Clear search"
-                >
-                    <X size={14} />
-                </button>
-            )}
+                    onFocus={(e) => e.target.style.borderColor = 'var(--accent-color)'}
+                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
+                />
+                {searchTerm && (
+                    <button
+                        onClick={() => setSearchTerm('')}
+                        style={{
+                            position: 'absolute',
+                            right: '8px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            padding: '2px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                        title="Clear search"
+                    >
+                        <X size={14} />
+                    </button>
+                )}
+            </div>
+
+            <button
+                onClick={() => setIsSearchHelpOpen(!isSearchHelpOpen)}
+                onMouseDown={(e) => e.stopPropagation()}
+                style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}
+                title="Search Syntax Help"
+            >
+                <Info size={18} />
+            </button>
         </div>
 
-        <button
-            onClick={() => setIsSearchHelpOpen(!isSearchHelpOpen)}
-            onMouseDown={(e) => e.stopPropagation()}
-            style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-secondary)',
-                cursor: 'pointer',
-                padding: '4px',
-                display: 'flex',
-                alignItems: 'center',
-                marginRight: '10px'
-            }}
-            title="Search Syntax Help"
-        >
-            <Info size={18} />
-        </button>
         <SearchHelpPanel 
             isOpen={isSearchHelpOpen} 
             onClose={() => setIsSearchHelpOpen(false)} 
         />
+
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
              {/* Toggle Buttons */}
@@ -318,8 +320,6 @@ function App() {
                 {isRightCollapsed ? <PanelRightOpen size={20} /> : <PanelRightClose size={20} />}
             </button>
             
-          <LibraryImporter onImportComplete={handleRefresh} />
-            
             <button 
                 onClick={() => setIsSettingsOpen(!isSettingsOpen)}
                 onMouseDown={(e) => e.stopPropagation()}
@@ -343,6 +343,7 @@ function App() {
                 onThemeChange={setTheme}
                 currentAccent={accentColor}
                 onAccentChange={setAccentColor}
+                onRefresh={handleRefresh}
             />
         </div>
       </header>

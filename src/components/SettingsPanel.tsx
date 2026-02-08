@@ -1,5 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check } from 'lucide-react';
+import { X, Check, Loader2 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 
 interface SettingsPanelProps {
     isOpen: boolean;
@@ -8,6 +10,7 @@ interface SettingsPanelProps {
     onThemeChange: (theme: string) => void;
     currentAccent: string;
     onAccentChange: (color: string) => void;
+    onRefresh: () => void;
 }
 
 const THEMES = [
@@ -31,10 +34,13 @@ export function SettingsPanel({
     currentTheme, 
     onThemeChange, 
     currentAccent, 
-    onAccentChange 
+    onAccentChange,
+    onRefresh 
 }: SettingsPanelProps) {
     const panelRef = useRef<HTMLDivElement>(null);
     const [syncInfo, setSyncInfo] = useState<{ date: string; count: number; type: string } | null>(null);
+    const [importing, setImporting] = useState(false);
+    const [status, setStatus] = useState('');
 
     const loadSyncInfo = () => {
         const saved = localStorage.getItem('app_last_sync_info');
@@ -78,6 +84,72 @@ export function SettingsPanel({
             document.removeEventListener("mousedown", handleClickOutside);
         };
     }, [isOpen, onClose]);
+
+    const handleXMLImport = async () => {
+        try {
+            const selected = await open({
+                multiple: false,
+                filters: [{
+                    name: 'iTunes Library',
+                    extensions: ['xml']
+                }]
+            });
+
+            if (selected && typeof selected === 'string') {
+                setImporting(true);
+                setStatus('');
+                const count = await invoke('import_library', { xmlPath: selected });
+                setStatus(`Imported ${count} tracks!`);
+                
+                // Store sync info
+                const info = {
+                    date: new Date().toISOString(),
+                    count: count,
+                    type: 'xml'
+                };
+                localStorage.setItem('app_last_sync_info', JSON.stringify(info));
+                window.dispatchEvent(new Event('sync-info-updated'));
+                setSyncInfo(info);
+                
+                onRefresh();
+            }
+        } catch (err: any) {
+            console.error(err);
+            const msg = `Error: ${err.toString()}`;
+            setStatus(msg);
+            invoke('log_error', { message: msg }).catch(console.error);
+        } finally {
+            setImporting(false);
+        }
+    };
+
+    const handleMusicAppImport = async () => {
+        setImporting(true);
+        setStatus('');
+        try {
+            const count = await invoke('import_from_music_app');
+            setStatus(`Synced ${count} tracks!`);
+            
+            // Store sync info
+            const info = {
+                date: new Date().toISOString(),
+                count: count,
+                type: 'music_app'
+            };
+            localStorage.setItem('app_last_sync_info', JSON.stringify(info));
+            window.dispatchEvent(new Event('sync-info-updated'));
+            setSyncInfo(info);
+            
+            onRefresh();
+        } catch (err: any) {
+             console.error(err);
+             const msg = `Error: ${err.toString()}`;
+             setStatus(msg);
+             invoke('log_error', { message: msg }).catch(console.error);
+        } finally {
+            setImporting(false);
+        }
+    };
 
     if (!isOpen) return null;
 
@@ -131,6 +203,46 @@ export function SettingsPanel({
                 ) : (
                     <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No sync history found.</span>
                 )}
+                
+                <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <button 
+                        onClick={handleMusicAppImport} 
+                        disabled={importing} 
+                        className="btn btn-primary" 
+                        style={{ 
+                            fontSize: '13px', 
+                            padding: '6px 12px', 
+                            background: 'var(--accent-hover)',
+                            border: '1px solid var(--accent-color)',
+                            color: 'white',
+                            borderRadius: '6px',
+                            cursor: importing ? 'not-allowed' : 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px'
+                        }}
+                    >
+                        {importing ? <Loader2 size={14} className="spin" /> : null}
+                        {importing ? 'Syncing...' : 'Sync iTunes'}
+                    </button>
+                    <button 
+                        onClick={handleXMLImport} 
+                        disabled={importing} 
+                        className="btn" 
+                        style={{ 
+                            fontSize: '13px', 
+                            padding: '6px 12px', 
+                            background: 'var(--bg-tertiary)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--text-primary)',
+                            borderRadius: '6px',
+                            cursor: importing ? 'not-allowed' : 'pointer'
+                        }}
+                    >
+                        Import XML
+                    </button>
+                </div>
+                {status && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '8px' }}>{status}</div>}
             </div>
 
             <div style={{ marginBottom: '28px' }}>
