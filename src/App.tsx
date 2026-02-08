@@ -624,6 +624,16 @@ function App() {
         onTrackError={handleRefresh}
         accentColor={accentColor}
         onArtworkClick={() => setIsSidebarArtworkVisible(prev => !prev)}
+        onTrackClick={() => {
+            if (playingTrack) {
+                const newSet = new Set([playingTrack.id]);
+                const raw = playingTrack.comment_raw || "";
+                const tags = raw.indexOf(" && ") !== -1 
+                    ? raw.substring(raw.indexOf(" && ") + 4).split(';').map(t => t.trim()).filter(Boolean) 
+                    : [];
+                handleSelectionChange(newSet, playingTrack.id, playingTrack, tags);
+            }
+        }}
         onPlayStateChange={setIsPlaying}
       />
     </div>

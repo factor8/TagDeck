@@ -16,10 +16,11 @@ interface Props {
     onTrackError?: () => void;
     accentColor?: string;
     onArtworkClick?: () => void;
+    onTrackClick?: () => void;
     onPlayStateChange?: (isPlaying: boolean) => void;
 }
 
-export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
+export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
     const prevTrackIdRef = useRef<number | null>(null);
@@ -399,10 +400,34 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 </div>
                 
                 <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div 
+                        onClick={track ? onTrackClick : undefined}
+                        style={{ 
+                            fontWeight: 600, 
+                            color: 'var(--text-primary)', 
+                            whiteSpace: 'nowrap', 
+                            overflow: 'hidden', 
+                            textOverflow: 'ellipsis',
+                            cursor: track ? 'pointer' : 'default'
+                        }}
+                        onMouseEnter={e => track && (e.currentTarget.style.textDecoration = 'underline')}
+                        onMouseLeave={e => track && (e.currentTarget.style.textDecoration = 'none')}
+                    >
                         {track ? track.title : 'Select a track'}
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div 
+                        onClick={track ? onTrackClick : undefined}
+                        style={{ 
+                            fontSize: '12px', 
+                            color: 'var(--text-secondary)', 
+                            whiteSpace: 'nowrap', 
+                            overflow: 'hidden', 
+                            textOverflow: 'ellipsis',
+                            cursor: track ? 'pointer' : 'default'
+                        }}
+                        onMouseEnter={e => track && (e.currentTarget.style.textDecoration = 'underline')}
+                        onMouseLeave={e => track && (e.currentTarget.style.textDecoration = 'none')}
+                    >
                         {track ? track.artist : 'to start playback'}
                     </div>
                     {track && (
