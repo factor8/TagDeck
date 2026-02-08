@@ -13,6 +13,7 @@ import { TrackList, TrackListHandle } from './components/TrackList';
 import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
+import { BpmCounter } from './components/BpmCounter';
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 
@@ -325,7 +326,7 @@ function App() {
         </div>
         
         {/* Search Bar */}
-        <div style={{ flex: 1, maxWidth: '500px', margin: '0 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ flex: 1, maxWidth: '700px', margin: '0 20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <div style={{ position: 'relative', flex: 1 }}>
                 <div style={{ 
                     position: 'absolute', 
@@ -379,6 +380,8 @@ function App() {
                     </button>
                 )}
             </div>
+            
+            <BpmCounter />
 
             <button
                 onClick={() => setIsSearchHelpOpen(!isSearchHelpOpen)}
@@ -397,7 +400,7 @@ function App() {
                 <Info size={18} />
             </button>
         </div>
-
+        
         <SearchHelpPanel 
             isOpen={isSearchHelpOpen} 
             onClose={() => setIsSearchHelpOpen(false)} 
