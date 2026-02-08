@@ -262,6 +262,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
 export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
+    const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
     const [loading, setLoading] = useState(false);
     
     // Load playlist filter
@@ -269,22 +270,31 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         async function loadPlaylistFilter() {
             if (playlistId === null) {
                 setAllowedTrackIds(null);
+                setPlaylistTrackOrder(null);
                 return;
             }
             try {
                 // Ensure correct parameter mapping
                 const ids = await invoke<number[]>('get_playlist_track_ids', { playlistId });
                 setAllowedTrackIds(new Set(ids));
+                setPlaylistTrackOrder(ids);
             } catch (e) {
                 console.error("Failed to load playlist tracks", e);
                 invoke('log_error', { message: `Failed to load playlist tracks: ${e}` }).catch(console.error);
                 setAllowedTrackIds(new Set());
+                setPlaylistTrackOrder([]);
             }
         }
         loadPlaylistFilter();
     }, [playlistId]);
 
 
+
+    // Map for O(1) position lookup
+    const playlistOrderMap = useMemo(() => {
+        if (!playlistTrackOrder) return null;
+        return new Map(playlistTrackOrder.map((id, index) => [id, index]));
+    }, [playlistTrackOrder]);
 
     // Filter tracks based on search term and playlist
     const filteredTracks = useMemo(() => {
@@ -293,6 +303,15 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         // Filter by playlist
         if (allowedTrackIds !== null) {
             result = result.filter(t => allowedTrackIds.has(t.id));
+            
+            // Sort by playlist order if available
+            if (playlistOrderMap) {
+               result.sort((a, b) => {
+                   const posA = playlistOrderMap.get(a.id) ?? Infinity;
+                   const posB = playlistOrderMap.get(b.id) ?? Infinity;
+                   return posA - posB;
+               });
+            }
         }
 
         if (!searchTerm) return result;
@@ -451,13 +470,27 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         bit_rate: false,
         date_added: false,
         bpm: false,
-        rating: true
+        rating: true,
+        position: true // Explicitly enable position
     }));
-    const [columnOrder, setColumnOrder] = useState<string[]>(() => loadState('table_order_v3', [
-        'artist', 'title', 'album', 'bpm', 'comment', 'tags', 
-        'rating', 'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'date_added', 'actions'
-    ]));
-    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing_v3', {}));
+    const [columnOrder, setColumnOrder] = useState<string[]>(() => {
+        const saved = loadState<string[]>('table_order_v3', []);
+        const defaultOrder = [
+            'position', 'artist', 'title', 'album', 'bpm', 'comment', 'tags', 
+            'rating', 'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'date_added', 'actions'
+        ];
+        
+        if (saved && saved.length > 0) {
+            if (!saved.includes('position')) {
+                return ['position', ...saved];
+            }
+            return saved;
+        }
+        return defaultOrder;
+    });
+    const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(() => loadState('table_sizing_v3', {
+        position: 40
+    }));
     
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -538,6 +571,25 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     const columnHelper = createColumnHelper<Track>();
 
     const columns = useMemo<ColumnDef<Track, any>[]>(() => [
+        columnHelper.accessor(
+            row => {
+                if (playlistOrderMap) {
+                    return playlistOrderMap.get(row.id) ?? Number.MAX_SAFE_INTEGER;
+                }
+                return row.id;
+            },
+            {
+            id: 'position',
+            header: '#',
+            cell: info => {
+                if (playlistOrderMap) {
+                    const val = info.getValue() as number;
+                    return val < Number.MAX_SAFE_INTEGER ? val + 1 : '';
+                }
+                return info.row.index + 1;
+            },
+            size: 40,
+        }),
         columnHelper.accessor('artist', {
             id: 'artist',
             header: 'Artist',
@@ -666,7 +718,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         columnHelper.display({
             id: 'actions',
             size: 40,
-            header: () => null,
+            header: () => <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><Folder size={16} /></div>,
             cell: ({ row }) => (
                 <div style={{ textAlign: 'center' }}>
                     <button
@@ -695,7 +747,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 </div>
             )
         })
-    ], [isMenuOpen, playingTrackId, isPlaying, handleRatingChange]);
+    ], [isMenuOpen, playingTrackId, isPlaying, handleRatingChange, playlistOrderMap]);
 
     const table = useReactTable({
         data: filteredTracks,
@@ -920,7 +972,9 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             Toggle Columns
                         </div>
                         {table.getAllLeafColumns().map(column => {
-                             if (column.id === 'actions') return null;
+                            const label = column.id === 'actions' ? 'File Link' 
+                                : (typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id);
+                            
                             return (
                                 <div key={column.id} className="column-menu-item" style={{
                                     padding: '6px 8px',
@@ -941,7 +995,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         style={{ cursor: 'pointer', pointerEvents: 'none' }}
                                     />
                                     <span style={{ textTransform: 'capitalize' }}>
-                                        {column.columnDef.header as string}
+                                        {label}
                                     </span>
                                 </div>
                             );

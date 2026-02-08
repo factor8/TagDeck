@@ -24,16 +24,15 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const autoPlayRef = useRef(autoPlay);
     const prevTrackIdRef = useRef<number | null>(null);
     const onPlayStateChangeRef = useRef(onPlayStateChange);
+    const onNextRef = useRef(onNext);
 
     // Keep refs up to date
     useEffect(() => {
         autoPlayRef.current = autoPlay;
-    }, [autoPlay]);
-
-    useEffect(() => {
         onPlayStateChangeRef.current = onPlayStateChange;
-    }, [onPlayStateChange]);
-    
+        onNextRef.current = onNext;
+    }, [autoPlay, onPlayStateChange, onNext]);
+
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -124,6 +123,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         ws.on('finish', () => {
             setIsPlaying(false);
             if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
+            if (onNextRef.current) onNextRef.current();
         });
         ws.on('ready', () => {
             console.log("WaveSurfer Ready. Duration:", ws.getDuration());
