@@ -15,6 +15,7 @@ use db::Database;
 use undo::UndoStack;
 
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
 
@@ -98,7 +99,8 @@ pub fn run() {
 
             app.manage(AppState { 
                 db: Mutex::new(db),
-                undo_stack: Mutex::new(UndoStack::new()) 
+                undo_stack: Mutex::new(UndoStack::new()),
+                is_syncing: AtomicBool::new(false), 
             });
 
             // Start Library Watcher

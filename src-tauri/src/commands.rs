@@ -8,11 +8,13 @@ use crate::apple_music::{
 use crate::models::{Track, Playlist};
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{State, Manager};
 
 pub struct AppState {
     pub db: Mutex<Database>,
     pub undo_stack: Mutex<UndoStack>,
+    pub is_syncing: AtomicBool,
 }
 
 #[tauri::command]
@@ -401,6 +403,20 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
 
 #[tauri::command]
 pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    // Acquire sync lock
+    if state.is_syncing.swap(true, Ordering::SeqCst) {
+        return Err("Sync already in progress".to_string());
+    }
+    
+    // Ensure lock is released even on error
+    struct SyncGuard<'a>(&'a AtomicBool);
+    impl<'a> Drop for SyncGuard<'a> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = SyncGuard(&state.is_syncing);
+
     println!("Importing from Music.app...");
 
     // 1. Fetch from Sidecar
@@ -443,6 +459,29 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
 #[tauri::command]
 pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppState>, since_timestamp: i64) -> Result<usize, String> {
     
+    // Check if full sync is running, but don't error out hard—just skip
+    if state.is_syncing.load(Ordering::SeqCst) {
+        println!("Sync skipped: Full sync in progress");
+        return Ok(0);
+    }
+    // We do NOT set the lock for real-time sync (unless we want to block full sync?)
+    // Actually, we should probably lock it too to prevent concurrent real-time syncs?
+    // User requested "realtime sync doesnt happen when the Full Sync is running".
+    // It's safer if they are mutually exclusive.
+    
+    if state.is_syncing.swap(true, Ordering::SeqCst) {
+        // Race condition caught
+        return Ok(0);
+    }
+
+    struct SyncGuard<'a>(&'a AtomicBool);
+    impl<'a> Drop for SyncGuard<'a> {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = SyncGuard(&state.is_syncing);
+
     let start_msg = format!("Syncing recent changes from Music.app since timestamp: {}", since_timestamp);
     println!("{}", start_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", &start_msg, &app);
