@@ -467,6 +467,15 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     useEffect(() => { localStorage.setItem('table_order_v3', JSON.stringify(columnOrder)); }, [columnOrder]);
     useEffect(() => { localStorage.setItem('table_sizing_v3', JSON.stringify(columnSizing)); }, [columnSizing]);
 
+    // Refs to hold latest selection props so we can use them in loadTracks
+    // without triggering it when they change.
+    const lastSelectedTrackIdRef = useRef(lastSelectedTrackId);
+    const selectedTrackIdsRef = useRef(selectedTrackIds);
+    useEffect(() => {
+        lastSelectedTrackIdRef.current = lastSelectedTrackId;
+        selectedTrackIdsRef.current = selectedTrackIds;
+    }, [lastSelectedTrackId, selectedTrackIds]);
+
     const loadTracks = useCallback(async () => {
         setLoading(true);
         try {
@@ -476,20 +485,23 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             // Update parent selection if we have an active selection
             // This ensures App.tsx (and TagEditor/MetadataViewer) get the FRESH track object
             // instead of holding onto a stale one from before the refresh.
-            if (lastSelectedTrackId && selectedTrackIds && selectedTrackIds.size > 0 && onSelectionChange) {
-                const freshPrimary = result.find(t => t.id === lastSelectedTrackId);
+            const currentLastId = lastSelectedTrackIdRef.current;
+            const currentIds = selectedTrackIdsRef.current;
+
+            if (currentLastId && currentIds && currentIds.size > 0 && onSelectionChange) {
+                const freshPrimary = result.find(t => t.id === currentLastId);
                 if (freshPrimary) {
                     // We only re-emit if single selection for simplicity/safety, 
                     // or we could re-calculate for multi-select.
                     // For now, let's fix the single-select edit case.
-                    if (selectedTrackIds.size === 1) {
+                    if (currentIds.size === 1) {
                         const raw = freshPrimary.comment_raw || "";
                         // Helper to parse tags matching App.tsx logic
                         const tags = raw.indexOf(" && ") !== -1 
                             ? raw.substring(raw.indexOf(" && ") + 4).split(';').map(t => t.trim()).filter(Boolean) 
                             : [];
                         
-                        onSelectionChange(selectedTrackIds, freshPrimary.id, freshPrimary, tags);
+                        onSelectionChange(currentIds, freshPrimary.id, freshPrimary, tags);
                     } else {
                         // For multi-select, we should ideally re-calc common tags, 
                         // but updating just the primary track reference is better than nothing.
@@ -504,11 +516,11 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         } finally {
             setLoading(false);
         }
-    }, [lastSelectedTrackId, selectedTrackIds, onSelectionChange]);
+    }, [onSelectionChange]); // Removed selection deps
 
     useEffect(() => {
         loadTracks();
-    }, [refreshTrigger, loadTracks]); // Added loadTracks to deps
+    }, [refreshTrigger, loadTracks]);
 
     const handleRatingChange = async (trackId: number, newRating: number) => {
         setTracks(prev => prev.map(t => 
