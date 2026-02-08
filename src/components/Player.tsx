@@ -7,6 +7,9 @@ import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, Rotate
 
 interface Props {
     track: Track | null;
+    playlistId?: number | null;
+    playlistName?: string;
+    onPlaylistClick?: () => void;
     onNext?: () => void;
     onPrev?: () => void;
     autoPlay?: boolean;
@@ -16,7 +19,7 @@ interface Props {
     onPlayStateChange?: (isPlaying: boolean) => void;
 }
 
-export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
+export function Player({ track, playlistId, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onPlayStateChange }: Props) {
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
     const prevTrackIdRef = useRef<number | null>(null);
@@ -403,8 +406,20 @@ export function Player({ track, onNext, onPrev, autoPlay = false, onTrackError, 
                         {track ? track.artist : 'to start playback'}
                     </div>
                     {track && (
-                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)', opacity: 0.5, marginTop: '2px' }}>
-                        {track.format} • {track.file_path.split('/').pop()}
+                    <div 
+                        onClick={onPlaylistClick}
+                        style={{ 
+                            fontSize: '10px', 
+                            color: 'var(--accent-color)', 
+                            marginTop: '2px', 
+                            cursor: 'pointer',
+                            textDecoration: 'none',
+                            fontWeight: 500
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
+                        onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
+                    >
+                        {playlistName || 'All Tracks'}
                     </div>
                     )}
                 </div>

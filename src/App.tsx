@@ -13,7 +13,7 @@ import { TrackList, TrackListHandle } from './components/TrackList';
 import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
-import { Track } from './types';
+import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 
 function App() {
@@ -21,6 +21,8 @@ function App() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [playingTrack, setPlayingTrack] = useState<Track | null>(null);
+  const [playingPlaylistId, setPlayingPlaylistId] = useState<number | null>(null);
+  const [playlistNames, setPlaylistNames] = useState<Map<number, string>>(new Map());
   const [isPlaying, setIsPlaying] = useState(false);
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<number>>(new Set());
   const [lastSelectedTrackId, setLastSelectedTrackId] = useState<number | null>(null);
@@ -45,6 +47,16 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  useEffect(() => {
+    invoke<Playlist[]>('get_playlists')
+      .then(playlists => {
+        const map = new Map<number, string>();
+        playlists.forEach(p => map.set(p.id, p.name));
+        setPlaylistNames(map);
+      })
+      .catch(console.error);
+  }, [refreshTrigger]);
 
   const sensors = useSensors(
       useSensor(PointerSensor, {
@@ -257,6 +269,7 @@ function App() {
           handleSelectionChange(newSet, track.id, track, track.comment_raw ? track.comment_raw.split(" && ")[1]?.split(';') || [] : []);
       }
       setPlayingTrack(track);
+      setPlayingPlaylistId(selectedPlaylistId);
       setShouldAutoPlay(true);
   };
 
@@ -560,7 +573,10 @@ function App() {
 
       {/* Player Footer */}
       <Player 
-        track={playingTrack} 
+        track={playingTrack}
+        playlistId={playingPlaylistId}
+        playlistName={playingPlaylistId ? playlistNames.get(playingPlaylistId) : undefined}
+        onPlaylistClick={() => setSelectedPlaylistId(playingPlaylistId)}
         onNext={() => {
              if (playingTrack) {
                  const next = trackListRef.current?.getNextTrack(playingTrack.id);
