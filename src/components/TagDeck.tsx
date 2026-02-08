@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, DragOverlay, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, useDraggable, useDroppable, DragEndEvent, DragStartEvent, DragOverlay, PointerSensor, useSensor, useSensors, KeyboardSensor } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Tag, TagGroup } from '../types';
-import { ChevronRight, ChevronDown, Trash2, FolderPlus, Pencil, Check } from 'lucide-react';
+import { ChevronRight, ChevronDown, Trash2, FolderPlus, Pencil, Check, GripVertical } from 'lucide-react';
 
 interface Props {
     onTagClick: (tag: string) => void;
@@ -17,7 +19,8 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     const [filter, setFilter] = useState('');
     const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
     const [newGroupName, setNewGroupName] = useState('');
-    const [draggedTagId, setDraggedTagId] = useState<number | null>(null);
+    const [activeDragId, setActiveDragId] = useState<string | number | null>(null);
+    const [activeDragType, setActiveDragType] = useState<'tag' | 'group' | null>(null);
     const [isAddingGroup, setIsAddingGroup] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -92,35 +95,91 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     };
 
     const onDragStart = (event: DragStartEvent) => {
-        setDraggedTagId(Number(event.active.id));
+        const id = event.active.id;
+        setActiveDragId(id);
+        
+        if (typeof id === 'number' || !String(id).startsWith('group-')) {
+            setActiveDragType('tag');
+        } else {
+            setActiveDragType('group');
+        }
     };
 
     const onDragEnd = async (event: DragEndEvent) => {
         const { active, over } = event;
-        setDraggedTagId(null);
+        setActiveDragId(null);
+        setActiveDragType(null);
 
         if (!over) return;
 
-        const tagId = Number(active.id);
-        // over.id is either "uncategorized" or "group-{id}"
-        let newGroupId: number | null = null;
-        
-        if (over.id !== 'uncategorized') {
-            const parts = String(over.id).split('-');
-            if (parts[0] === 'group') {
-                newGroupId = Number(parts[1]);
+        if (activeDragType === 'tag') {
+            const tagId = Number(active.id);
+            // over.id is either "uncategorized" or "group-{id}"
+            let newGroupId: number | null = null;
+            
+            // Check if over is a group (DroppableSection) or another sortable tag
+            // Our DroppableSections use "uncategorized" or "group-{id}"
+            // But we might be dropping onto another tag, which bubble up?
+            // Since DraggableTag doesn't accept drops (useDraggable logic depends on context),
+            // typically sorting happens inside SortableContext, but moving between groups requires Droppable containers.
+            
+            // Actually, in default dnd-kit, if dropping on a sortable item, the container is the over.
+            // Wait, SortableContext items are also droppable areas.
+            
+            // Let's rely on the nearest droppable container ID which DroppableSection provides.
+            // If dropping on a group header, ID is "group-{id}".
+            
+            const overIdStr = String(over.id);
+            if (overIdStr !== 'uncategorized') {
+                const parts = overIdStr.split('-');
+                if (parts[0] === 'group') {
+                    newGroupId = Number(parts[1]);
+                } else if (over.data.current?.sortable?.containerId) {
+                    // Dropped onto another tag, check its container
+                    const containerId = over.data.current.sortable.containerId;
+                    if (containerId !== 'uncategorized') {
+                        const cParts = String(containerId).split('-');
+                        if (cParts[0] === 'group') {
+                            newGroupId = Number(cParts[1]);
+                        }
+                    }
+                }
             }
-        }
 
-        // Optimistic update
-        setTags(prev => prev.map(t => t.id === tagId ? { ...t, group_id: newGroupId } : t));
+            // Prevent redundant updates
+            const currentTag = tags.find(t => t.id === tagId);
+            if (currentTag && currentTag.group_id === newGroupId) return;
 
-        try {
-            await invoke('set_tag_group', { tagId, groupId: newGroupId });
-            // Ideally reload to confirm, or just stay optimistic
-        } catch (e) {
-            console.error('Failed to move tag:', e);
-            loadData(); // Revert on fail
+            // Optimistic update
+            setTags(prev => prev.map(t => t.id === tagId ? { ...t, group_id: newGroupId } : t));
+
+            try {
+                await invoke('set_tag_group', { tagId, groupId: newGroupId });
+            } catch (e) {
+                console.error('Failed to move tag:', e);
+                loadData();
+            }
+        } else if (activeDragType === 'group') {
+            const activeIdStr = String(active.id); // "group-1"
+            const overIdStr = String(over.id);     // "group-2"
+
+            if (activeIdStr !== overIdStr && overIdStr.startsWith('group-')) {
+                const oldIndex = groups.findIndex(g => `group-${g.id}` === activeIdStr);
+                const newIndex = groups.findIndex(g => `group-${g.id}` === overIdStr);
+
+                if (oldIndex !== -1 && newIndex !== -1) {
+                    // Optimistic
+                    const newGroups = arrayMove(groups, oldIndex, newIndex);
+                    setGroups(newGroups);
+                    
+                    try {
+                        await invoke('reorder_tag_groups', { orderedIds: newGroups.map(g => g.id) });
+                    } catch (e) {
+                         console.error("Failed to reorder groups:", e);
+                         loadData(); // Revert
+                    }
+                }
+            }
         }
     };
 
@@ -138,7 +197,20 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
         return { uncategorized, grouped };
     }, [tags, groups, filter]);
 
-    const activeTag = tags.find(t => t.id === draggedTagId);
+    const activeTag = useMemo(() => {
+        if (activeDragType === 'tag' && activeDragId) {
+             return tags.find(t => t.id === activeDragId);
+        }
+        return null;
+    }, [activeDragType, activeDragId, tags]);
+
+    const activeGroup = useMemo(() => {
+        if (activeDragType === 'group' && activeDragId) {
+            const id = Number(String(activeDragId).replace('group-', ''));
+            return groups.find(g => g.id === id);
+        }
+        return null;
+    }, [activeDragType, activeDragId, groups]);
 
     // Keyboard navigation support 
     // Ideally update this to traverse filtered tags linearly regardless of groups
@@ -206,32 +278,45 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                     </DroppableSection>
 
                     {/* Groups */}
-                    {groups.map(group => (
-                        <DroppableSection
-                            key={group.id}
-                            id={`group-${group.id}`}
-                            title={group.name}
-                            onDelete={() => handleDeleteGroup(group.id)}
-                            onRename={(newName: string) => handleRenameGroup(group.id, newName)}
-                            collapsed={collapsedGroups.has(group.id)}
-                            onToggle={() => toggleGroupCollapse(group.id)}
-                        >
-                            {organizedTags.grouped[group.id]?.map(tag => (
-                                <DraggableTag 
-                                    key={tag.id} 
-                                    tag={tag} 
-                                    isActive={currentTrackTags.includes(tag.name)}
-                                    onClick={() => onTagClick(tag.name)}
-                                />
-                            ))}
-                        </DroppableSection>
-                    ))}
+                    <SortableContext items={groups.map(g => `group-${g.id}`)} strategy={verticalListSortingStrategy}>
+                        {groups.map(group => (
+                            <DroppableSection
+                                key={group.id}
+                                id={`group-${group.id}`}
+                                title={group.name}
+                                onDelete={() => handleDeleteGroup(group.id)}
+                                onRename={(newName: string) => handleRenameGroup(group.id, newName)}
+                                collapsed={collapsedGroups.has(group.id)}
+                                onToggle={() => toggleGroupCollapse(group.id)}
+                                isSortable={true} 
+                            >
+                                {organizedTags.grouped[group.id]?.map(tag => (
+                                    <DraggableTag 
+                                        key={tag.id} 
+                                        tag={tag} 
+                                        isActive={currentTrackTags.includes(tag.name)}
+                                        onClick={() => onTagClick(tag.name)}
+                                    />
+                                ))}
+                            </DroppableSection>
+                        ))}
+                    </SortableContext>
                 </div>
                 
                 <DragOverlay>
                     {activeTag ? (
                          <div style={{...styles.pill, background: 'var(--accent-color)', color: '#fff', transform: 'scale(1.05)',  maxWidth: 'fit-content'}}>
                             {activeTag.name}
+                        </div>
+                    ) : activeGroup ? (
+                        <div style={{
+                            padding: '10px 15px', 
+                            background: 'var(--bg-secondary)', 
+                            border: '1px solid var(--accent-color)', 
+                            borderRadius: '8px',
+                            fontWeight: 600
+                        }}>
+                            {activeGroup.name}
                         </div>
                     ) : null}
                 </DragOverlay>
@@ -242,12 +327,80 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
 
 // Subcomponents
 
-function DroppableSection({ id, title, children, isUncategorized, onDelete, onRename, collapsed, onToggle }: any) {
+function DroppableSection({ id, title, children, isUncategorized, onDelete, onRename, collapsed, onToggle, isSortable }: any) {
+    // If sortable, we use useSortable. Note: useSortable creates droppable Ref too.
+    // If NOT sortable (uncategorized), we use useDroppable.
+    
+    // Hooks cannot be called conditionally, so we check logic inside wrappers or assume useSortable for groups
+    // But since we are reusing the component, we must branch or use a common hook if possible.
+    // useSortable is superset of useDroppable + useDraggable.
+    // But Uncategorized section is NOT draggable.
+    
+    // Solution: Split into two components or use component composition?
+    // Or just call both hooks and ignore errors? No.
+    // Better: DroppableSection is for "Uncategorized". SortableGroup is for "Groups".
+    
+    // For minimal refactor, let's conditionally use the hooks based on `isSortable` prop, 
+    // BUT React rules forbid conditional hooks.
+    // So we must move the hook calls up or split the component.
+    
+    return isSortable ? (
+        <SortableGroupSection {...{ id, title, children, onDelete, onRename, collapsed, onToggle }} />
+    ) : (
+        <PlainDroppableSection {...{ id, title, children, isUncategorized, collapsed, onToggle }} />
+    );
+}
+
+function PlainDroppableSection({ id, title, children, isUncategorized, collapsed, onToggle }: any) {
     const { setNodeRef, isOver } = useDroppable({ id });
+    return (
+        <div 
+             ref={setNodeRef} 
+             style={{ 
+                 marginBottom: 15, 
+                 backgroundColor: isOver ? 'rgba(255,255,255,0.03)' : 'transparent',
+                 borderRadius: 8,
+                 transition: 'background 0.2s',
+             }}
+         >
+            <div style={styles.sectionHeader}>
+                 <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} >
+                     <div onClick={onToggle} style={{display:'flex', alignItems:'center'}}>
+                         {!isUncategorized && (
+                             collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>
+                         )}
+                     </div>
+                     <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)'}}>{title}</span>
+                 </div>
+            </div>
+             {!collapsed && (
+                 <div style={styles.tagContainer}>
+                     {children}
+                 </div>
+             )}
+         </div>
+    )
+}
+
+function SortableGroupSection({ id, title, children, onDelete, onRename, collapsed, onToggle }: any) {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+        id: id,
+        data: { type: 'group' }
+    });
+    
+    const style = {
+        transform: CSS.Transform.toString(transform),
+        transition,
+        marginBottom: 15,
+        borderRadius: 8,
+        opacity: isDragging ? 0.3 : 1,
+        position: 'relative' as const,
+        touchAction: 'none'
+    };
+
     const [isEditing, setIsEditing] = useState(false);
     const [editName, setEditName] = useState(title);
 
-    // Update editName if title prop changes
     useEffect(() => {
         setEditName(title);
     }, [title]);
@@ -260,9 +413,7 @@ function DroppableSection({ id, title, children, isUncategorized, onDelete, onRe
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        // Stop propagation consistently to prevent global shortcuts like Play/Pause
         e.stopPropagation();
-
         if (e.key === 'Enter') {
             e.preventDefault();
             handleSave();
@@ -275,21 +426,16 @@ function DroppableSection({ id, title, children, isUncategorized, onDelete, onRe
     };
     
     return (
-        <div 
-            ref={setNodeRef} 
-            style={{ 
-                marginBottom: 15, 
-                backgroundColor: isOver ? 'rgba(255,255,255,0.03)' : 'transparent',
-                borderRadius: 8,
-                transition: 'background 0.2s',
-            }}
-        >
+        <div ref={setNodeRef} style={style}>
             <div style={styles.sectionHeader}>
+                {/* Drag Handle */}
+                <div {...attributes} {...listeners} style={{cursor: 'grab', marginRight: 8, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center'}}>
+                    <GripVertical size={14} />
+                </div>
+                
                 <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} >
                     <div onClick={onToggle} style={{display:'flex', alignItems:'center'}}>
-                        {!isUncategorized && (
-                            collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>
-                        )}
+                        {collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>}
                     </div>
                     {isEditing ? (
                         <div style={{display:'flex', alignItems: 'center', width: '100%'}}>
@@ -299,44 +445,39 @@ function DroppableSection({ id, title, children, isUncategorized, onDelete, onRe
                                 onBlur={handleSave}
                                 onKeyDown={handleKeyDown}
                                 autoFocus
-                                onClick={(e) => e.stopPropagation()} 
-                                style={styles.editInput}
-                             />
-                             <button 
-                                onMouseDown={(e) => {
-                                    // Use onMouseDown to prevent blur from firing first on the input
-                                    e.preventDefault(); 
-                                    handleSave();
+                                style={{
+                                    background: 'var(--bg-primary)', 
+                                    border: '1px solid var(--accent-color)', 
+                                    color: 'var(--text-primary)',
+                                    padding: '2px 5px',
+                                    borderRadius: 4,
+                                    fontSize: '13px',
+                                    width: '100%'
                                 }}
-                                style={{...styles.iconBtn, marginLeft: 5, color: 'var(--accent-color)'}} 
-                                title="Save"
-                             >
+                             />
+                             <button onClick={handleSave} style={{marginLeft: 5, background: 'none', border:'none', cursor:'pointer', color:'var(--accent-color)'}}>
                                 <Check size={14} />
                              </button>
-                         </div>
-                     ) : (
-                         <span onClick={onToggle} style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-primary)'}}>{title}</span>
-                     )}
+                        </div>
+                    ) : (
+                        <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)'}}>{title}</span>
+                    )}
                 </div>
-                {!isUncategorized && !isEditing && (
-                    <div style={{display:'flex', gap: 5}}>
-                         <button onClick={() => setIsEditing(true)} style={styles.iconBtn} title="Rename Group">
-                            <Pencil size={12} />
-                         </button>
-                        {onDelete && (
-                            <button onClick={onDelete} style={{...styles.iconBtn, opacity: 0.5}} className="delete-group-btn" title="Delete Group">
-                                <Trash2 size={12} />
-                            </button>
-                        )}
-                    </div>
-                )}
+                
+                <div className="group-actions" style={{display:'flex', gap: 5, opacity: 0.5}}>
+                    <button onClick={() => setIsEditing(true)} style={styles.iconBtn} title="Rename">
+                        <Pencil size={12} />
+                    </button>
+                    <button onClick={onDelete} style={{...styles.iconBtn, color: 'var(--error-color)'}} title="Delete Group">
+                        <Trash2 size={12} />
+                    </button>
+                </div>
             </div>
-            
-            {(!collapsed || isUncategorized) && (
-                <div style={styles.tagContainer}>
-                    {children}
-                </div>
-            )}
+            {!collapsed && (
+                 <div style={styles.tagContainer}>
+                     {children}
+                 </div>
+             )}
         </div>
     );
 }
