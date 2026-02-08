@@ -538,6 +538,10 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         Ok(music_playlists) => {
             let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
             let db_snapshot = db.get_playlist_snapshot().map_err(|e| e.to_string())?;
+            
+            // Fetch all known track PIDs to filter the music_playlist tracks
+            // This prevents false positive diffs when a playlist contains tracks not in TagDeck's DB.
+            let all_track_pids = db.get_all_track_pids().map_err(|e| e.to_string())?;
 
             // Build a set of persistent IDs from Music.app for deletion detection
             let music_pids: std::collections::HashSet<String> = music_playlists.iter()
@@ -572,6 +576,13 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
 
             // Detect added or changed playlists
             for mp in &music_playlists {
+                // Filter the track IDs from Music.app to only represent tracks we know about locally.
+                // Otherwise, a single missing track causes infinite sync loops.
+                let filtered_track_ids: Vec<String> = mp.track_ids.iter()
+                    .filter(|tid| all_track_pids.contains(*tid))
+                    .cloned()
+                    .collect();
+
                 let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
                     None => true, // New playlist
                     Some((db_name, db_is_folder, db_parent_pid, db_track_ids)) => {
@@ -579,18 +590,21 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                         db_name != &mp.name
                             || db_is_folder != &mp.is_folder
                             || db_parent_pid != &mp.parent_persistent_id
-                            || db_track_ids != &mp.track_ids
+                            || db_track_ids != &filtered_track_ids
                     }
                 };
-
+                
                 if needs_upsert {
+                    // Use the filtered track IDs for the DB update too, 
+                    // although DB insert logic does this via JOIN anyway.
+                    // Doing it here ensures the diff logic matches the insert output.
                     let playlist = Playlist {
                         id: 0,
                         persistent_id: mp.persistent_id.clone(),
                         parent_persistent_id: mp.parent_persistent_id.clone(),
                         name: mp.name.clone(),
                         is_folder: mp.is_folder,
-                        track_ids: Some(mp.track_ids.clone()),
+                        track_ids: Some(filtered_track_ids),
                     };
                     if let Err(e) = db.insert_playlist(&playlist) {
                         let msg = format!("DB Error upserting playlist {}: {}", mp.name, e);

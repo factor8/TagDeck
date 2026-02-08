@@ -87,6 +87,17 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// Returns a HashSet of all track persistent_ids in the DB.
+    pub fn get_all_track_pids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT persistent_id FROM tracks")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut set = std::collections::HashSet::new();
+        for row in rows {
+            set.insert(row?);
+        }
+        Ok(set)
+    }
+
     /// Returns a HashMap of persistent_id -> (rating, bpm) for all tracks in the DB.
     /// Used for efficient snapshot-based diffing against Music.app.
     pub fn get_rating_bpm_snapshot(&self) -> Result<std::collections::HashMap<String, (i64, i64)>> {
