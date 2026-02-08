@@ -144,6 +144,8 @@ const TrackRow = ({
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </td>
             ))}
+            {/* Spacer for settings gear */}
+            <td style={{ padding: 0, width: '40px', minWidth: '40px' }} />
         </tr>
     );
 };
@@ -1085,7 +1087,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                     }}
                 >
                     <table style={{ 
-                        width: table.getTotalSize(), 
+                        width: table.getTotalSize() + 40, 
                         minWidth: '100%', // Allow it to grow if content is small
                         borderCollapse: 'separate', 
                         borderSpacing: 0,
@@ -1107,6 +1109,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                             <DraggableTableHeader key={header.id} header={header} table={table} />
                                         ))}
                                     </SortableContext>
+                                    {/* Spacer for settings gear */}
+                                    <th style={{ width: '40px', minWidth: '40px', padding: 0, borderBottom: '1px solid var(--border-color)', background: 'var(--bg-primary)' }} />
                                 </tr>
                             ))}
                         </thead>
