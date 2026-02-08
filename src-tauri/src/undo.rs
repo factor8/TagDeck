@@ -1,5 +1,5 @@
 use crate::db::Database;
-use crate::apple_music::{update_track_comment, batch_update_track_comments};
+use crate::apple_music::batch_update_track_comments;
 use crate::metadata::write_metadata as write_tags_to_file;
 use anyhow::Result;
 use std::process::Command;

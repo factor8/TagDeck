@@ -455,7 +455,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     })?;
 
     let count = tracks.len();
-    let found_msg = format!("Found {} changed tracks via JXA", count);
+    let found_msg = format!("Found {} changed tracks via AppleScript", count);
     println!("{}", found_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", &found_msg, &app);
 

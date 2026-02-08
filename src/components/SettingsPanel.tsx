@@ -48,6 +48,16 @@ export function SettingsPanel({
     const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
     const [importing, setImporting] = useState(false);
     const [status, setStatus] = useState('');
+    const [realTimeSyncEnabled, setRealTimeSyncEnabled] = useState(() => {
+        return localStorage.getItem('app_real_time_sync_enabled') !== 'false';
+    });
+
+    const handleRealTimeSyncToggle = () => {
+        const newValue = !realTimeSyncEnabled;
+        setRealTimeSyncEnabled(newValue);
+        localStorage.setItem('app_real_time_sync_enabled', String(newValue));
+        window.dispatchEvent(new Event('real-time-sync-toggled'));
+    };
 
     const loadSyncInfo = () => {
         const saved = localStorage.getItem('app_last_sync_info');
@@ -223,7 +233,37 @@ export function SettingsPanel({
                     <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No sync history found.</span>
                 )}
                 
-                <div style={{ marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Real-Time Sync</span>
+                    <button 
+                        onClick={handleRealTimeSyncToggle}
+                        style={{
+                            width: '40px',
+                            height: '22px',
+                            background: realTimeSyncEnabled ? 'var(--accent-color)' : 'var(--bg-secondary)',
+                            borderRadius: '11px',
+                            position: 'relative',
+                            border: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            transition: 'background 0.2s',
+                            padding: 0
+                        }}
+                    >
+                        <div style={{
+                            width: '18px',
+                            height: '18px',
+                            background: 'white',
+                            borderRadius: '50%',
+                            position: 'absolute',
+                            top: '1px',
+                            left: realTimeSyncEnabled ? '19px' : '1px',
+                            transition: 'left 0.2s',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                        }} />
+                    </button>
+                </div>
+
+                <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
                     <button 
                         onClick={handleMusicAppImport} 
                         disabled={importing} 

@@ -15,12 +15,11 @@ struct JxaTrack {
     duration: f64,
     kind: String,
     size: i64,
-    bitRate: i64,
+    #[serde(rename = "bitRate")]
+    bit_rate: i64,
     rating: i64,
     bpm: i64,
     location: Option<String>,
-    modDate: Option<String>, // ISO string
-    dateAdded: Option<String>, // ISO string
 }
 
 pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
@@ -37,6 +36,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
         let script = format!(
             r#"
             use framework "Foundation"
+            use scripting additions
             
             -- Helper to parse unix timestamp to AS Date
             on getASDateFromTimestamp(unixTimestamp)
@@ -57,8 +57,10 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
 
             set sinceDate to getASDateFromTimestamp({})
             
+            log "Querying changes since: " & (sinceDate as string)
+
             tell application "Music"
-                set recentTracks to (every track whose modification date > sinceDate)
+                set recentTracks to (every track whose modification date >= sinceDate)
                 
                 -- Construct JSON manually to avoid slow object bridges
                 set jsonList to {{}}
@@ -77,8 +79,6 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                        set tBitRate to bit rate of t
                        set tRating to rating of t
                        set tBpm to bpm of t
-                       set tModDate to modification date of t
-                       set tDateAdded to date added of t
                        
                        -- Handle Location safely (might be missing)
                        try
@@ -87,7 +87,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                            set tLoc to ""
                        end try
                        
-                       set entry to {{ |id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc, |modDate|:(tModDate as string), |dateAdded|:(tDateAdded as string) }}
+                       set entry to {{ |id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc }}
                        copy entry to end of jsonList
                    end try
                 end repeat
@@ -113,11 +113,16 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
              return Err(anyhow::anyhow!("AppleScript Get Changes Failed: {}", err));
         }
 
+        // Log stderr (AppleScript logs) for debugging
+        if !output.stderr.is_empty() {
+            eprintln!("AppleScript Logs: {}", String::from_utf8_lossy(&output.stderr));
+        }
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         
-        let jxa_tracks: Vec<JxaTrack> = serde_json::from_str(&stdout)?;
+        let as_tracks: Vec<JxaTrack> = serde_json::from_str(&stdout)?;
 
-        let tracks: Vec<Track> = jxa_tracks.into_iter().filter_map(|jt| {
+        let tracks: Vec<Track> = as_tracks.into_iter().filter_map(|jt| {
             if jt.location.is_none() || jt.location.as_deref() == Some("") {
                 return None;
             }
@@ -140,7 +145,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                 duration_secs: jt.duration,
                 format: jt.kind,
                 size_bytes: jt.size,
-                bit_rate: jt.bitRate,
+                bit_rate: jt.bit_rate,
                 modified_date: mod_time,
                 rating: jt.rating,
                 date_added: added_time,

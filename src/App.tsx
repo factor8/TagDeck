@@ -48,6 +48,7 @@ function App() {
     const saved = localStorage.getItem('app_show_sidebar_artwork');
     return saved ? saved === 'true' : false;
   });
+  const [syncEnabledTrigger, setSyncEnabledTrigger] = useState(0);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -55,6 +56,15 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  useEffect(() => {
+    const handleToggle = () => {
+        console.log("[App] Sync toggle detected, reloading listener...");
+        setSyncEnabledTrigger(p => p + 1);
+    };
+    window.addEventListener('real-time-sync-toggled', handleToggle);
+    return () => window.removeEventListener('real-time-sync-toggled', handleToggle);
+  }, []);
 
   useEffect(() => {
     if (playingTrack) {
@@ -87,6 +97,15 @@ function App() {
     let isMounted = true;
 
     const setupListener = async () => {
+      // Check setting first
+      const savedSetting = localStorage.getItem('app_real_time_sync_enabled');
+      const isEnabled = savedSetting !== 'false'; // Default to true
+
+      if (!isEnabled) {
+          console.log("[App] Real-Time Sync is disabled by user setting.");
+          return;
+      }
+
       console.log("[App] Setting up music-library-changed listener");
       const unlisten = await listen('music-library-changed', async () => {
         if (!isMounted) return;
@@ -100,9 +119,10 @@ function App() {
           const defaultTime = Math.floor(Date.now() / 1000) - 86400;
           let timestamp = (lastSync && !isNaN(parseInt(lastSync))) ? parseInt(lastSync) : defaultTime;
           
-          // Safety Buffer: Go back 600 seconds (10 minutes) to ensure we catch everything.
+          // Safety Buffer: Go back 3600 seconds (1 hour) to ensure we catch everything, including
+          // tracks that might have been missed if previous syncs were buggy or incomplete.
           // Since our DB operation is an upsert, reprocessing unchanged tracks is cheap and safe.
-          const bufferSeconds = 600; 
+          const bufferSeconds = 3600; 
           const bufferTimestamp = Math.max(0, timestamp - bufferSeconds);
 
           console.log(`[App] Requesting sync since timestamp: ${bufferTimestamp} (Original: ${timestamp})`);
@@ -144,7 +164,7 @@ function App() {
       isMounted = false;
       if (unlistenFn) unlistenFn();
     };
-  }, []);
+  }, [syncEnabledTrigger]);
 
   const sensors = useSensors(
       useSensor(PointerSensor, {

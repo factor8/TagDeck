@@ -1,7 +1,6 @@
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{channel, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -74,18 +73,20 @@ pub fn start_library_watcher(app: AppHandle) {
             }
         }
 
-        let last_event_time = Arc::new(Mutex::new(Instant::now()));
-        // Set initial last_event_time far in past so we don't trigger immediately on loop start if something weird happens 
-        // (actually Instant::now() is fine, we compare duration)
-        
-        // Debounce handling
-        // We will just process events and check if enough time has passed since last emit
-        // But better: receive event -> wait -> check if more events came -> emit
-        
-        let last_emit_time = Arc::new(Mutex::new(Instant::now().checked_sub(Duration::from_secs(60)).unwrap()));
+        // Trailing Debounce Implementation
+        // We wait for an event. Once received, we wait for silence for 'debounce_duration'.
+        let debounce_duration = Duration::from_secs(2);
+        let mut last_activity: Option<Instant> = None;
 
         loop {
-            match rx.recv() {
+            // Determine behavior based on whether we have a pending change
+            let evt = if last_activity.is_some() {
+                 rx.recv_timeout(debounce_duration)
+            } else {
+                 rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            };
+
+            match evt {
                 Ok(res) => {
                     match res {
                         Ok(event) => {
@@ -97,36 +98,29 @@ pub fn start_library_watcher(app: AppHandle) {
                                 !s.ends_with(".tmp") && !s.ends_with(".lock") && !s.contains(".tmp")
                             });
 
-                            if !is_relevant {
-                                // println!("[WATCHER] Ignoring irrelevant file event: {:?}", event.paths); // Too verbose?
-                                continue;
-                            }
-
-                            // Verbose Logging
-                            println!("[WATCHER] Relevant File System Event: {:?}", event);
-                            
-                            // Check specific kinds of events if needed (Modify, Create)
-                            // Usually "Write" or "Modify"
-                            
-                            let mut last_emit = last_emit_time.lock().unwrap();
-                            if last_emit.elapsed() > Duration::from_secs(5) {
-                                println!("[WATCHER] Debounce passed. Emitting music-library-changed event.");
-                                *last_emit = Instant::now();
-                                
-                                let _ = app_handle.emit("music-library-changed", ());
-                                
-                                // Log to App UI
-                                let msg = format!("Detected changes in Music Library files. Types: {:?}", event.kind);
-                                app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
-                            } else {
-                                println!("[WATCHER] Event ignored due to debounce (occurred {:?} ago)", last_emit.elapsed());
+                            if is_relevant {
+                                println!("[WATCHER] Activity detected: {:?} -> Resetting debounce timer.", event.kind);
+                                last_activity = Some(Instant::now());
                             }
                         }
                         Err(e) => eprintln!("[WATCHER] Watch error: {:?}", e),
                     }
                 }
-                Err(e) => {
-                    eprintln!("[WATCHER] Watcher channel error: {:?}", e);
+                Err(RecvTimeoutError::Timeout) => {
+                    // Timeout hit! This means 'debounce_duration' passed without new events.
+                    if let Some(_) = last_activity {
+                        println!("[WATCHER] Debounce silence period reached. Emitting music-library-changed event.");
+                        let _ = app_handle.emit("music-library-changed", ());
+                        
+                        let msg = "Library changes stabilized. Triggering sync.";
+                        app_handle.state::<crate::logging::LogState>().add_log("INFO", msg, &app_handle);
+                        
+                        // Reset
+                        last_activity = None;
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    eprintln!("[WATCHER] Channel disconnected. Stopping watcher.");
                     break;
                 }
             }
