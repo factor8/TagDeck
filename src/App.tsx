@@ -12,7 +12,6 @@ import { TrackList, TrackListHandle } from './components/TrackList';
 import { Player } from './components/Player';
 import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
-import { MetadataViewer } from './components/MetadataViewer';
 import { Track } from './types';
 import { ToastProvider } from './components/Toast';
 
@@ -408,7 +407,6 @@ function App() {
                         selectedTrackIds={selectedTrackIds}
                         commonTags={currentTags}
                     />
-                    <MetadataViewer track={selectedTrack} />
                 </>
             ) : (
                 <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>

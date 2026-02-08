@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Pencil } from 'lucide-react';
+import { Info } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
+import { MetadataViewer } from './MetadataViewer';
 
 interface Props {
     track: Track | null;
@@ -21,9 +22,11 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     // current input for a new tag
     const [tagInput, setTagInput] = useState('');
     
+    // We only process user comment for saving, we don't show UI anymore
     const [isEditingComment, setIsEditingComment] = useState(false);
 
     const [saving, setSaving] = useState(false);
+    const [showInfo, setShowInfo] = useState(false);
     
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
 
@@ -309,7 +312,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         <div style={styles.container}>
             <div style={styles.header}>
                 <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
-                    <h3 style={{ margin: 0, fontSize: '12px', fontWeight: 600, opacity: 0.7 }}>
+                    <h3 style={{ margin: 0, fontSize: '11px', fontWeight: 600, opacity: 0.7, letterSpacing: '0.5px' }}>
                         {isMultiSelect ? 'BATCH EDIT' : 'QUICK TAG'}
                     </h3>
                     <span 
@@ -321,7 +324,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                             whiteSpace: 'nowrap', 
                             overflow: 'hidden', 
                             textOverflow: 'ellipsis',
-                            marginTop: '2px'
+                            marginTop: '1px'
                         }}
                     >
                         {isMultiSelect 
@@ -330,77 +333,35 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                         }
                     </span>
                 </div>
+                 {!isMultiSelect && (
+                    <button 
+                        onClick={() => setShowInfo(!showInfo)}
+                        style={{
+                            background: showInfo ? 'var(--bg-tertiary)' : 'transparent',
+                            border: 'none',
+                            color: showInfo ? 'var(--accent-color)' : 'var(--text-secondary)',
+                            cursor: 'pointer',
+                            padding: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            borderRadius: '4px',
+                            marginLeft: '8px'
+                        }}
+                        title="Technical Info"
+                    >
+                        <Info size={14} />
+                    </button>
+                )}
             </div>
             
-            {/* User Comment Section */}
-            {!isMultiSelect && (
-                <div style={{ padding: '0px 0 5px 0' }}>
-                    {isEditingComment ? (
-                        <input 
-                            type="text"
-                            value={userComment}
-                            onChange={e => setUserComment(e.target.value)}
-                            style={styles.input}
-                            placeholder="Comment..."
-                            autoFocus
-                            onBlur={() => setIsEditingComment(false)}
-                            onKeyDown={e => { 
-                                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                                    handleSave();
-                                    setIsEditingComment(false);
-                                } else if (e.key === 'Enter') {
-                                    setIsEditingComment(false);
-                                } else if (e.key === 'Escape') {
-                                    setIsEditingComment(false);
-                                }
-                            }}
-                        />
-                    ) : (
-                        <div style={{
-                            width: '100%',
-                            padding: '6px 8px',
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            justifyContent: 'space-between', 
-                            fontSize: '13px',
-                            marginBottom: '2px',
-                            minHeight: '30px'
-                        }}>
-                            <span 
-                                style={{ 
-                                    whiteSpace: 'nowrap', 
-                                    overflow: 'hidden', 
-                                    textOverflow: 'ellipsis', 
-                                    flex: 1,
-                                    color: userComment ? 'var(--text-primary)' : 'var(--text-secondary)',
-                                    opacity: userComment ? 1 : 0.6,
-                                    fontStyle: userComment ? 'normal' : 'italic'
-                                }}
-                                onDoubleClick={() => setIsEditingComment(true)}
-                            >
-                                {userComment || "No comment"}
-                            </span>
-                            <span 
-                                onClick={() => setIsEditingComment(true)}
-                                style={{ 
-                                    cursor: 'pointer', 
-                                    paddingLeft: '8px', 
-                                    opacity: 0.8,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    color: 'var(--accent-color)'
-                                }}
-                                title="Edit comment"
-                            >
-                                <Pencil size={12} />
-                            </span>
-                        </div>
-                    )}
+            {showInfo && !isMultiSelect && (
+                <div style={{marginBottom: '5px'}}>
+                    <MetadataViewer track={track} />
                 </div>
             )}
 
-            {/* Tags Section */}
-            <div style={{ padding: '0px 0 5px 0' }}>
+            {/* Tags Section only - Comment UI removed */}
+            <div style={{ padding: '0px' }}>
                 <div style={styles.tagContainer} onClick={() => document.getElementById('tag-input')?.focus()}>
                     {tags.map((tag, i) => (
                         <div key={i} style={styles.pill}>
@@ -434,13 +395,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 </div>
             </div>
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0px' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '4px' }}>
                 <button onClick={handleSave} disabled={saving || isMultiSelect} className="btn btn-primary" style={{ 
                     width: '100%', 
-                    fontSize: '12px', 
-                    padding: '6px',
+                    fontSize: '11px', 
+                    padding: '4px',
                     opacity: isMultiSelect ? 0.5 : 1,
-                    cursor: isMultiSelect ? 'default' : 'pointer'
+                    cursor: isMultiSelect ? 'default' : 'pointer',
+                    height: '24px'
                 }}>
                     {isMultiSelect ? 'Batch Editing Active' : (saving ? 'Saving...' : 'Save Changes')}
                 </button>
@@ -454,19 +416,20 @@ const styles = {
         background: 'var(--bg-secondary)',
         color: 'var(--text-primary)',
         borderBottom: '1px solid var(--border-color)',
-        padding: '10px',
+        padding: '0 10px 10px 10px', // Reduced top padding handled by header margins
+        paddingTop: '8px',
         boxSizing: 'border-box' as const,
         display: 'flex',
         flexDirection: 'column' as const,
-        gap: '6px'
+        gap: '4px'
     },
     header: {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: '4px',
+        marginBottom: '2px',
         paddingBottom: '4px',
-        borderBottom: '1px solid var(--border-color)'
+        // borderBottom: '1px solid var(--border-color)' // Remove header border for compactness if needed, lets keep it subtle?
     },
     input: {
         width: '100%',
@@ -483,20 +446,20 @@ const styles = {
         display: 'flex',
         flexWrap: 'wrap' as const,
         gap: '4px',
-        padding: '6px',
+        padding: '4px 6px',
         borderRadius: '4px',
         border: '1px solid var(--bg-tertiary)',
         background: 'var(--bg-primary)',
-        minHeight: '60px',
+        minHeight: '32px', // Compact height
         cursor: 'text'
     },
     pill: {
-        background: 'rgba(59, 130, 246, 0.5)', // Match TagDeck "Active" state
+        background: 'rgba(59, 130, 246, 0.5)', 
         color: '#fff',
-        padding: '2px 10px',
-        borderRadius: '12px',
-        fontSize: '13px',
-        fontWeight: 600, // Bold as requested
+        padding: '1px 8px',
+        borderRadius: '10px',
+        fontSize: '12px',
+        fontWeight: 600,
         display: 'flex',
         alignItems: 'center',
         border: '1px solid var(--accent-color)',
@@ -506,11 +469,12 @@ const styles = {
         border: 'none',
         background: 'transparent',
         color: 'var(--text-primary)',
-        fontSize: '14px',
+        fontSize: '12px',
         outline: 'none',
         flex: 1,
-        minWidth: '50px'
+        minWidth: '50px',
+        padding: 0,
+        height: '20px'
     },
-    // We use .btn class now
     button: {} 
 };

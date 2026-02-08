@@ -1,14 +1,11 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Track } from '../types';
-import { ChevronDown, ChevronRight } from 'lucide-react';
 
 interface Props {
   track: Track | null;
 }
 
 export const MetadataViewer: React.FC<Props> = ({ track }) => {
-  const [isExpanded, setIsExpanded] = useState(false);
-
   if (!track) return null;
 
   const formatDate = (timestamp: number) => {
@@ -25,40 +22,21 @@ export const MetadataViewer: React.FC<Props> = ({ track }) => {
   };
 
   const formatBitrate = (_bpm: number) => {
-      // note: field is named bit_rate in interface but often stores raw kb/s
-      // Assuming bpm param name was copy paste error in my own logic, using track.bit_rate
       return track.bit_rate ? `${track.bit_rate} kbps` : 'Unknown';
   };
 
   return (
     <div style={{ 
       borderTop: '1px solid var(--border-color)',
-      padding: '10px 16px',
-      fontSize: '12px',
+      padding: '10px',
+      fontSize: '11px',
       background: 'var(--bg-tertiary)',
       color: 'var(--text-secondary)'
     }}>
-      <div 
-        onClick={() => setIsExpanded(!isExpanded)}
-        style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          cursor: 'pointer',
-          userSelect: 'none',
-          fontWeight: 600,
-          marginBottom: isExpanded ? '10px' : '0'
-        }}
-      >
-        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <span style={{ marginLeft: '6px' }}>Technical Info</span>
-      </div>
-
-      {isExpanded && (
         <div style={{ 
           display: 'grid', 
           gridTemplateColumns: 'auto 1fr', 
-          gap: '6px 16px',
-          paddingLeft: '6px'
+          gap: '4px 12px',
         }}>
           <Label>Title</Label> <Value>{track.title || '-'}</Value>
           <Label>Artist</Label> <Value>{track.artist || '-'}</Value>
@@ -82,9 +60,8 @@ export const MetadataViewer: React.FC<Props> = ({ track }) => {
           <div style={{ gridColumn: '1 / -1', height: '1px', background: 'var(--border-color)', margin: '4px 0' }} />
           
           <Label>Full Path</Label> 
-          <Value style={{ wordBreak: 'break-all', fontSize: '11px', lineHeight: '1.2' }}>{track.file_path}</Value>
+          <Value style={{ wordBreak: 'break-all', fontSize: '10px', lineHeight: '1.2' }}>{track.file_path}</Value>
         </div>
-      )}
     </div>
   );
 };
