@@ -4,7 +4,8 @@ use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork, write_track_info};
 use crate::apple_music::{
     update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot,
-    remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count, update_track_info as apple_update_track_info
+    remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count, update_track_info as apple_update_track_info,
+    get_all_music_app_pids, get_tracks_by_persistent_ids
 };
 use crate::models::{Track, Playlist};
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
@@ -460,6 +461,8 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
 #[derive(serde::Serialize)]
 pub struct SyncResult {
     pub tracks_updated: usize,
+    pub tracks_added: usize,
+    pub tracks_deleted: usize,
     pub playlists_updated: usize,
 }
 
@@ -469,7 +472,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     // Check if full sync is running, but don't error out hard—just skip
     if state.is_syncing.load(Ordering::SeqCst) {
         println!("Sync skipped: Full sync in progress");
-        return Ok(SyncResult { tracks_updated: 0, playlists_updated: 0 });
+        return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_deleted: 0, playlists_updated: 0 });
     }
     // We do NOT set the lock for real-time sync (unless we want to block full sync?)
     // Actually, we should probably lock it too to prevent concurrent real-time syncs?
@@ -478,7 +481,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     
     if state.is_syncing.swap(true, Ordering::SeqCst) {
         // Race condition caught
-        return Ok(SyncResult { tracks_updated: 0, playlists_updated: 0 });
+        return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_deleted: 0, playlists_updated: 0 });
     }
 
     struct SyncGuard<'a>(&'a AtomicBool);
@@ -494,6 +497,109 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     app.state::<crate::logging::LogState>().add_log("INFO", &start_msg, &app);
 
     let mut total_updated = 0;
+    let mut tracks_added = 0;
+    let mut tracks_deleted = 0;
+
+    // --- Phase 0: Detect newly imported and deleted tracks ---
+    // Compare the set of persistent IDs in Music.app vs our DB to find additions and deletions.
+    let phase0_msg = "Phase 0: Checking for imported/deleted tracks...";
+    println!("{}", phase0_msg);
+    app.state::<crate::logging::LogState>().add_log("INFO", phase0_msg, &app);
+
+    match get_all_music_app_pids() {
+        Ok(music_pids) => {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            let db_pids = db.get_all_track_pids().map_err(|e| e.to_string())?;
+            drop(db); // Release lock before potentially slow AppleScript calls
+
+            // Detect NEW tracks (in Music.app but not in our DB)
+            let new_pids: Vec<String> = music_pids.iter()
+                .filter(|pid| !db_pids.contains(*pid))
+                .cloned()
+                .collect();
+
+            // Detect DELETED tracks (in our DB but not in Music.app)
+            let deleted_pids: Vec<String> = db_pids.iter()
+                .filter(|pid| !music_pids.contains(*pid))
+                .cloned()
+                .collect();
+
+            // Handle newly imported tracks
+            if !new_pids.is_empty() {
+                let import_msg = format!("Found {} new track(s) in Music.app. Importing...", new_pids.len());
+                println!("{}", import_msg);
+                app.state::<crate::logging::LogState>().add_log("INFO", &import_msg, &app);
+
+                match get_tracks_by_persistent_ids(&new_pids) {
+                    Ok(new_tracks) => {
+                        let count = new_tracks.len();
+                        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                        for track in &new_tracks {
+                            if let Err(e) = db.insert_track(track) {
+                                let msg = format!("DB Error importing new track {}: {}", track.persistent_id, e);
+                                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                            }
+                        }
+                        // Log some details
+                        for (i, track) in new_tracks.iter().enumerate() {
+                            if i < 10 {
+                                let title = track.title.as_deref().unwrap_or("Unknown");
+                                let artist = track.artist.as_deref().unwrap_or("Unknown");
+                                let detail = format!("Imported: {} - {}", artist, title);
+                                println!("{}", detail);
+                                app.state::<crate::logging::LogState>().add_log("INFO", &detail, &app);
+                            }
+                        }
+                        if count > 10 {
+                            let more = format!("...and {} more imported tracks", count - 10);
+                            app.state::<crate::logging::LogState>().add_log("INFO", &more, &app);
+                        }
+                        drop(db);
+                        tracks_added += count;
+                        total_updated += count;
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to fetch new track data from Music.app: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    }
+                }
+            }
+
+            // Handle deleted tracks
+            if !deleted_pids.is_empty() {
+                let delete_msg = format!("Found {} track(s) removed from Music.app. Removing from DB...", deleted_pids.len());
+                println!("{}", delete_msg);
+                app.state::<crate::logging::LogState>().add_log("INFO", &delete_msg, &app);
+
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                match db.remove_tracks_by_persistent_ids(&deleted_pids) {
+                    Ok(count) => {
+                        let msg = format!("Removed {} deleted track(s) from DB", count);
+                        println!("{}", msg);
+                        app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+                        tracks_deleted += count;
+                        total_updated += count;
+                    }
+                    Err(e) => {
+                        let msg = format!("DB Error removing deleted tracks: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    }
+                }
+                drop(db);
+            }
+
+            if new_pids.is_empty() && deleted_pids.is_empty() {
+                let msg = "Phase 0: No imported or deleted tracks detected.";
+                println!("{}", msg);
+                app.state::<crate::logging::LogState>().add_log("INFO", msg, &app);
+            }
+        }
+        Err(e) => {
+            let msg = format!("Phase 0 failed (non-fatal): {}", e);
+            eprintln!("{}", msg);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+        }
+    }
 
     // --- Phase 1: Date-based query for metadata changes (title, artist, album, comment, grouping) ---
     // `modification date` in Music.app covers these fields.
@@ -691,12 +797,13 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         }
     }
 
-    let complete_msg = format!("Sync complete. Total updated: {} tracks, {} playlist events.", total_updated, playlist_changes);
+    let complete_msg = format!("Sync complete. {} tracks updated, {} added, {} deleted, {} playlist events.", 
+        total_updated - tracks_added - tracks_deleted, tracks_added, tracks_deleted, playlist_changes);
     println!("{}", complete_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", &complete_msg, &app);
 
     // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
-    Ok(SyncResult { tracks_updated: total_updated, playlists_updated: playlist_changes })
+    Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_deleted, playlists_updated: playlist_changes })
 }
 
 #[tauri::command]

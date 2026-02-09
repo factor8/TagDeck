@@ -619,6 +619,170 @@ pub fn set_play_count(track_pid: &str, count: i64) -> Result<()> {
     Ok(())
 }
 
+/// Fetches all persistent IDs from Music.app efficiently using batch property access.
+/// Returns a HashSet of persistent IDs for fast lookup.
+pub fn get_all_music_app_pids() -> Result<std::collections::HashSet<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = r#"
+            use framework "Foundation"
+            use scripting additions
+
+            tell application "Music"
+                set allIds to persistent ID of every track
+            end tell
+
+            set ca to current application
+            set jsonData to ca's NSJSONSerialization's dataWithJSONObject:allIds options:0 |error|:missing value
+            set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+            return jsonString
+        "#;
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("AppleScript Get All PIDs Failed: {}", err));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let ids: Vec<String> = serde_json::from_str(&stdout)?;
+        return Ok(ids.into_iter().collect());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(std::collections::HashSet::new())
+    }
+}
+
+/// Fetches full track data from Music.app for a set of persistent IDs.
+/// Used to import newly added tracks detected during sync.
+/// Processes in batches to avoid AppleScript timeouts on large sets.
+pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
+    #[cfg(target_os = "macos")]
+    {
+        if pids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut all_tracks = Vec::new();
+
+        // Process in batches of 50 to avoid AppleScript timeout
+        for chunk in pids.chunks(50) {
+            let pid_list: Vec<String> = chunk.iter()
+                .map(|pid| format!("\"{}\"" , pid))
+                .collect();
+            let pid_array = pid_list.join(", ");
+
+            let script = format!(
+                r#"
+                use framework "Foundation"
+                use scripting additions
+
+                set pidList to {{{}}}
+                set resultList to {{}}
+
+                tell application "Music"
+                    repeat with pid in pidList
+                        try
+                            set t to (first track whose persistent ID is pid)
+                            set tId to persistent ID of t
+                            set tName to name of t
+                            set tArtist to artist of t
+                            set tAlbum to album of t
+                            set tComment to comment of t
+                            set tGrouping to grouping of t
+                            set tDuration to duration of t
+                            set tKind to kind of t
+                            set tSize to size of t
+                            set tBitRate to bit rate of t
+                            set tRating to rating of t
+                            set tBpm to bpm of t
+
+                            set tLoc to ""
+                            try
+                                set tLoc to POSIX path of (location of t as alias)
+                            on error
+                                try
+                                    set fileRef to location of t
+                                    set fileURL to current application's NSURL's fileURLWithPath:(POSIX path of (fileRef as text))
+                                    set tLoc to (fileURL's |path|()) as text
+                                on error
+                                    set tLoc to ""
+                                end try
+                            end try
+
+                            set entry to {{|id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc}}
+                            copy entry to end of resultList
+                        end try
+                    end repeat
+                end tell
+
+                set ca to current application
+                set jsonData to ca's NSJSONSerialization's dataWithJSONObject:resultList options:0 |error|:missing value
+                set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+                return jsonString
+                "#,
+                pid_array
+            );
+
+            let output = Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .output()?;
+
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                eprintln!("AppleScript error fetching tracks by PID: {}", err);
+                continue; // Skip this batch but keep going
+            }
+
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let jxa_tracks: Vec<JxaTrack> = match serde_json::from_str(&stdout) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("JSON parse error for track batch: {}", e);
+                    continue;
+                }
+            };
+
+            for jt in jxa_tracks {
+                let path = jt.location.unwrap_or_default();
+                all_tracks.push(Track {
+                    id: 0,
+                    persistent_id: jt.id,
+                    file_path: path,
+                    artist: Some(jt.artist),
+                    title: Some(jt.name),
+                    album: Some(jt.album),
+                    comment_raw: Some(jt.comment),
+                    grouping_raw: Some(jt.grouping),
+                    duration_secs: jt.duration,
+                    format: jt.kind,
+                    size_bytes: jt.size,
+                    bit_rate: jt.bit_rate,
+                    modified_date: 0,
+                    rating: jt.rating,
+                    date_added: 0,
+                    bpm: jt.bpm,
+                    missing: false,
+                });
+            }
+        }
+
+        return Ok(all_tracks);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(vec![])
+    }
+}
+
 /// Updates a track's metadata fields (name, artist, album, BPM) in Apple Music via a single AppleScript call.
 /// Only sets fields that are provided (Some). Skips None fields.
 pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option<&str>, album: Option<&str>, bpm: Option<i64>) -> Result<()> {

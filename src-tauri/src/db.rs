@@ -548,6 +548,35 @@ impl Database {
         Ok(())
     }
 
+    /// Removes tracks from the DB that are no longer present in Music.app.
+    /// Also removes associated playlist_tracks entries.
+    /// Returns the count of deleted tracks.
+    pub fn remove_tracks_by_persistent_ids(&self, pids: &[String]) -> Result<usize> {
+        let mut deleted = 0;
+        for pid in pids {
+            // Remove from playlist_tracks first (foreign key)
+            let db_id: Option<i64> = self.conn.query_row(
+                "SELECT id FROM tracks WHERE persistent_id = ?1",
+                params![pid],
+                |row| row.get(0),
+            ).ok();
+
+            if let Some(id) = db_id {
+                self.conn.execute(
+                    "DELETE FROM playlist_tracks WHERE track_id = ?1",
+                    params![id],
+                )?;
+            }
+
+            let rows = self.conn.execute(
+                "DELETE FROM tracks WHERE persistent_id = ?1",
+                params![pid],
+            )?;
+            deleted += rows;
+        }
+        Ok(deleted)
+    }
+
     // TAG GROUP METHODS
 
     pub fn get_tag_groups(&self) -> Result<Vec<crate::models::TagGroup>> {

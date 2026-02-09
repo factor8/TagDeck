@@ -132,6 +132,8 @@ function App() {
 
           interface SyncResult {
               tracks_updated: number;
+              tracks_added: number;
+              tracks_deleted: number;
               playlists_updated: number;
           }
 
@@ -143,26 +145,33 @@ function App() {
 
           // Handle potential legacy return (number) if backend didn't update/recompile yet
           let tracksVal = 0;
+          let addedVal = 0;
+          let deletedVal = 0;
           let playlistsVal = 0;
 
           if (typeof result === 'number') {
               tracksVal = result;
-              playlistsVal = 0;
           } else if (result && typeof result === 'object') {
               tracksVal = result.tracks_updated || 0;
+              addedVal = result.tracks_added || 0;
+              deletedVal = result.tracks_deleted || 0;
               playlistsVal = result.playlists_updated || 0;
           }
 
           const totalUpdated = tracksVal + playlistsVal;
           
-          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Playlists=${playlistsVal}, Total=${totalUpdated}`);
+          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Added=${addedVal}, Deleted=${deletedVal}, Playlists=${playlistsVal}, Total=${totalUpdated}`);
 
           if (totalUpdated > 0) {
             const parts: string[] = [];
-            if (tracksVal > 0) parts.push(`${tracksVal} track${tracksVal > 1 ? 's' : ''}`);
+            // Show added/deleted separately for clarity, group the rest as "updated"
+            const pureUpdated = tracksVal - addedVal - deletedVal;
+            if (addedVal > 0) parts.push(`${addedVal} track${addedVal > 1 ? 's' : ''} imported`);
+            if (deletedVal > 0) parts.push(`${deletedVal} track${deletedVal > 1 ? 's' : ''} removed`);
+            if (pureUpdated > 0) parts.push(`${pureUpdated} track${pureUpdated > 1 ? 's' : ''} updated`);
             if (playlistsVal > 0) parts.push(`${playlistsVal} playlist${playlistsVal > 1 ? 's' : ''}`);
             
-            showSuccess(`Synced ${parts.join(' and ')}`);
+            showSuccess(`Synced: ${parts.join(', ')}`);
             setRefreshTrigger(p => p + 1);
             localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
           } else {
