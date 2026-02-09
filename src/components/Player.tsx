@@ -74,6 +74,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const [fallbackDuration, setFallbackDuration] = useState(0);
     const [fallbackCurrentTime, setFallbackCurrentTime] = useState(0);
     const mediaElementRef = useRef<HTMLAudioElement | null>(null);
+    const fallbackInProgressRef = useRef(false);
 
     // Fetch Artwork
     useEffect(() => {
@@ -221,6 +222,10 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'} (${track.format}, ${track.file_path})`;
 
         if (isDecodeError && !usingMediaFallback) {
+            // Prevent double-trigger (direct call + WaveSurfer error event race)
+            if (fallbackInProgressRef.current) return;
+            fallbackInProgressRef.current = true;
+
             // Attempt MediaElement fallback
             const warnMsg = `Web Audio decode failed for ${trackLabel}. Falling back to native audio decoder.`;
             console.warn(warnMsg);
@@ -275,9 +280,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 });
                 ws.on('ready', () => {
                     setFallbackDuration(ws.getDuration());
-                    if (autoPlayRef.current) {
-                        ws.play().catch(e => console.warn("Auto-play (fallback) failed:", e));
-                    }
+                    // Always auto-play: the user was already trying to play when decode failed
+                    ws.play().catch(e => console.warn("Auto-play (fallback) failed:", e));
                 });
                 ws.on('error', (fallbackErr: any) => {
                     const msg = `Native audio decode also failed for ${trackLabel}: ${fallbackErr}`;
@@ -314,7 +318,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             const msg = `All decoders failed for ${trackLabel}: ${errStr}`;
             console.error(msg);
             invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
-            setError('Playback Error: This file cannot be decoded.');
+            // Don't toast — the fallback error handler below will show a message only if truly unplayable
         }
     }, [track, currentUrl, wavesurfer, onTrackError, accentColor, usingMediaFallback]);
 
@@ -365,6 +369,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 setFallbackProgress(0);
                 setFallbackDuration(0);
                 setFallbackCurrentTime(0);
+                fallbackInProgressRef.current = false;
                 if (mediaElementRef.current) {
                     mediaElementRef.current.pause();
                     mediaElementRef.current.src = '';
@@ -418,11 +423,12 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                                           errStr.includes('Unable to decode');
 
                     if (isDecodeError) {
-                        // Don't show a scary error toast — the fallback handler will take over
-                        const msg = `Web Audio decode failed for ${trackLabel} (${track.format}, path: ${track.file_path}). Attempting native fallback...`;
+                        // Immediately trigger the MediaElement fallback — don't wait for
+                        // WaveSurfer's error event which may fire with a delay
+                        const msg = `Web Audio decode failed for ${trackLabel} (${track.format}, path: ${track.file_path}). Switching to native decoder...`;
                         console.warn(msg);
                         invoke('log_from_frontend', { level: 'WARN', message: msg }).catch(console.error);
-                        // The WaveSurfer error event will trigger handlePlaybackError
+                        handlePlaybackError(err);
                     } else {
                         const errorMessage = `Failed to load audio: ${errStr}`;
                         console.error(`Error loading ${trackLabel}:`, err);
@@ -456,7 +462,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             }
         }
         
-    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor]);
+    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor, handlePlaybackError]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
