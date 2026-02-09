@@ -13,6 +13,13 @@ function formatFileSize(bytes: number): string {
     return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
+function formatTime(seconds: number): string {
+    if (!seconds || !isFinite(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 function getMimeType(format: string): string {
     switch (format?.toLowerCase()) {
         case 'mp3': return 'audio/mpeg';
@@ -63,6 +70,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const [volume, setVolume] = useState(1);
     const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
     const [usingMediaFallback, setUsingMediaFallback] = useState(false);
+    const [fallbackProgress, setFallbackProgress] = useState(0);
+    const [fallbackDuration, setFallbackDuration] = useState(0);
+    const [fallbackCurrentTime, setFallbackCurrentTime] = useState(0);
     const mediaElementRef = useRef<HTMLAudioElement | null>(null);
 
     // Fetch Artwork
@@ -257,7 +267,14 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
                     if (onNextRef.current) onNextRef.current();
                 });
+                ws.on('timeupdate', (currentTime: number) => {
+                    const dur = ws.getDuration();
+                    setFallbackCurrentTime(currentTime);
+                    setFallbackDuration(dur);
+                    setFallbackProgress(dur > 0 ? currentTime / dur : 0);
+                });
                 ws.on('ready', () => {
+                    setFallbackDuration(ws.getDuration());
                     if (autoPlayRef.current) {
                         ws.play().catch(e => console.warn("Auto-play (fallback) failed:", e));
                     }
@@ -345,6 +362,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             // rebuild a standard (WebAudio) WaveSurfer for the new track.
             if (usingMediaFallback && containerRef.current) {
                 setUsingMediaFallback(false);
+                setFallbackProgress(0);
+                setFallbackDuration(0);
+                setFallbackCurrentTime(0);
                 if (mediaElementRef.current) {
                     mediaElementRef.current.pause();
                     mediaElementRef.current.src = '';
@@ -669,7 +689,73 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                         overflow: 'hidden',
                         width: '100%',
                     }} 
-                />
+                >
+                    {/* Fallback scrub bar for MediaElement-decoded tracks (no waveform data) */}
+                    {usingMediaFallback && (
+                        <div
+                            style={{
+                                position: 'absolute',
+                                inset: 0,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                justifyContent: 'center',
+                                zIndex: 2,
+                            }}
+                        >
+                            {/* Progress track */}
+                            <div
+                                onClick={(e) => {
+                                    if (!wavesurfer) return;
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                                    wavesurfer.seekTo(ratio);
+                                }}
+                                style={{
+                                    position: 'relative',
+                                    height: '6px',
+                                    borderRadius: '3px',
+                                    background: 'var(--bg-tertiary, #334155)',
+                                    cursor: 'pointer',
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                {/* Filled portion */}
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        left: 0,
+                                        top: 0,
+                                        bottom: 0,
+                                        width: `${fallbackProgress * 100}%`,
+                                        background: accentColor,
+                                        borderRadius: '3px',
+                                        transition: 'width 0.1s linear',
+                                    }}
+                                />
+                                {/* Scrub handle */}
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: '50%',
+                                        left: `${fallbackProgress * 100}%`,
+                                        transform: 'translate(-50%, -50%)',
+                                        width: '12px',
+                                        height: '12px',
+                                        borderRadius: '50%',
+                                        background: '#f1f5f9',
+                                        boxShadow: '0 1px 3px rgba(0,0,0,0.4)',
+                                        pointerEvents: 'none',
+                                    }}
+                                />
+                            </div>
+                            {/* Time labels */}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '10px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                                <span>{formatTime(fallbackCurrentTime)}</span>
+                                <span>{formatTime(fallbackDuration)}</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
 
             {/* Right: Volume/Spacer */}
