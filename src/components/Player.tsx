@@ -206,140 +206,77 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
     }, [accentColor, wavesurfer]);
 
-    // Error Handling Logic — fallback to MediaElement-backed WaveSurfer
-    // Web Audio's decodeAudioData() is strict and fails on MP3s with junk/padding
-    // between the ID3 tag and the first MPEG frame (common in old iTunes rips,
-    // Traktor-tagged files, etc.). The <audio> element uses Core Audio on macOS
-    // which is far more tolerant — same decoder iTunes uses.
-    const handlePlaybackError = useCallback(async (err: any) => {
-        if (!track || !wavesurfer || !containerRef.current) return;
-        
-        const errStr = String(err?.message || err);
-        const isDecodeError = errStr.includes('EncodingError') || 
-                              errStr.includes('Decoding failed') ||
-                              errStr.includes('Unable to decode');
+    // Helper: create a standard WaveSurfer with all event listeners
+    const createStandardWaveSurfer = useCallback(() => {
+        if (!containerRef.current) return null;
+        const ws = WaveSurfer.create({
+            container: containerRef.current,
+            waveColor: '#475569',
+            progressColor: accentColor,
+            cursorColor: '#f1f5f9',
+            barWidth: 2,
+            barGap: 1,
+            barRadius: 2,
+            height: 40,
+            normalize: true,
+            interact: true,
+        });
+        ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
+        ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
+        ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
+        ws.on('ready', () => { if (autoPlayRef.current) { ws.play().catch(() => {}); } });
+        // Don't set error toast from WaveSurfer's error event — loadAudio handles errors
+        ws.on('error', (err: any) => { console.warn('WaveSurfer error event (handled by loadAudio):', err); });
+        return ws;
+    }, [accentColor]);
 
-        const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'} (${track.format}, ${track.file_path})`;
+    // Helper: create a MediaElement-backed fallback WaveSurfer
+    const createFallbackWaveSurfer = useCallback((audioEl: HTMLAudioElement) => {
+        if (!containerRef.current) return null;
+        const ws = WaveSurfer.create({
+            container: containerRef.current,
+            waveColor: '#475569',
+            progressColor: accentColor,
+            cursorColor: '#f1f5f9',
+            barWidth: 2,
+            barGap: 1,
+            barRadius: 2,
+            height: 40,
+            normalize: true,
+            interact: true,
+            media: audioEl,
+        });
+        ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
+        ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
+        ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
+        ws.on('timeupdate', (currentTime: number) => {
+            const dur = ws.getDuration();
+            setFallbackCurrentTime(currentTime);
+            setFallbackDuration(dur);
+            setFallbackProgress(dur > 0 ? currentTime / dur : 0);
+        });
+        // WaveSurfer may still attempt a Web Audio decode for waveform rendering,
+        // which will fail (that's why we're in fallback). Suppress — playback
+        // goes through the <audio> element and works fine.
+        ws.on('error', (fallbackErr: any) => {
+            console.warn('Fallback WaveSurfer waveform decode error (expected, playback unaffected):', fallbackErr);
+        });
 
-        if (isDecodeError && !usingMediaFallback) {
-            // Prevent double-trigger (direct call + WaveSurfer error event race)
-            if (fallbackInProgressRef.current) return;
-            fallbackInProgressRef.current = true;
-
-            // Attempt MediaElement fallback
-            const warnMsg = `Web Audio decode failed for ${trackLabel}. Falling back to native audio decoder.`;
-            console.warn(warnMsg);
-            invoke('log_from_frontend', { level: 'WARN', message: warnMsg }).catch(console.error);
-
-            try {
-                const contents = await readFile(track.file_path);
-                const mimeType = getMimeType(track.format);
-                const blob = new Blob([contents], { type: mimeType });
-                const blobUrl = URL.createObjectURL(blob);
-
-                // Create a fresh <audio> element for the MediaElement backend
-                const audioEl = new Audio();
-                audioEl.src = blobUrl;
-                mediaElementRef.current = audioEl;
-
-                // Destroy the old WaveSurfer and create a new one with media backend
-                try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
-
-                const ws = WaveSurfer.create({
-                    container: containerRef.current!,
-                    waveColor: '#475569',
-                    progressColor: accentColor,
-                    cursorColor: '#f1f5f9',
-                    barWidth: 2,
-                    barGap: 1,
-                    barRadius: 2,
-                    height: 40,
-                    normalize: true,
-                    interact: true,
-                    media: audioEl,
-                });
-
-                ws.on('play', () => {
-                    setIsPlaying(true);
-                    if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true);
-                });
-                ws.on('pause', () => {
-                    setIsPlaying(false);
-                    if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
-                });
-                ws.on('finish', () => {
-                    setIsPlaying(false);
-                    if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
-                    if (onNextRef.current) onNextRef.current();
-                });
-                ws.on('timeupdate', (currentTime: number) => {
-                    const dur = ws.getDuration();
-                    setFallbackCurrentTime(currentTime);
-                    setFallbackDuration(dur);
-                    setFallbackProgress(dur > 0 ? currentTime / dur : 0);
-                });
-                ws.on('ready', () => {
-                    setFallbackDuration(ws.getDuration());
-                    // Always auto-play: the user was already trying to play when decode failed
-                    ws.play().catch(e => console.warn("Auto-play (fallback) failed:", e));
-                });
-                ws.on('error', (fallbackErr: any) => {
-                    const msg = `Native audio decode also failed for ${trackLabel}: ${fallbackErr}`;
-                    console.error(msg);
-                    invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
-                    setError('Playback Error: This file cannot be decoded.');
-                });
-
-                setCurrentUrl(blobUrl);
-                setUsingMediaFallback(true);
-                setWavesurfer(ws);
-
-                invoke('log_from_frontend', { level: 'INFO', message: `MediaElement fallback loaded successfully for: ${track.title}` }).catch(console.error);
-
-            } catch (fallbackErr) {
-                const msg = `MediaElement fallback failed for ${trackLabel}: ${fallbackErr}`;
-                console.error(msg);
-                invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
-                setError('Playback Error: Could not load audio file.');
-            }
-        } else if (!isDecodeError) {
-            // Not a decode error — file may actually be missing / unreadable
-            const msg = `Audio load error for ${trackLabel}: ${errStr}`;
-            console.error(msg);
-            invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
-            setError(`Playback Error: ${errStr}`);
-
-            // Only mark missing if we truly can't read the file
-            invoke('mark_track_missing', { id: track.id, missing: true })
-                .then(() => onTrackError?.())
-                .catch(e => console.error("Failed to mark track missing:", e));
+        // Drive playback from the <audio> element directly — WaveSurfer's 'ready'
+        // event is unreliable when the waveform decode fails.
+        const startPlayback = () => {
+            setFallbackDuration(audioEl.duration || 0);
+            audioEl.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
+        };
+        if (audioEl.readyState >= 3) {
+            // Already loaded (HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA)
+            startPlayback();
         } else {
-            // Decode error AND already using fallback — nothing more we can do
-            const msg = `All decoders failed for ${trackLabel}: ${errStr}`;
-            console.error(msg);
-            invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
-            // Don't toast — the fallback error handler below will show a message only if truly unplayable
+            audioEl.addEventListener('canplay', startPlayback, { once: true });
         }
-    }, [track, currentUrl, wavesurfer, onTrackError, accentColor, usingMediaFallback]);
 
-    // Attach Error Handler with Dependencies
-    useEffect(() => {
-        if (!wavesurfer) return;
-
-        const errorListener = (err: any) => {
-            handlePlaybackError(err);
-        };
-
-        wavesurfer.on('error', errorListener);
-        
-        return () => {
-            try {
-                wavesurfer.un('error', errorListener);
-            } catch (e) {
-                console.warn("Failed to unregister error listener:", e);
-            }
-        };
-    }, [wavesurfer, handlePlaybackError]);
+        return ws;
+    }, [accentColor]);
 
 
     // Load audio when track changes
@@ -364,7 +301,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
             // If we were using the MediaElement fallback for the previous track,
             // rebuild a standard (WebAudio) WaveSurfer for the new track.
-            if (usingMediaFallback && containerRef.current) {
+            let activeWs = wavesurfer;
+            if (usingMediaFallback) {
                 setUsingMediaFallback(false);
                 setFallbackProgress(0);
                 setFallbackDuration(0);
@@ -377,32 +315,16 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 }
                 try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
 
-                const ws = WaveSurfer.create({
-                    container: containerRef.current,
-                    waveColor: '#475569',
-                    progressColor: accentColor,
-                    cursorColor: '#f1f5f9',
-                    barWidth: 2,
-                    barGap: 1,
-                    barRadius: 2,
-                    height: 40,
-                    normalize: true,
-                    interact: true,
-                });
-                ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
-                ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
-                ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
-                ws.on('ready', () => { if (autoPlayRef.current) { ws.play().catch(() => {}); } });
-                ws.on('error', (err: any) => { console.error("WaveSurfer internal error:", err); });
+                const ws = createStandardWaveSurfer();
+                if (!ws) return;
+                activeWs = ws;
                 setWavesurfer(ws);
-                // The new WaveSurfer will trigger this effect again on next render
-                return;
             }
             
-            const loadAudio = async () => {
+            const loadAudio = async (ws: WaveSurfer) => {
                 const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
                 try {
-                     try { wavesurfer.stop(); } catch(e) { /* ignore */ }
+                     try { ws.stop(); } catch(e) { /* ignore */ }
                     
                     console.log('Reading file for playback:', track.file_path);
                     const contents = await readFile(track.file_path);
@@ -414,7 +336,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     console.log(`Loading audio: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
                     setCurrentUrl(blobUrl);
                     
-                    await wavesurfer.load(blobUrl);
+                    await ws.load(blobUrl);
                     
                 } catch (err) {
                     const errStr = String(err);
@@ -423,12 +345,43 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                                           errStr.includes('Unable to decode');
 
                     if (isDecodeError) {
-                        // Immediately trigger the MediaElement fallback — don't wait for
-                        // WaveSurfer's error event which may fire with a delay
-                        const msg = `Web Audio decode failed for ${trackLabel} (${track.format}, path: ${track.file_path}). Switching to native decoder...`;
+                        // Web Audio's decodeAudioData() is strict and fails on MP3s
+                        // with junk/padding between the ID3 tag and the first MPEG frame.
+                        // Fall back to MediaElement (Core Audio on macOS) which is tolerant.
+                        const msg = `Web Audio decode failed for ${trackLabel} (${track.format}). Switching to native decoder...`;
                         console.warn(msg);
                         invoke('log_from_frontend', { level: 'WARN', message: msg }).catch(console.error);
-                        handlePlaybackError(err);
+
+                        try {
+                            // Re-read file for the fallback (the blob may have been consumed)
+                            const contents = await readFile(track.file_path);
+                            const mimeType = getMimeType(track.format);
+                            const blob = new Blob([contents], { type: mimeType });
+                            const blobUrl = URL.createObjectURL(blob);
+
+                            const audioEl = new Audio();
+                            audioEl.src = blobUrl;
+                            mediaElementRef.current = audioEl;
+
+                            // Destroy the failed WebAudio WaveSurfer
+                            try { ws.destroy(); } catch (_) { /* ignore */ }
+
+                            const fallbackWs = createFallbackWaveSurfer(audioEl);
+                            if (!fallbackWs) {
+                                setError('Playback Error: Could not create fallback player.');
+                                return;
+                            }
+
+                            setCurrentUrl(blobUrl);
+                            setUsingMediaFallback(true);
+                            setWavesurfer(fallbackWs);
+
+                            invoke('log_from_frontend', { level: 'INFO', message: `MediaElement fallback loaded for: ${track.title}` }).catch(console.error);
+                        } catch (fallbackErr) {
+                            console.error('MediaElement fallback failed:', fallbackErr);
+                            invoke('log_from_frontend', { level: 'ERROR', message: `MediaElement fallback failed for ${trackLabel}: ${fallbackErr}` }).catch(console.error);
+                            setError('Playback Error: Could not load audio file.');
+                        }
                     } else {
                         const errorMessage = `Failed to load audio: ${errStr}`;
                         console.error(`Error loading ${trackLabel}:`, err);
@@ -450,7 +403,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 }
             };
     
-            loadAudio();
+            loadAudio(activeWs);
         } else {
              // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
              if (autoPlay) {
@@ -462,7 +415,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             }
         }
         
-    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor, handlePlaybackError]);
+    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor, createStandardWaveSurfer, createFallbackWaveSurfer, onTrackError]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
