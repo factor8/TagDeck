@@ -40,6 +40,7 @@ interface Props {
     onNext?: () => void;
     onPrev?: () => void;
     autoPlay?: boolean;
+    playerMode?: 'standard' | 'waveform';
     onTrackError?: () => void;
     accentColor?: string;
     onArtworkClick?: () => void;
@@ -47,10 +48,11 @@ interface Props {
     onPlayStateChange?: (isPlaying: boolean) => void;
 }
 
-export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange }: Props) {
+export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, playerMode = 'standard', onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange }: Props) {
     const { debugMode } = useDebug();
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
+    const playerModeRef = useRef(playerMode);
     const prevTrackIdRef = useRef<number | null>(null);
     const onPlayStateChangeRef = useRef(onPlayStateChange);
     const onNextRef = useRef(onNext);
@@ -58,9 +60,10 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     // Keep refs up to date
     useEffect(() => {
         autoPlayRef.current = autoPlay;
+        playerModeRef.current = playerMode;
         onPlayStateChangeRef.current = onPlayStateChange;
         onNextRef.current = onNext;
-    }, [autoPlay, onPlayStateChange, onNext]);
+    }, [autoPlay, playerMode, onPlayStateChange, onNext]);
 
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);

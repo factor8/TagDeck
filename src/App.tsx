@@ -42,6 +42,9 @@ function App() {
     return saved ? Number(saved) : null;
   });
   const [shouldAutoPlay, setShouldAutoPlay] = useState(false);
+  const [playerMode, setPlayerMode] = useState<'standard' | 'waveform'>(() => {
+    return (localStorage.getItem('app_player_mode') as 'standard' | 'waveform') || 'standard';
+  });
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [activeDragItem, setActiveDragItem] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -61,6 +64,16 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+
+  useEffect(() => {
+    const handlePlayerModeChange = () => {
+        const mode = (localStorage.getItem('app_player_mode') as 'standard' | 'waveform') || 'standard';
+        console.log('[App] Player mode changed to:', mode);
+        setPlayerMode(mode);
+    };
+    window.addEventListener('player-mode-changed', handlePlayerModeChange);
+    return () => window.removeEventListener('player-mode-changed', handlePlayerModeChange);
+  }, []);
 
   useEffect(() => {
     const handleToggle = () => {
@@ -786,6 +799,7 @@ function App() {
             }
         }}
         autoPlay={shouldAutoPlay}
+        playerMode={playerMode}
         onTrackError={handleRefresh}
         accentColor={accentColor}
         onArtworkClick={() => setIsSidebarArtworkVisible(prev => !prev)}

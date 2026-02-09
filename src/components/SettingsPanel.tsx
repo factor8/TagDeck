@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2, FolderOpen, Bug } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useDebug } from './DebugContext';
@@ -67,6 +67,9 @@ export function SettingsPanel({
     const { debugMode, setDebugMode } = useDebug();
     const [realTimeSyncEnabled, setRealTimeSyncEnabled] = useState(() => {
         return localStorage.getItem('app_real_time_sync_enabled') !== 'false';
+    });
+    const [playerMode, setPlayerMode] = useState<'standard' | 'waveform'>(() => {
+        return (localStorage.getItem('app_player_mode') as 'standard' | 'waveform') || 'standard';
     });
 
     const handleRealTimeSyncToggle = () => {
@@ -414,6 +417,53 @@ export function SettingsPanel({
                              {isCustomAccent && <Check size={18} color="white" style={{ filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.5))' }} />}
                         </div>
                     </div>
+                </div>
+            </div>
+
+            {/* Playback Section */}
+            <div style={{ marginTop: '28px', padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <AudioWaveform size={14} /> Playback
+                </h4>
+
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                        <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Waveform Player</span>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            {playerMode === 'waveform' ? 'Full waveform — slower to load' : 'Instant playback — simple progress bar'}
+                        </div>
+                    </div>
+                    <button
+                        onClick={() => {
+                            const next = playerMode === 'waveform' ? 'standard' : 'waveform';
+                            setPlayerMode(next);
+                            localStorage.setItem('app_player_mode', next);
+                            window.dispatchEvent(new Event('player-mode-changed'));
+                        }}
+                        style={{
+                            width: '40px',
+                            height: '22px',
+                            background: playerMode === 'waveform' ? 'var(--accent-color)' : 'var(--bg-secondary)',
+                            borderRadius: '11px',
+                            position: 'relative',
+                            border: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            transition: 'background 0.2s',
+                            padding: 0
+                        }}
+                    >
+                        <div style={{
+                            width: '18px',
+                            height: '18px',
+                            background: 'white',
+                            borderRadius: '50%',
+                            position: 'absolute',
+                            top: '1px',
+                            left: playerMode === 'waveform' ? '19px' : '1px',
+                            transition: 'left 0.2s',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                        }} />
+                    </button>
                 </div>
             </div>
 
