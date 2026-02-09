@@ -624,19 +624,33 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
             for mp in &music_playlists {
                 // Filter the track IDs from Music.app to only represent tracks we know about locally.
                 // Otherwise, a single missing track causes infinite sync loops.
+                // Also deduplicate: Music.app can have the same track multiple times in a playlist,
+                // but our DB schema uses PRIMARY KEY (playlist_id, track_id) which prevents duplicates.
+                // Without dedup, the diff sees more tracks from Music.app than the DB can store,
+                // causing infinite phantom syncs.
+                let mut seen = std::collections::HashSet::new();
                 let filtered_track_ids: Vec<String> = mp.track_ids.iter()
                     .filter(|tid| all_track_pids.contains(*tid))
+                    .filter(|tid| seen.insert((*tid).clone()))
                     .cloned()
                     .collect();
 
                 let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
                     None => true, // New playlist
                     Some((db_name, db_is_folder, db_parent_pid, db_track_ids)) => {
+                        // Compare track membership using sorted lists to avoid false
+                        // positives caused by Music.app returning tracks in a
+                        // non-deterministic order (current UI sort, etc.).
+                        let mut sorted_filtered = filtered_track_ids.clone();
+                        sorted_filtered.sort();
+                        let mut sorted_db = db_track_ids.clone();
+                        sorted_db.sort();
+
                         // Check if any field changed
                         db_name != &mp.name
                             || db_is_folder != &mp.is_folder
                             || db_parent_pid != &mp.parent_persistent_id
-                            || db_track_ids != &filtered_track_ids
+                            || sorted_db != sorted_filtered
                     }
                 };
                 
