@@ -164,3 +164,67 @@ pub fn get_artwork<P: AsRef<Path>>(path: P) -> Result<Option<Vec<u8>>> {
     
     Ok(None)
 }
+
+/// Writes track info fields (title, artist, album, BPM) to the audio file's metadata tags.
+/// Only updates fields that are Some; leaves existing values for None fields.
+pub fn write_track_info<P: AsRef<Path>>(
+    path: P,
+    title: Option<&str>,
+    artist: Option<&str>,
+    album: Option<&str>,
+    bpm: Option<i64>,
+) -> Result<()> {
+    let path_ref = path.as_ref();
+    let mut tagged_file = read_from_path(path_ref)
+        .context(format!("Failed to read file: {:?}", path_ref))?;
+
+    // Safety: Remove ID3v1 to prevent iTunes conflicts
+    if tagged_file.tag(TagType::Id3v1).is_some() {
+        tagged_file.remove(TagType::Id3v1);
+    }
+
+    let mut tag = match tagged_file.primary_tag_mut() {
+        Some(t) => t.clone(),
+        None => Tag::new(TagType::Id3v2),
+    };
+
+    // Force ID3v2 for MP3/AIFF
+    if (tagged_file.file_type() == FileType::Mpeg || tagged_file.file_type() == FileType::Aiff)
+        && tag.tag_type() != TagType::Id3v2
+    {
+        tag = Tag::new(TagType::Id3v2);
+    }
+
+    if let Some(t) = title {
+        tag.remove_key(&ItemKey::TrackTitle);
+        if !t.is_empty() {
+            tag.insert_text(ItemKey::TrackTitle, t.to_string());
+        }
+    }
+
+    if let Some(a) = artist {
+        tag.remove_key(&ItemKey::TrackArtist);
+        if !a.is_empty() {
+            tag.insert_text(ItemKey::TrackArtist, a.to_string());
+        }
+    }
+
+    if let Some(al) = album {
+        tag.remove_key(&ItemKey::AlbumTitle);
+        if !al.is_empty() {
+            tag.insert_text(ItemKey::AlbumTitle, al.to_string());
+        }
+    }
+
+    if let Some(b) = bpm {
+        tag.remove_key(&ItemKey::Bpm);
+        if b > 0 {
+            tag.insert_text(ItemKey::Bpm, b.to_string());
+        }
+    }
+
+    tag.save_to_path(path, WriteOptions::default())
+        .context("Failed to save track info to disk")?;
+
+    Ok(())
+}

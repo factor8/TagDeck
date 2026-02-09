@@ -1,10 +1,10 @@
 use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
-use crate::metadata::{write_metadata as write_tags_to_file, get_artwork};
+use crate::metadata::{write_metadata as write_tags_to_file, get_artwork, write_track_info};
 use crate::apple_music::{
     update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot,
-    remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count
+    remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count, update_track_info as apple_update_track_info
 };
 use crate::models::{Track, Playlist};
 use crate::undo::{UndoStack, Action, TrackState, TrackRef};
@@ -887,6 +887,67 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::model
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.sync_tags().map_err(|e| e.to_string())?;
     db.get_all_tags().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_track_info(
+    app: tauri::AppHandle,
+    track_id: i64,
+    title: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    bpm: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+
+    // 1. Get track for persistent_id and file_path
+    let track = db.get_track(track_id).map_err(|e| e.to_string())?
+        .ok_or("Track not found")?;
+
+    // 2. Update local DB
+    db.update_track_info(
+        track_id,
+        title.as_deref(),
+        artist.as_deref(),
+        album.as_deref(),
+        bpm,
+    ).map_err(|e| e.to_string())?;
+
+    drop(db); // Release lock before IO
+
+    // 3. Write to file metadata
+    if let Err(e) = write_track_info(
+        &track.file_path,
+        title.as_deref(),
+        artist.as_deref(),
+        album.as_deref(),
+        bpm,
+    ) {
+        let msg = format!("Warning: Failed to write track info to file: {}", e);
+        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+        eprintln!("{}", msg);
+    }
+
+    // 4. Touch file so Finder/Rekordbox notices
+    if let Err(e) = touch_file(&track.file_path) {
+        eprintln!("Warning: Failed to touch file: {}", e);
+    }
+
+    // 5. Update Apple Music
+    if let Err(e) = apple_update_track_info(
+        &track.persistent_id,
+        title.as_deref(),
+        artist.as_deref(),
+        album.as_deref(),
+        bpm,
+    ) {
+        let msg = format!("Warning: Failed to update Apple Music: {}", e);
+        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+        eprintln!("{}", msg);
+    }
+
+    Ok(())
 }
 
 #[derive(serde::Serialize)]

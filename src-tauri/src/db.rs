@@ -406,6 +406,55 @@ impl Database {
         Ok(())
     }
 
+    /// Updates track info fields (title, artist, album, bpm) in the database.
+    /// Only updates fields that are Some; leaves existing values for None fields.
+    pub fn update_track_info(
+        &self,
+        id: i64,
+        title: Option<&str>,
+        artist: Option<&str>,
+        album: Option<&str>,
+        bpm: Option<i64>,
+    ) -> Result<()> {
+        let mut sets = Vec::new();
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(t) = title {
+            sets.push("title = ?");
+            params_vec.push(Box::new(t.to_string()));
+        }
+        if let Some(a) = artist {
+            sets.push("artist = ?");
+            params_vec.push(Box::new(a.to_string()));
+        }
+        if let Some(al) = album {
+            sets.push("album = ?");
+            params_vec.push(Box::new(al.to_string()));
+        }
+        if let Some(b) = bpm {
+            sets.push("bpm = ?");
+            params_vec.push(Box::new(b));
+        }
+
+        if sets.is_empty() {
+            return Ok(());
+        }
+
+        params_vec.push(Box::new(id));
+
+        // Build parameterized query with correct numbered placeholders
+        let mut numbered_sets = Vec::new();
+        for (i, s) in sets.iter().enumerate() {
+            numbered_sets.push(s.replace('?', &format!("?{}", i + 1)));
+        }
+        let id_param = format!("?{}", params_vec.len());
+        let sql = format!("UPDATE tracks SET {} WHERE id = {}", numbered_sets.join(", "), id_param);
+
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        self.conn.execute(&sql, param_refs.as_slice())?;
+        Ok(())
+    }
+
     pub fn get_all_tracks(&self) -> Result<Vec<crate::models::Track>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album, 

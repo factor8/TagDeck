@@ -140,6 +140,7 @@ pub fn run() {
             commands::undo,
             commands::redo,
             commands::update_rating,
+            commands::update_track_info,
             commands::sync_recent_changes
         ])
         .run(tauri::generate_context!())

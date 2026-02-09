@@ -618,3 +618,60 @@ pub fn set_play_count(track_pid: &str, count: i64) -> Result<()> {
     }
     Ok(())
 }
+
+/// Updates a track's metadata fields (name, artist, album, BPM) in Apple Music via a single AppleScript call.
+/// Only sets fields that are provided (Some). Skips None fields.
+pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option<&str>, album: Option<&str>, bpm: Option<i64>) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut set_lines = Vec::new();
+        if let Some(n) = name {
+            let escaped = n.replace('\\', "\\\\").replace('"', "\\\"");
+            set_lines.push(format!("set name of myTrack to \"{}\"", escaped));
+        }
+        if let Some(a) = artist {
+            let escaped = a.replace('\\', "\\\\").replace('"', "\\\"");
+            set_lines.push(format!("set artist of myTrack to \"{}\"", escaped));
+        }
+        if let Some(al) = album {
+            let escaped = al.replace('\\', "\\\\").replace('"', "\\\"");
+            set_lines.push(format!("set album of myTrack to \"{}\"", escaped));
+        }
+        if let Some(b) = bpm {
+            set_lines.push(format!("set bpm of myTrack to {}", b));
+        }
+
+        if set_lines.is_empty() {
+            return Ok(());
+        }
+
+        let set_block = set_lines.join("\n                            ");
+
+        let script = format!(
+            r#"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        set myTracks to (every track whose persistent ID is "{}")
+                        if (count of myTracks) > 0 then
+                            set myTrack to item 1 of myTracks
+                            {}
+                        end if
+                    end try
+                end tell
+            end if
+            "#,
+            persistent_id, set_block
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+            eprintln!("AppleScript error (update_track_info): {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+    Ok(())
+}

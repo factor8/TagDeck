@@ -15,7 +15,7 @@ import {
     ColumnDef,
     Header,
     Row,
-    Table
+    Table,
 } from '@tanstack/react-table';
 import { 
     useDraggable,
@@ -56,6 +56,162 @@ interface ContextMenuState {
     y: number;
     track: Track;
 }
+
+// Editing state: which cell is being edited
+interface EditingCell {
+    trackId: number;
+    field: 'title' | 'artist' | 'album' | 'bpm';
+}
+
+// ── EditableCell ───────────────────────────────────────────────
+// iTunes-style inline editing: click a selected row's cell to start editing.
+// The cell shows a text input that auto-selects, commits on Enter/blur, cancels on Escape.
+const EditableCell = ({ 
+    value, 
+    trackId, 
+    field, 
+    isSelected, 
+    editingCell, 
+    onStartEdit, 
+    onCommitEdit, 
+    onCancelEdit,
+    isNumeric,
+    children
+}: {
+    value: string;
+    trackId: number;
+    field: 'title' | 'artist' | 'album' | 'bpm';
+    isSelected: boolean;
+    editingCell: EditingCell | null;
+    onStartEdit: (trackId: number, field: EditingCell['field']) => void;
+    onCommitEdit: (trackId: number, field: EditingCell['field'], newValue: string) => void;
+    onCancelEdit: () => void;
+    isNumeric?: boolean;
+    children?: React.ReactNode;
+}) => {
+    const inputRef = useRef<HTMLInputElement>(null);
+    const isEditing = editingCell?.trackId === trackId && editingCell?.field === field;
+    const [localValue, setLocalValue] = useState(value);
+    const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const wasSelectedRef = useRef(false);
+
+    useEffect(() => {
+        if (isEditing && inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.select();
+        }
+    }, [isEditing]);
+
+    // Reset local value when the external value changes (e.g. after commit)
+    useEffect(() => {
+        if (!isEditing) {
+            setLocalValue(value);
+        }
+    }, [value, isEditing]);
+
+    const handleMouseDown = () => {
+        // Track whether this cell's row was already selected before this click
+        wasSelectedRef.current = isSelected;
+    };
+
+    const handleClick = (e: React.MouseEvent) => {
+        e.stopPropagation();
+
+        // Only enter edit mode if the row was already selected before this click
+        // (iTunes "slow double click" pattern: first click selects, second click edits)
+        if (wasSelectedRef.current && !isEditing) {
+            // Use a short delay to distinguish from a double-click (play) 
+            if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = setTimeout(() => {
+                onStartEdit(trackId, field);
+            }, 300);
+        }
+    };
+
+    const handleDoubleClick = (_e: React.MouseEvent) => {
+        // Cancel the slow-click edit timer so double-click plays the track
+        if (clickTimerRef.current) {
+            clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+        }
+        // Don't stop propagation — let the row's onDoubleClick fire to play the track
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            onCommitEdit(trackId, field, localValue);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setLocalValue(value); // Reset
+            onCancelEdit();
+        } else if (e.key === 'Tab') {
+            e.preventDefault();
+            onCommitEdit(trackId, field, localValue);
+            // Tab to next editable field
+            const fields: EditingCell['field'][] = ['title', 'artist', 'album', 'bpm'];
+            const idx = fields.indexOf(field);
+            if (idx < fields.length - 1) {
+                onStartEdit(trackId, fields[idx + 1]);
+            }
+        }
+        // Stop propagation so keyboard shortcuts (space for play, etc.) don't fire
+        e.stopPropagation();
+    };
+
+    const handleBlur = () => {
+        // Commit on blur (clicking away)
+        if (localValue !== value) {
+            onCommitEdit(trackId, field, localValue);
+        } else {
+            onCancelEdit();
+        }
+    };
+
+    if (isEditing) {
+        return (
+            <input
+                ref={inputRef}
+                type={isNumeric ? 'number' : 'text'}
+                value={localValue}
+                onChange={e => setLocalValue(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onBlur={handleBlur}
+                onClick={e => e.stopPropagation()}
+                onDoubleClick={e => e.stopPropagation()}
+                style={{
+                    width: '100%',
+                    padding: '1px 4px',
+                    margin: '-2px -4px',
+                    border: '1px solid var(--accent-color)',
+                    borderRadius: '3px',
+                    background: 'var(--bg-primary)',
+                    color: 'var(--text-primary)',
+                    fontSize: '13px',
+                    fontFamily: 'inherit',
+                    outline: 'none',
+                    boxSizing: 'border-box',
+                }}
+            />
+        );
+    }
+
+    return (
+        <div
+            onMouseDown={handleMouseDown}
+            onClick={handleClick}
+            onDoubleClick={handleDoubleClick}
+            style={{ 
+                cursor: isSelected ? 'text' : 'pointer',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+            }}
+        >
+            {children || value}
+        </div>
+    );
+};
 
 export interface TrackListHandle {
     selectNext: () => void;
@@ -330,6 +486,62 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
     const [loading, setLoading] = useState(false);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+    const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
+    
+    // Cancel editing when selection changes (iTunes behavior)
+    useEffect(() => {
+        setEditingCell(null);
+    }, [selectedTrackIds]);
+
+    const handleStartEdit = useCallback((trackId: number, field: EditingCell['field']) => {
+        setEditingCell({ trackId, field });
+    }, []);
+
+    const handleCancelEdit = useCallback(() => {
+        setEditingCell(null);
+    }, []);
+
+    const handleCommitEdit = useCallback(async (trackId: number, field: EditingCell['field'], newValue: string) => {
+        setEditingCell(null);
+
+        // Find current track to compare
+        const track = tracks.find(t => t.id === trackId);
+        if (!track) return;
+
+        // Check if value actually changed
+        const oldValue = field === 'bpm' 
+            ? String(track.bpm || '') 
+            : (track[field] || '');
+        if (newValue === oldValue) return;
+
+        // Optimistically update local state
+        setTracks(prev => prev.map(t => {
+            if (t.id !== trackId) return t;
+            if (field === 'bpm') {
+                return { ...t, bpm: parseInt(newValue) || 0 };
+            }
+            return { ...t, [field]: newValue };
+        }));
+
+        // Build the update payload — only send the changed field
+        const payload: { trackId: number; title?: string; artist?: string; album?: string; bpm?: number } = { trackId };
+        if (field === 'bpm') {
+            payload.bpm = parseInt(newValue) || 0;
+        } else {
+            payload[field] = newValue;
+        }
+
+        try {
+            await invoke('update_track_info', payload);
+        } catch (error) {
+            console.error('Failed to update track info:', error);
+            // Revert on failure
+            setTracks(prev => prev.map(t => {
+                if (t.id !== trackId) return t;
+                return { ...t, ...track }; // Restore original
+            }));
+        }
+    }, [tracks]);
     
     const sensors = useSensors(
         useSensor(PointerSensor, {
@@ -681,15 +893,28 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             header: 'Artist',
             cell: info => {
                 const isCurrentTrack = playingTrackId === info.row.original.id;
+                const trackId = info.row.original.id;
+                const val = info.getValue() || '';
                 return (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        {isCurrentTrack && (
-                             isPlaying 
-                             ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
-                             : <Volume1 size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-                        )}
-                        <span>{info.getValue()}</span>
-                    </div>
+                    <EditableCell
+                        value={val}
+                        trackId={trackId}
+                        field="artist"
+                        isSelected={selectedTrackIds.has(trackId)}
+                        editingCell={editingCell}
+                        onStartEdit={handleStartEdit}
+                        onCommitEdit={handleCommitEdit}
+                        onCancelEdit={handleCancelEdit}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {isCurrentTrack && (
+                                 isPlaying 
+                                 ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                                 : <Volume1 size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+                            )}
+                            <span>{val}</span>
+                        </div>
+                    </EditableCell>
                 );
             },
             size: 150,
@@ -697,13 +922,41 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         columnHelper.accessor('title', {
             id: 'title',
             header: 'Title',
-            cell: info => info.getValue(),
+            cell: info => {
+                const trackId = info.row.original.id;
+                return (
+                    <EditableCell
+                        value={info.getValue() || ''}
+                        trackId={trackId}
+                        field="title"
+                        isSelected={selectedTrackIds.has(trackId)}
+                        editingCell={editingCell}
+                        onStartEdit={handleStartEdit}
+                        onCommitEdit={handleCommitEdit}
+                        onCancelEdit={handleCancelEdit}
+                    />
+                );
+            },
             size: 200,
         }),
         columnHelper.accessor('album', {
             id: 'album',
             header: 'Album',
-            cell: info => info.getValue(),
+            cell: info => {
+                const trackId = info.row.original.id;
+                return (
+                    <EditableCell
+                        value={info.getValue() || ''}
+                        trackId={trackId}
+                        field="album"
+                        isSelected={selectedTrackIds.has(trackId)}
+                        editingCell={editingCell}
+                        onStartEdit={handleStartEdit}
+                        onCommitEdit={handleCommitEdit}
+                        onCancelEdit={handleCancelEdit}
+                    />
+                );
+            },
             size: 150,
         }),
         columnHelper.accessor('comment_raw', {
@@ -768,7 +1021,23 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         columnHelper.accessor('bpm', {
             id: 'bpm',
             header: 'BPM',
-            cell: info => info.getValue() || '',
+            cell: info => {
+                const trackId = info.row.original.id;
+                const val = info.getValue();
+                return (
+                    <EditableCell
+                        value={val ? String(val) : ''}
+                        trackId={trackId}
+                        field="bpm"
+                        isSelected={selectedTrackIds.has(trackId)}
+                        editingCell={editingCell}
+                        onStartEdit={handleStartEdit}
+                        onCommitEdit={handleCommitEdit}
+                        onCancelEdit={handleCancelEdit}
+                        isNumeric
+                    />
+                );
+            },
             size: 60,
         }),
         columnHelper.accessor('format', {
@@ -833,7 +1102,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 </div>
             )
         })
-    ], [isMenuOpen, playingTrackId, isPlaying, handleRatingChange, playlistOrderMap]);
+    ], [isMenuOpen, playingTrackId, isPlaying, handleRatingChange, playlistOrderMap, editingCell, selectedTrackIds, handleStartEdit, handleCommitEdit, handleCancelEdit]);
 
     const table = useReactTable({
         data: filteredTracks,
