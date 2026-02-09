@@ -270,7 +270,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         const startPlayback = () => {
             setFallbackDuration(audioEl.duration || 0);
             if (autoPlayRef.current) {
-                audioEl.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
+                // Use ws.play() so WaveSurfer tracks play state (enables playPause)
+                ws.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
             }
         };
         if (audioEl.readyState >= 3) {
@@ -497,7 +498,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     }, [currentUrl]);
 
     // Handle Play/Pause
-    const togglePlayPause = () => {
+    const togglePlayPause = useCallback(() => {
         console.log("Toggle Play/Pause clicked. WaveSurfer instance:", !!wavesurfer);
         if (wavesurfer) {
             try {
@@ -505,14 +506,14 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 const isPlayingNow = wavesurfer.isPlaying();
                 console.log("WaveSurfer isPlaying:", isPlayingNow);
                 setIsPlaying(isPlayingNow);
-                if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(isPlayingNow); // Manual sync just in case
+                if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(isPlayingNow);
             } catch (e) {
                 console.error("Error toggling playback:", e);
             }
         } else {
             console.warn("WaveSurfer instance not ready");
         }
-    };
+    }, [wavesurfer]);
 
     const skip = (seconds: number) => {
         if (wavesurfer) {
@@ -552,7 +553,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [wavesurfer, isMuted, volume]);
+    }, [togglePlayPause]);
 
     const hasTrack = !!track;
 
