@@ -292,7 +292,7 @@ impl Database {
     }
 
     pub fn get_playlists(&self) -> Result<Vec<crate::models::Playlist>> {
-        let mut stmt = self.conn.prepare("SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists ORDER BY is_folder DESC, name ASC")?;
+        let mut stmt = self.conn.prepare("SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists WHERE name != 'Music' ORDER BY is_folder DESC, name ASC")?;
         let playlists = stmt.query_map([], |row| {
             Ok(crate::models::Playlist {
                 id: row.get(0)?,
@@ -511,7 +511,7 @@ impl Database {
             "SELECT p.id, p.persistent_id, p.name 
              FROM playlist_tracks pt
              JOIN playlists p ON p.id = pt.playlist_id
-             WHERE pt.track_id = ?1
+             WHERE pt.track_id = ?1 AND p.name != 'Music'
              ORDER BY p.name ASC"
         )?;
         let rows = stmt.query_map(params![track_id], |row| {

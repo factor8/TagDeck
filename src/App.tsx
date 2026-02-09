@@ -51,6 +51,7 @@ function App() {
   });
   const [syncEnabledTrigger, setSyncEnabledTrigger] = useState(0);
   const [copyPlaylistsTarget, setCopyPlaylistsTarget] = useState<Track | null>(null);
+  const [scrollToTrackId, setScrollToTrackId] = useState<number | null>(null);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -665,6 +666,19 @@ function App() {
               searchTerm={searchTerm}
               onRefresh={handleRefresh}
               onCopyPlaylistMemberships={setCopyPlaylistsTarget}
+              onNavigateToPlaylist={(playlistId, track) => {
+                  setSelectedPlaylistId(playlistId);
+                  // Select the track and prepare to scroll to it
+                  const newSet = new Set([track.id]);
+                  const raw = track.comment_raw || '';
+                  const tags = raw.indexOf(' && ') !== -1
+                      ? raw.substring(raw.indexOf(' && ') + 4).split(';').map(t => t.trim()).filter(Boolean)
+                      : [];
+                  handleSelectionChange(newSet, track.id, track, tags);
+                  setScrollToTrackId(track.id);
+              }}
+              scrollToTrackId={scrollToTrackId}
+              onScrollToTrackComplete={() => setScrollToTrackId(null)}
             />
             </div>
         </Panel>

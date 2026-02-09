@@ -34,7 +34,7 @@ import {
     arrayMove
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -49,6 +49,9 @@ interface Props {
     playlistId: number | null;
     onRefresh?: () => void;
     onCopyPlaylistMemberships?: (track: Track) => void;
+    onNavigateToPlaylist?: (playlistId: number, track: Track) => void;
+    scrollToTrackId?: number | null;
+    onScrollToTrackComplete?: () => void;
 }
 
 interface ContextMenuState {
@@ -482,12 +485,14 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete }, ref) => {
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
     const [loading, setLoading] = useState(false);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+    const [contextMenuPlaylists, setContextMenuPlaylists] = useState<{id: number; name: string}[] | null>(null);
+    const [showPlaylistsFlyout, setShowPlaylistsFlyout] = useState(false);
     const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
     
     // Cancel editing when selection changes (iTunes behavior)
@@ -1236,6 +1241,23 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         overscan: 20,
     });
 
+    // Scroll to a specific track after playlist navigation
+    useEffect(() => {
+        if (scrollToTrackId && rows.length > 0) {
+            const targetIndex = rows.findIndex(r => r.original.id === scrollToTrackId);
+            if (targetIndex !== -1) {
+                // Use requestAnimationFrame to ensure the virtualizer has rendered
+                requestAnimationFrame(() => {
+                    rowVirtualizer.scrollToIndex(targetIndex, { align: 'center' });
+                    onScrollToTrackComplete?.();
+                });
+            } else {
+                // Track not found in this playlist view, clear anyway
+                onScrollToTrackComplete?.();
+            }
+        }
+    }, [scrollToTrackId, rows, rowVirtualizer, onScrollToTrackComplete]);
+
     useImperativeHandle(ref, () => ({
         selectNext: () => {
             const currentIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
@@ -1461,6 +1483,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                                 return;
                                             }
                                             setContextMenu({ x: e.clientX, y: e.clientY, track: row.original });
+                                            setContextMenuPlaylists(null);
+                                            setShowPlaylistsFlyout(false);
                                         }}
                                     />
                                 );
@@ -1491,14 +1515,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 <>
                     <div
                         style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
-                        onClick={() => setContextMenu(null)}
-                        onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+                        onClick={() => { setContextMenu(null); setShowPlaylistsFlyout(false); setContextMenuPlaylists(null); }}
+                        onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); setShowPlaylistsFlyout(false); setContextMenuPlaylists(null); }}
                     />
                     <div
                         className="context-menu"
                         style={{
                             left: Math.min(contextMenu.x, window.innerWidth - 240),
-                            top: Math.min(contextMenu.y, window.innerHeight - 100),
+                            top: Math.min(contextMenu.y, window.innerHeight - 200),
                         }}
                     >
                         <div
@@ -1510,6 +1534,81 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         >
                             <Folder size={14} className="context-menu-icon" />
                             <span>Show in Finder</span>
+                        </div>
+                        <div className="context-menu-separator" />
+                        {/* Playlists submenu */}
+                        <div
+                            className="context-menu-item context-menu-submenu-trigger"
+                            onMouseEnter={() => {
+                                setShowPlaylistsFlyout(true);
+                                if (!contextMenuPlaylists) {
+                                    invoke<{id: number; persistent_id: string; name: string}[]>('get_playlists_for_track', { trackId: contextMenu.track.id })
+                                        .then(result => setContextMenuPlaylists(result.map(p => ({ id: p.id, name: p.name }))))
+                                        .catch(err => {
+                                            console.error('Failed to load playlists for track:', err);
+                                            setContextMenuPlaylists([]);
+                                        });
+                                }
+                            }}
+                            onMouseLeave={(e) => {
+                                // Only hide if we're not moving to the flyout
+                                const related = e.relatedTarget as HTMLElement;
+                                if (!related?.closest('.context-menu-flyout')) {
+                                    setShowPlaylistsFlyout(false);
+                                }
+                            }}
+                        >
+                            <ListMusic size={14} className="context-menu-icon" />
+                            <span style={{ flex: 1 }}>Playlists</span>
+                            <ChevronRight size={12} style={{ opacity: 0.5 }} />
+                            {/* Flyout submenu */}
+                            {showPlaylistsFlyout && (
+                                <div
+                                    className="context-menu context-menu-flyout"
+                                    style={{
+                                        position: 'absolute',
+                                        ...(contextMenu.x > window.innerWidth - 440
+                                            ? { right: '100%', marginRight: '2px' }
+                                            : { left: '100%', marginLeft: '2px' }),
+                                        top: '-4px',
+                                        minWidth: '180px',
+                                        maxHeight: '300px',
+                                        overflowY: 'auto',
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        const related = e.relatedTarget as HTMLElement;
+                                        if (!related?.closest('.context-menu-submenu-trigger')) {
+                                            setShowPlaylistsFlyout(false);
+                                        }
+                                    }}
+                                >
+                                    {contextMenuPlaylists === null ? (
+                                        <div className="context-menu-item" style={{ opacity: 0.5, cursor: 'default' }}>
+                                            <span>Loading…</span>
+                                        </div>
+                                    ) : contextMenuPlaylists.length === 0 ? (
+                                        <div className="context-menu-item" style={{ opacity: 0.5, cursor: 'default' }}>
+                                            <span>Not in any playlists</span>
+                                        </div>
+                                    ) : (
+                                        contextMenuPlaylists.map(pl => (
+                                            <div
+                                                key={pl.id}
+                                                className="context-menu-item"
+                                                onClick={() => {
+                                                    onNavigateToPlaylist?.(pl.id, contextMenu.track);
+                                                    setContextMenu(null);
+                                                    setShowPlaylistsFlyout(false);
+                                                    setContextMenuPlaylists(null);
+                                                }}
+                                            >
+                                                <ListMusic size={12} className="context-menu-icon" />
+                                                <span>{pl.name}</span>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            )}
                         </div>
                         <div className="context-menu-separator" />
                         <div

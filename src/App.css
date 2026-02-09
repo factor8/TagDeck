@@ -295,6 +295,28 @@ input[type=range].volume-slider:focus {
   background: var(--border-color);
 }
 
+/* Submenu trigger with flyout */
+.context-menu-submenu-trigger {
+  position: relative;
+}
+
+.context-menu-flyout {
+  pointer-events: auto;
+}
+
+.context-menu-flyout::-webkit-scrollbar {
+  width: 6px;
+}
+
+.context-menu-flyout::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.context-menu-flyout::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
 /* ========== Copy Playlists Modal ========== */
 .cpm-backdrop {
   position: fixed;
