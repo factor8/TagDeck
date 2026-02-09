@@ -269,7 +269,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         // event is unreliable when the waveform decode fails.
         const startPlayback = () => {
             setFallbackDuration(audioEl.duration || 0);
-            audioEl.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
+            if (autoPlayRef.current) {
+                audioEl.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
+            }
         };
         if (audioEl.readyState >= 3) {
             // Already loaded (HAVE_FUTURE_DATA or HAVE_ENOUGH_DATA)
@@ -302,41 +304,101 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             setError(null);
             setIsPlaying(false);
 
-            // If we were using the MediaElement fallback for the previous track,
-            // rebuild a standard (WebAudio) WaveSurfer for the new track.
-            let activeWs = wavesurfer;
-            if (usingMediaFallback) {
-                setUsingMediaFallback(false);
-                setFallbackProgress(0);
-                setFallbackDuration(0);
-                setFallbackCurrentTime(0);
-                fallbackInProgressRef.current = false;
+            const useWaveform = playerModeRef.current === 'waveform';
+
+            // Clean up previous MediaElement state if needed
+            const cleanupMediaElement = () => {
                 if (mediaElementRef.current) {
                     mediaElementRef.current.pause();
                     mediaElementRef.current.src = '';
                     mediaElementRef.current = null;
                 }
+                setFallbackProgress(0);
+                setFallbackDuration(0);
+                setFallbackCurrentTime(0);
+                fallbackInProgressRef.current = false;
+            };
+
+            // Determine if we need to rebuild WaveSurfer (mode mismatch)
+            let activeWs = wavesurfer;
+            const needsRebuild = (usingMediaFallback && useWaveform) || (!usingMediaFallback && !useWaveform);
+
+            if (usingMediaFallback || needsRebuild) {
+                cleanupMediaElement();
                 try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
 
-                const ws = createStandardWaveSurfer();
-                if (!ws) return;
-                activeWs = ws;
-                setWavesurfer(ws);
+                if (useWaveform) {
+                    // Rebuild standard WebAudio WaveSurfer
+                    setUsingMediaFallback(false);
+                    const ws = createStandardWaveSurfer();
+                    if (!ws) return;
+                    activeWs = ws;
+                    setWavesurfer(ws);
+                } else {
+                    // Standard mode: create a placeholder WaveSurfer that will be
+                    // replaced by createFallbackWaveSurfer once the audio element is ready.
+                    // We'll handle this in loadAudioStandard below.
+                    activeWs = null as any; // signal to skip ws.load()
+                }
             }
             
-            const loadAudio = async (ws: WaveSurfer) => {
+            // --- Standard mode: MediaElement path (instant playback) ---
+            const loadAudioStandard = async () => {
+                const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
+                try {
+                    console.log(`[Standard] Reading file: ${track.file_path}`);
+                    const contents = await readFile(track.file_path);
+                    const mimeType = getMimeType(track.format);
+                    const blob = new Blob([contents], { type: mimeType });
+                    const blobUrl = URL.createObjectURL(blob);
+
+                    const audioEl = new Audio();
+                    audioEl.src = blobUrl;
+                    mediaElementRef.current = audioEl;
+
+                    // Destroy whatever WaveSurfer exists (could be stale standard or placeholder)
+                    try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
+
+                    const fallbackWs = createFallbackWaveSurfer(audioEl);
+                    if (!fallbackWs) {
+                        setError('Playback Error: Could not create player.');
+                        return;
+                    }
+
+                    setCurrentUrl(blobUrl);
+                    setUsingMediaFallback(true);
+                    setWavesurfer(fallbackWs);
+
+                    console.log(`[Standard] Loaded: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
+                } catch (err) {
+                    const errStr = String(err);
+                    console.error(`Error loading ${trackLabel}:`, err);
+                    setError(`Failed to load audio: ${errStr}`);
+                    invoke('log_from_frontend', {
+                        level: 'ERROR',
+                        message: `Audio load failed — ${trackLabel} | Format: ${track.format} | Path: ${track.file_path} | Error: ${errStr}`
+                    }).catch(console.error);
+
+                    invoke('mark_track_missing', { id: track.id, missing: true })
+                        .then(() => { onTrackError?.(); })
+                        .catch(e => console.error("Failed to mark track missing:", e));
+                }
+            };
+
+            // --- Waveform mode: full decode path ---
+            const loadAudioWaveform = async (ws: WaveSurfer) => {
                 const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
                 try {
                      try { ws.stop(); } catch(e) { /* ignore */ }
                     
-                    console.log('Reading file for playback:', track.file_path);
+                    console.log('[Waveform] Reading file:', track.file_path);
                     const contents = await readFile(track.file_path);
                     const mimeType = getMimeType(track.format);
                     
                     const blob = new Blob([contents], { type: mimeType });
                     const blobUrl = URL.createObjectURL(blob);
                     
-                    console.log(`Loading audio: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
+                    console.log(`[Waveform] Loading audio: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
                     setCurrentUrl(blobUrl);
                     
                     await ws.load(blobUrl);
@@ -348,15 +410,12 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                                           errStr.includes('Unable to decode');
 
                     if (isDecodeError) {
-                        // Web Audio's decodeAudioData() is strict and fails on MP3s
-                        // with junk/padding between the ID3 tag and the first MPEG frame.
-                        // Fall back to MediaElement (Core Audio on macOS) which is tolerant.
+                        // Fall back to MediaElement (same as standard mode)
                         const msg = `Web Audio decode failed for ${trackLabel} (${track.format}). Switching to native decoder...`;
                         console.warn(msg);
                         invoke('log_from_frontend', { level: 'WARN', message: msg }).catch(console.error);
 
                         try {
-                            // Re-read file for the fallback (the blob may have been consumed)
                             const contents = await readFile(track.file_path);
                             const mimeType = getMimeType(track.format);
                             const blob = new Blob([contents], { type: mimeType });
@@ -366,7 +425,6 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             audioEl.src = blobUrl;
                             mediaElementRef.current = audioEl;
 
-                            // Destroy the failed WebAudio WaveSurfer
                             try { ws.destroy(); } catch (_) { /* ignore */ }
 
                             const fallbackWs = createFallbackWaveSurfer(audioEl);
@@ -395,7 +453,6 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             message: `Audio load failed — ${trackLabel} | Format: ${track.format} | Path: ${track.file_path} | Error: ${errStr}` 
                         }).catch(console.error);
                         
-                        // Only mark missing for file-not-found type errors
                         invoke('mark_track_missing', { id: track.id, missing: true })
                             .then(() => {
                                 console.log(`Marked track ${track.id} as missing`);
@@ -405,20 +462,29 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     }
                 }
             };
-    
-            loadAudio(activeWs);
+
+            // Dispatch based on player mode
+            if (useWaveform) {
+                loadAudioWaveform(activeWs);
+            } else {
+                loadAudioStandard();
+            }
         } else {
              // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
              if (autoPlay) {
                  try {
-                    if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
+                    if (usingMediaFallback && mediaElementRef.current) {
+                        if (mediaElementRef.current.paused) {
+                            mediaElementRef.current.play().catch(() => {});
+                        }
+                    } else if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
                         wavesurfer.play();
                     }
                  } catch(e) { console.warn("AutoPlay trigger failed", e); }
             }
         }
         
-    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor, createStandardWaveSurfer, createFallbackWaveSurfer, onTrackError]);
+    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor, createStandardWaveSurfer, createFallbackWaveSurfer, onTrackError, playerMode]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
