@@ -31,10 +31,12 @@ import {
     horizontalListSortingStrategy, 
     verticalListSortingStrategy,
     useSortable,
-    arrayMove
+    arrayMove,
+    defaultAnimateLayoutChanges
 } from '@dnd-kit/sortable';
+import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight, Trash2 } from 'lucide-react';
 import { Track } from '../types';
 
 interface Props {
@@ -233,6 +235,7 @@ interface TrackRowProps {
     isSelected: boolean;
     isPlaying: boolean;
     isMissing: boolean;
+    isReorderable: boolean;
     handleRowClick: (track: Track, event: React.MouseEvent) => void;
     onTrackDoubleClick?: (track: Track) => void;
     onContextMenu: (e: React.MouseEvent) => void;
@@ -245,21 +248,129 @@ const TrackRow = ({
     isSelected, 
     isPlaying, 
     isMissing, 
+    isReorderable,
     handleRowClick, 
     onTrackDoubleClick,
     onContextMenu 
 }: TrackRowProps) => {
+    if (isReorderable) {
+        return (
+            <SortableTrackRowInner
+                row={row}
+                virtualRow={virtualRow}
+                measureElement={measureElement}
+                isSelected={isSelected}
+                isPlaying={isPlaying}
+                isMissing={isMissing}
+                handleRowClick={handleRowClick}
+                onTrackDoubleClick={onTrackDoubleClick}
+                onContextMenu={onContextMenu}
+            />
+        );
+    }
+    return (
+        <DraggableTrackRowInner
+            row={row}
+            virtualRow={virtualRow}
+            measureElement={measureElement}
+            isSelected={isSelected}
+            isPlaying={isPlaying}
+            isMissing={isMissing}
+            handleRowClick={handleRowClick}
+            onTrackDoubleClick={onTrackDoubleClick}
+            onContextMenu={onContextMenu}
+        />
+    );
+};
+
+interface TrackRowInnerProps {
+    row: Row<Track>;
+    virtualRow: any;
+    measureElement: (element: Element | null) => void;
+    isSelected: boolean;
+    isPlaying: boolean;
+    isMissing: boolean;
+    handleRowClick: (track: Track, event: React.MouseEvent) => void;
+    onTrackDoubleClick?: (track: Track) => void;
+    onContextMenu: (e: React.MouseEvent) => void;
+}
+
+const DraggableTrackRowInner = ({
+    row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
+    handleRowClick, onTrackDoubleClick, onContextMenu
+}: TrackRowInnerProps) => {
     const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
         id: `track-${row.original.id}`,
-        data: {
-            type: 'Track',
-            track: row.original,
-            id: row.original.id
-        }
+        data: { type: 'Track', track: row.original, id: row.original.id },
     });
 
+    return (
+        <TrackRowContent
+            row={row} virtualRow={virtualRow} measureElement={measureElement}
+            isSelected={isSelected} isPlaying={isPlaying} isMissing={isMissing}
+            isDragging={isDragging} transform={CSS.Translate.toString(transform)}
+            setNodeRef={setNodeRef} attributes={attributes} listeners={listeners}
+            handleRowClick={handleRowClick} onTrackDoubleClick={onTrackDoubleClick}
+            onContextMenu={onContextMenu}
+        />
+    );
+};
+
+// Skip layout animation after dropping to prevent the visual snap-back effect.
+// The item would otherwise animate back to its old DOM position before React re-renders the new order.
+const skipDropAnimation: AnimateLayoutChanges = (args) => {
+    if (args.wasDragging) return false;
+    return defaultAnimateLayoutChanges(args);
+};
+
+const SortableTrackRowInner = ({
+    row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
+    handleRowClick, onTrackDoubleClick, onContextMenu
+}: TrackRowInnerProps) => {
+    const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+        id: `track-${row.original.id}`,
+        data: { type: 'Track', track: row.original, id: row.original.id },
+        animateLayoutChanges: skipDropAnimation,
+    });
+
+    return (
+        <TrackRowContent
+            row={row} virtualRow={virtualRow} measureElement={measureElement}
+            isSelected={isSelected} isPlaying={isPlaying} isMissing={isMissing}
+            isDragging={isDragging} transform={CSS.Translate.toString(transform)}
+            transition={transition} setNodeRef={setNodeRef} attributes={attributes}
+            listeners={listeners} handleRowClick={handleRowClick}
+            onTrackDoubleClick={onTrackDoubleClick} onContextMenu={onContextMenu}
+        />
+    );
+};
+
+interface TrackRowContentProps {
+    row: Row<Track>;
+    virtualRow: any;
+    measureElement: (element: Element | null) => void;
+    isSelected: boolean;
+    isPlaying: boolean;
+    isMissing: boolean;
+    isDragging: boolean;
+    transform: string | undefined;
+    transition?: string;
+    setNodeRef: (element: HTMLElement | null) => void;
+    attributes: Record<string, any>;
+    listeners: Record<string, any> | undefined;
+    handleRowClick: (track: Track, event: React.MouseEvent) => void;
+    onTrackDoubleClick?: (track: Track) => void;
+    onContextMenu: (e: React.MouseEvent) => void;
+}
+
+const TrackRowContent = ({
+    row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
+    isDragging, transform, transition, setNodeRef, attributes, listeners,
+    handleRowClick, onTrackDoubleClick, onContextMenu
+}: TrackRowContentProps) => {
     const style: React.CSSProperties = {
-        transform: CSS.Translate.toString(transform),
+        transform,
+        transition,
         borderBottom: '1px solid var(--bg-secondary)',
         background: isSelected 
                 ? 'rgba(59, 130, 246, 0.15)' 
@@ -570,11 +681,21 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         }
     }, [tracks]);
     
-    const sensors = useSensors(
+    // Column settings menu: delay-based so clicks can toggle checkboxes
+    const menuSensors = useSensors(
         useSensor(PointerSensor, {
             activationConstraint: {
                 delay: 200,
                 tolerance: 5,
+            },
+        })
+    );
+
+    // Track reorder: distance-based for reliable, instant drag activation
+    const reorderSensors = useSensors(
+        useSensor(PointerSensor, {
+            activationConstraint: {
+                distance: 5,
             },
         })
     );
@@ -725,7 +846,21 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
 
             return true;
         });
-    }, [tracks, searchTerm, allowedTrackIds]);
+    }, [tracks, searchTerm, allowedTrackIds, playlistOrderMap]);
+
+    // Remove selected tracks from current playlist
+    const handleRemoveFromPlaylist = useCallback(async () => {
+        if (playlistId === null || selectedTrackIds.size === 0) return;
+        const ids = Array.from(selectedTrackIds);
+        try {
+            await invoke('remove_from_playlist', { trackIds: ids, playlistId });
+            // Clear selection
+            onSelectionChange(new Set(), null, null, []);
+            onRefresh?.();
+        } catch (e) {
+            console.error('Failed to remove from playlist:', e);
+        }
+    }, [playlistId, selectedTrackIds, onSelectionChange, onRefresh]);
 
     // Keyboard Shortcuts (Select All, Enter to Play)
     useEffect(() => {
@@ -768,11 +903,17 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                     }
                 }
             }
+
+            // Delete/Backspace -> Remove from playlist (only when viewing a playlist)
+            if ((e.key === 'Delete' || e.key === 'Backspace') && playlistId !== null && selectedTrackIds.size > 0) {
+                e.preventDefault();
+                handleRemoveFromPlaylist();
+            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [filteredTracks, lastSelectedTrackId, onSelectionChange, onTrackDoubleClick]);
+    }, [filteredTracks, lastSelectedTrackId, onSelectionChange, onTrackDoubleClick, playlistId, selectedTrackIds, handleRemoveFromPlaylist]);
 
     // Persistence Helper
     const loadState = <T,>(key: string, defaultVal: T): T => {
@@ -786,6 +927,42 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
 
     // Table State
     const [sorting, setSorting] = useState<SortingState>(() => loadState('table_sorting_v2', []));
+
+    // Determine if we're in a reorderable state:
+    // Must be viewing a playlist AND sorted by position (# column) with no other sort or ascending position sort
+    const isReorderable = useMemo(() => {
+        if (playlistId === null) return false;
+        // Reorderable when: no sort applied (default position order), or explicitly sorted by position asc
+        if (sorting.length === 0) return true;
+        if (sorting.length === 1 && sorting[0].id === 'position' && !sorting[0].desc) return true;
+        return false;
+    }, [playlistId, sorting]);
+
+    // Handle reorder drag end
+    const handleReorderDragEnd = useCallback(async (event: DragEndEvent) => {
+        const { active, over } = event;
+        if (!over || active.id === over.id || !playlistTrackOrder || playlistId === null) return;
+
+        const activeTrackId = Number(String(active.id).replace('track-', ''));
+        const overTrackId = Number(String(over.id).replace('track-', ''));
+
+        const oldIndex = playlistTrackOrder.indexOf(activeTrackId);
+        const newIndex = playlistTrackOrder.indexOf(overTrackId);
+        if (oldIndex === -1 || newIndex === -1) return;
+
+        const newOrder = arrayMove(playlistTrackOrder, oldIndex, newIndex);
+        // Optimistic update
+        setPlaylistTrackOrder(newOrder);
+
+        try {
+            await invoke('reorder_playlist_tracks', { playlistId, orderedTrackIds: newOrder });
+        } catch (e) {
+            console.error('Failed to reorder playlist:', e);
+            // Revert on failure
+            setPlaylistTrackOrder(playlistTrackOrder);
+        }
+    }, [playlistTrackOrder, playlistId]);
+
     const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => loadState('table_visibility_v3', {
         album: false,
         format: false,
@@ -1389,7 +1566,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>hold to reorder</span>
                         </div>
                         <DndContext 
-                            sensors={sensors} 
+                            sensors={menuSensors} 
                             collisionDetection={closestCenter} 
                             onDragEnd={handleMenuDragEnd}
                         >
@@ -1449,6 +1626,16 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                 </tr>
                             ))}
                         </thead>
+                        {isReorderable ? (
+                        <DndContext
+                            sensors={reorderSensors}
+                            collisionDetection={closestCenter}
+                            onDragEnd={handleReorderDragEnd}
+                        >
+                        <SortableContext
+                            items={rowVirtualizer.getVirtualItems().map(vr => `track-${rows[vr.index].original.id}`)}
+                            strategy={verticalListSortingStrategy}
+                        >
                         <tbody>
                             {rowVirtualizer.getVirtualItems().length > 0 && (
                                 <tr style={{ height: `${rowVirtualizer.getVirtualItems()[0].start}px` }}>
@@ -1470,6 +1657,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         isSelected={isSelected}
                                         isPlaying={isPlaying}
                                         isMissing={Boolean(isMissing)}
+                                        isReorderable={true}
                                         handleRowClick={handleRowClick}
                                         onTrackDoubleClick={onTrackDoubleClick}
                                         onContextMenu={(e) => {
@@ -1507,6 +1695,69 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                 </tr>
                             )}
                         </tbody>
+                        </SortableContext>
+                        </DndContext>
+                        ) : (
+                        <tbody>
+                            {rowVirtualizer.getVirtualItems().length > 0 && (
+                                <tr style={{ height: `${rowVirtualizer.getVirtualItems()[0].start}px` }}>
+                                    <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
+                                </tr>
+                            )}
+                            {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                                const row = rows[virtualRow.index];
+                                const isSelected = selectedTrackIds.has(row.original.id);
+                                const isPlaying = playingTrackId === row.original.id;
+                                const isMissing = row.original.missing;
+                                
+                                return (
+                                    <TrackRow
+                                        key={row.id}
+                                        row={row}
+                                        virtualRow={virtualRow}
+                                        measureElement={rowVirtualizer.measureElement}
+                                        isSelected={isSelected}
+                                        isPlaying={isPlaying}
+                                        isMissing={Boolean(isMissing)}
+                                        isReorderable={false}
+                                        handleRowClick={handleRowClick}
+                                        onTrackDoubleClick={onTrackDoubleClick}
+                                        onContextMenu={(e) => {
+                                            e.preventDefault();
+                                            if (isMissing) {
+                                                const shouldReset = window.confirm("Reset missing file status?");
+                                                if (shouldReset) {
+                                                     invoke('mark_track_missing', { id: row.original.id, missing: false })
+                                                        .then(() => onRefresh?.());
+                                                }
+                                                return;
+                                            }
+                                            setContextMenu({ x: e.clientX, y: e.clientY, track: row.original });
+                                            setContextMenuPlaylists(null);
+                                            setShowPlaylistsFlyout(false);
+                                        }}
+                                    />
+                                );
+                            })}
+                            {rowVirtualizer.getVirtualItems().length > 0 && (
+                                <tr style={{ height: `${rowVirtualizer.getTotalSize() - rowVirtualizer.getVirtualItems()[rowVirtualizer.getVirtualItems().length - 1].end}px` }}>
+                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
+                                </tr>
+                            )}
+                            {filteredTracks.length === 0 && !loading && (
+                                <tr>
+                                    <td colSpan={table.getVisibleLeafColumns().length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
+                                        <div style={{ fontSize: '16px', marginBottom: '8px' }}>
+                                            {searchTerm ? 'No tracks found' : 'Library is empty'}
+                                        </div>
+                                        <div style={{ fontSize: '13px', opacity: 0.7 }}>
+                                            {searchTerm ? `No matches for "${searchTerm}"` : 'Import an iTunes XML file to get started'}
+                                        </div>
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                        )}
                     </table>
                 </div>
 
@@ -1611,6 +1862,31 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             )}
                         </div>
                         <div className="context-menu-separator" />
+                        {/* Remove from Playlist — only shown when viewing a playlist */}
+                        {playlistId !== null && (
+                            <>
+                                <div
+                                    className="context-menu-item"
+                                    onClick={() => {
+                                        // Remove the right-clicked track (and any other selected tracks) from this playlist
+                                        const idsToRemove = selectedTrackIds.has(contextMenu.track.id)
+                                            ? Array.from(selectedTrackIds)
+                                            : [contextMenu.track.id];
+                                        invoke('remove_from_playlist', { trackIds: idsToRemove, playlistId })
+                                            .then(() => {
+                                                onSelectionChange(new Set(), null, null, []);
+                                                onRefresh?.();
+                                            })
+                                            .catch(err => console.error('Failed to remove from playlist:', err));
+                                        setContextMenu(null);
+                                    }}
+                                >
+                                    <Trash2 size={14} className="context-menu-icon" />
+                                    <span>Remove from Playlist</span>
+                                </div>
+                                <div className="context-menu-separator" />
+                            </>
+                        )}
                         <div
                             className="context-menu-item"
                             onClick={() => {

@@ -875,6 +875,87 @@ pub async fn add_to_playlist(
 }
 
 #[tauri::command]
+pub async fn remove_from_playlist(
+    app: tauri::AppHandle,
+    track_ids: Vec<i64>,
+    playlist_id: i64,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let (playlist_pid, track_data) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let pid = db.get_playlist_persistent_id(playlist_id)
+            .map_err(|e| format!("Failed to get playlist: {}", e))?;
+        let mut data = Vec::new();
+        for tid in &track_ids {
+            if let Ok(tpid) = db.get_track_persistent_id(*tid) {
+                data.push((*tid, tpid));
+            }
+        }
+        (pid, data)
+    };
+
+    // Remove from Apple Music
+    for (_, tpid) in &track_data {
+        if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
+            let msg = format!("Failed to remove track from playlist in Music.app: {}", e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+        }
+    }
+
+    // Remove from local DB
+    let removed = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let tids: Vec<i64> = track_data.iter().map(|(id, _)| *id).collect();
+        db.remove_tracks_from_playlist(playlist_id, &tids)
+            .map_err(|e| e.to_string())?;
+        tids.len()
+    };
+
+    Ok(removed)
+}
+
+#[tauri::command]
+pub async fn reorder_playlist_tracks(
+    app: tauri::AppHandle,
+    playlist_id: i64,
+    ordered_track_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // 1. Get persistent IDs for the playlist and all tracks in order
+    let (playlist_pid, track_pids) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let ppid = db.get_playlist_persistent_id(playlist_id)
+            .map_err(|e| format!("Failed to get playlist: {}", e))?;
+        let mut pids = Vec::new();
+        for tid in &ordered_track_ids {
+            if let Ok(tpid) = db.get_track_persistent_id(*tid) {
+                pids.push(tpid);
+            }
+        }
+        (ppid, pids)
+    };
+
+    // 2. Update local DB
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.reorder_playlist_tracks(playlist_id, &ordered_track_ids)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // 3. Sync to Apple Music (in background — don't block the UI)
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::apple_music::reorder_playlist(&playlist_pid, &track_pids) {
+            let msg = format!("Failed to reorder playlist in Music.app: {}", e);
+            eprintln!("{}", msg);
+            app_handle.state::<crate::logging::LogState>().add_log("WARN", &msg, &app_handle);
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn update_rating(
     app: tauri::AppHandle,
     track_id: i64,

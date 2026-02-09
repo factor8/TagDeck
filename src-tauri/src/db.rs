@@ -505,6 +505,37 @@ impl Database {
         Ok(())
     }
 
+    /// Removes multiple tracks from a playlist and re-numbers positions.
+    pub fn remove_tracks_from_playlist(&self, playlist_id: i64, track_ids: &[i64]) -> Result<()> {
+        for tid in track_ids {
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+                params![playlist_id, tid],
+            )?;
+        }
+        // Re-number positions to keep them contiguous
+        let remaining = self.get_playlist_track_ids(playlist_id)?;
+        for (i, tid) in remaining.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE playlist_tracks SET position = ?1 WHERE playlist_id = ?2 AND track_id = ?3",
+                params![i as i64, playlist_id, tid],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Reorders tracks within a playlist by rewriting position values.
+    /// `ordered_track_ids` must contain the full list of track IDs in the desired order.
+    pub fn reorder_playlist_tracks(&self, playlist_id: i64, ordered_track_ids: &[i64]) -> Result<()> {
+        for (i, tid) in ordered_track_ids.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE playlist_tracks SET position = ?1 WHERE playlist_id = ?2 AND track_id = ?3",
+                params![i as i64, playlist_id, tid],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Returns all playlists that contain the given track, with playlist id, persistent_id, and name.
     pub fn get_playlists_for_track(&self, track_id: i64) -> Result<Vec<(i64, String, String)>> {
         let mut stmt = self.conn.prepare(

@@ -557,6 +557,58 @@ pub fn remove_track_from_playlist(track_pid: &str, playlist_pid: &str) -> Result
     Ok(())
 }
 
+/// Reorders tracks in an Apple Music playlist by removing all tracks and re-adding them in order.
+/// This is the only reliable way to reorder via AppleScript since Music.app doesn't expose
+/// a direct "move track to position" API.
+pub fn reorder_playlist(playlist_pid: &str, track_pids: &[String]) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // Build a comma-separated list of quoted PIDs for the AppleScript
+        let pid_list: Vec<String> = track_pids.iter().map(|p| format!("\"{}\"" , p)).collect();
+        let pid_array = pid_list.join(", ");
+
+        let script = format!(
+            r##"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        set thePlaylist to (first playlist whose persistent ID is "{}")
+                        set trackPIDs to {{{}}}
+                        
+                        -- Collect references to the tracks before deleting
+                        set trackRefs to {{}}
+                        repeat with pid in trackPIDs
+                            try
+                                set end of trackRefs to (first track whose persistent ID is pid)
+                            end try
+                        end repeat
+                        
+                        -- Delete all tracks from the playlist
+                        delete every track of thePlaylist
+                        
+                        -- Re-add in the desired order
+                        repeat with aTrack in trackRefs
+                            try
+                                duplicate aTrack to thePlaylist
+                            end try
+                        end repeat
+                    on error errMsg
+                        -- log but don't fail
+                    end try
+                end tell
+            end if
+            "##,
+            playlist_pid, pid_array
+        );
+
+        Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+    }
+    Ok(())
+}
+
 /// Gets the played count for a track in Apple Music by its Persistent ID.
 pub fn get_play_count(track_pid: &str) -> Result<i64> {
     #[cfg(target_os = "macos")]

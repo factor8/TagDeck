@@ -141,7 +141,9 @@ pub fn run() {
             commands::redo,
             commands::update_rating,
             commands::update_track_info,
-            commands::sync_recent_changes
+            commands::sync_recent_changes,
+            commands::remove_from_playlist,
+            commands::reorder_playlist_tracks
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
