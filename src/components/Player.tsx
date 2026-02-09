@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Track } from '../types';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
-import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw, Music } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw, Music, AlertTriangle } from 'lucide-react';
 import { useDebug } from './DebugContext';
 
 function formatFileSize(bytes: number): string {
@@ -11,6 +11,18 @@ function formatFileSize(bytes: number): string {
     const units = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function getMimeType(format: string): string {
+    switch (format?.toLowerCase()) {
+        case 'mp3': return 'audio/mpeg';
+        case 'm4a': case 'aac': return 'audio/mp4';
+        case 'wav': return 'audio/wav';
+        case 'aiff': case 'aif': return 'audio/aiff';
+        case 'flac': return 'audio/flac';
+        case 'ogg': return 'audio/ogg';
+        default: return 'audio/mpeg';
+    }
 }
 
 interface Props {
@@ -50,6 +62,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const [isMuted, setIsMuted] = useState(false);
     const [volume, setVolume] = useState(1);
     const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
+    const [usingMediaFallback, setUsingMediaFallback] = useState(false);
+    const mediaElementRef = useRef<HTMLAudioElement | null>(null);
 
     // Fetch Artwork
     useEffect(() => {
@@ -181,40 +195,111 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
     }, [accentColor, wavesurfer]);
 
-    // Error Handling Logic
+    // Error Handling Logic — fallback to MediaElement-backed WaveSurfer
+    // Web Audio's decodeAudioData() is strict and fails on MP3s with junk/padding
+    // between the ID3 tag and the first MPEG frame (common in old iTunes rips,
+    // Traktor-tagged files, etc.). The <audio> element uses Core Audio on macOS
+    // which is far more tolerant — same decoder iTunes uses.
     const handlePlaybackError = useCallback(async (err: any) => {
-        if (!track || !wavesurfer) return;
+        if (!track || !wavesurfer || !containerRef.current) return;
         
-        console.log("handlePlaybackError triggered", err);
-        
-        try {
-             if (currentUrl && currentUrl.startsWith('blob:')) {
-                 console.error("Blob fallback also failed.");
-                 setError(`Playback Error: Could not load audio via Asset or Blob.`);
-                 return;
-             }
-             
-             // If the error happens immediately on load, currentUrl should faithfully reflect the failed assetUrl.
+        const errStr = String(err?.message || err);
+        const isDecodeError = errStr.includes('EncodingError') || 
+                              errStr.includes('Decoding failed') ||
+                              errStr.includes('Unable to decode');
 
-             const contents = await readFile(track.file_path);
-             const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
-                            track.format === 'm4a' ? 'audio/mp4' : 
-                            track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
-                            
-             const blob = new Blob([contents], { type: mimeType });
-             const blobUrl = URL.createObjectURL(blob);
-             
-             console.log("Fallback to Blob URL:", blobUrl);
-             setCurrentUrl(blobUrl);
-             wavesurfer.load(blobUrl);
-             
-        } catch (fallbackErr) {
-            console.error('Fallback failed:', fallbackErr);
-            setError(`Playback Error: Could not load audio via Asset or Blob.`);
+        const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'} (${track.format}, ${track.file_path})`;
+
+        if (isDecodeError && !usingMediaFallback) {
+            // Attempt MediaElement fallback
+            const warnMsg = `Web Audio decode failed for ${trackLabel}. Falling back to native audio decoder.`;
+            console.warn(warnMsg);
+            invoke('log_from_frontend', { level: 'WARN', message: warnMsg }).catch(console.error);
+
+            try {
+                const contents = await readFile(track.file_path);
+                const mimeType = getMimeType(track.format);
+                const blob = new Blob([contents], { type: mimeType });
+                const blobUrl = URL.createObjectURL(blob);
+
+                // Create a fresh <audio> element for the MediaElement backend
+                const audioEl = new Audio();
+                audioEl.src = blobUrl;
+                mediaElementRef.current = audioEl;
+
+                // Destroy the old WaveSurfer and create a new one with media backend
+                try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
+
+                const ws = WaveSurfer.create({
+                    container: containerRef.current!,
+                    waveColor: '#475569',
+                    progressColor: accentColor,
+                    cursorColor: '#f1f5f9',
+                    barWidth: 2,
+                    barGap: 1,
+                    barRadius: 2,
+                    height: 40,
+                    normalize: true,
+                    interact: true,
+                    media: audioEl,
+                });
+
+                ws.on('play', () => {
+                    setIsPlaying(true);
+                    if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true);
+                });
+                ws.on('pause', () => {
+                    setIsPlaying(false);
+                    if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
+                });
+                ws.on('finish', () => {
+                    setIsPlaying(false);
+                    if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
+                    if (onNextRef.current) onNextRef.current();
+                });
+                ws.on('ready', () => {
+                    if (autoPlayRef.current) {
+                        ws.play().catch(e => console.warn("Auto-play (fallback) failed:", e));
+                    }
+                });
+                ws.on('error', (fallbackErr: any) => {
+                    const msg = `Native audio decode also failed for ${trackLabel}: ${fallbackErr}`;
+                    console.error(msg);
+                    invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
+                    setError('Playback Error: This file cannot be decoded.');
+                });
+
+                setCurrentUrl(blobUrl);
+                setUsingMediaFallback(true);
+                setWavesurfer(ws);
+
+                invoke('log_from_frontend', { level: 'INFO', message: `MediaElement fallback loaded successfully for: ${track.title}` }).catch(console.error);
+
+            } catch (fallbackErr) {
+                const msg = `MediaElement fallback failed for ${trackLabel}: ${fallbackErr}`;
+                console.error(msg);
+                invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
+                setError('Playback Error: Could not load audio file.');
+            }
+        } else if (!isDecodeError) {
+            // Not a decode error — file may actually be missing / unreadable
+            const msg = `Audio load error for ${trackLabel}: ${errStr}`;
+            console.error(msg);
+            invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
+            setError(`Playback Error: ${errStr}`);
+
+            // Only mark missing if we truly can't read the file
             invoke('mark_track_missing', { id: track.id, missing: true })
-                .then(() => onTrackError?.());
+                .then(() => onTrackError?.())
+                .catch(e => console.error("Failed to mark track missing:", e));
+        } else {
+            // Decode error AND already using fallback — nothing more we can do
+            const msg = `All decoders failed for ${trackLabel}: ${errStr}`;
+            console.error(msg);
+            invoke('log_from_frontend', { level: 'ERROR', message: msg }).catch(console.error);
+            setError('Playback Error: This file cannot be decoded.');
         }
-    }, [track, currentUrl, wavesurfer, onTrackError]);
+    }, [track, currentUrl, wavesurfer, onTrackError, accentColor, usingMediaFallback]);
 
     // Attach Error Handler with Dependencies
     useEffect(() => {
@@ -255,42 +340,87 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             
             setError(null);
             setIsPlaying(false);
+
+            // If we were using the MediaElement fallback for the previous track,
+            // rebuild a standard (WebAudio) WaveSurfer for the new track.
+            if (usingMediaFallback && containerRef.current) {
+                setUsingMediaFallback(false);
+                if (mediaElementRef.current) {
+                    mediaElementRef.current.pause();
+                    mediaElementRef.current.src = '';
+                    mediaElementRef.current = null;
+                }
+                try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
+
+                const ws = WaveSurfer.create({
+                    container: containerRef.current,
+                    waveColor: '#475569',
+                    progressColor: accentColor,
+                    cursorColor: '#f1f5f9',
+                    barWidth: 2,
+                    barGap: 1,
+                    barRadius: 2,
+                    height: 40,
+                    normalize: true,
+                    interact: true,
+                });
+                ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
+                ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
+                ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
+                ws.on('ready', () => { if (autoPlayRef.current) { ws.play().catch(() => {}); } });
+                ws.on('error', (err: any) => { console.error("WaveSurfer internal error:", err); });
+                setWavesurfer(ws);
+                // The new WaveSurfer will trigger this effect again on next render
+                return;
+            }
             
             const loadAudio = async () => {
+                const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
                 try {
                      try { wavesurfer.stop(); } catch(e) { /* ignore */ }
                     
-                    // Try reading file directly to Blob first (most robust for local files in Tauri)
-                    // This bypasses potential CORS/Range-request issues with Web Audio API + asset://
                     console.log('Reading file for playback:', track.file_path);
                     const contents = await readFile(track.file_path);
-                    const mimeType = track.format === 'mp3' ? 'audio/mpeg' : 
-                                   track.format === 'm4a' ? 'audio/mp4' : 
-                                   track.format === 'wav' ? 'audio/wav' : 'audio/mpeg';
+                    const mimeType = getMimeType(track.format);
                     
                     const blob = new Blob([contents], { type: mimeType });
                     const blobUrl = URL.createObjectURL(blob);
                     
-                    console.log('Loading Blob URL:', blobUrl);
+                    console.log(`Loading audio: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
                     setCurrentUrl(blobUrl);
                     
                     await wavesurfer.load(blobUrl);
                     
                 } catch (err) {
-                    const errorMessage = `Failed to load audio: ${err}`;
-                    console.error("Error loading audio file:", err);
-                    setError(errorMessage);
+                    const errStr = String(err);
+                    const isDecodeError = errStr.includes('EncodingError') || 
+                                          errStr.includes('Decoding failed') ||
+                                          errStr.includes('Unable to decode');
 
-                    // Log error to backend
-                    invoke('log_error', { message: errorMessage }).catch(e => console.error("Failed to log error:", e));
-                    
-                    // If we can't read the file, it's likely missing
-                    invoke('mark_track_missing', { id: track.id, missing: true })
-                        .then(() => {
-                            console.log(`Marked track ${track.id} as missing`);
-                            onTrackError?.();
-                        })
-                        .catch(e => console.error("Failed to mark track missing:", e));
+                    if (isDecodeError) {
+                        // Don't show a scary error toast — the fallback handler will take over
+                        const msg = `Web Audio decode failed for ${trackLabel} (${track.format}, path: ${track.file_path}). Attempting native fallback...`;
+                        console.warn(msg);
+                        invoke('log_from_frontend', { level: 'WARN', message: msg }).catch(console.error);
+                        // The WaveSurfer error event will trigger handlePlaybackError
+                    } else {
+                        const errorMessage = `Failed to load audio: ${errStr}`;
+                        console.error(`Error loading ${trackLabel}:`, err);
+                        setError(errorMessage);
+
+                        invoke('log_from_frontend', { 
+                            level: 'ERROR', 
+                            message: `Audio load failed — ${trackLabel} | Format: ${track.format} | Path: ${track.file_path} | Error: ${errStr}` 
+                        }).catch(console.error);
+                        
+                        // Only mark missing for file-not-found type errors
+                        invoke('mark_track_missing', { id: track.id, missing: true })
+                            .then(() => {
+                                console.log(`Marked track ${track.id} as missing`);
+                                onTrackError?.();
+                            })
+                            .catch(e => console.error("Failed to mark track missing:", e));
+                    }
                 }
             };
     
@@ -306,7 +436,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             }
         }
         
-    }, [track, wavesurfer, autoPlay]);
+    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
@@ -465,9 +595,17 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             marginTop: '1px',
                             whiteSpace: 'nowrap',
                             overflow: 'hidden',
-                            textOverflow: 'ellipsis'
+                            textOverflow: 'ellipsis',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
                         }}>
                             {track.format}{track.bit_rate ? ` ${track.bit_rate}kbps` : ''}{track.bpm ? ` ${track.bpm}bpm` : ''} • {formatFileSize(track.size_bytes)}
+                            {usingMediaFallback && (
+                                <span style={{ color: '#fbbf24', display: 'inline-flex', alignItems: 'center', gap: '2px' }} title="Using native audio decoder fallback (Web Audio decode failed)">
+                                    <AlertTriangle size={9} /> fallback
+                                </span>
+                            )}
                         </div>
                     )}
                 </div>
