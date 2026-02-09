@@ -406,7 +406,7 @@ impl Database {
         Ok(())
     }
 
-    /// Updates track info fields (title, artist, album, bpm) in the database.
+    /// Updates track info fields (title, artist, album, bpm, comment_raw) in the database.
     /// Only updates fields that are Some; leaves existing values for None fields.
     pub fn update_track_info(
         &self,
@@ -415,6 +415,7 @@ impl Database {
         artist: Option<&str>,
         album: Option<&str>,
         bpm: Option<i64>,
+        comment_raw: Option<&str>,
     ) -> Result<()> {
         let mut sets = Vec::new();
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -434,6 +435,10 @@ impl Database {
         if let Some(b) = bpm {
             sets.push("bpm = ?");
             params_vec.push(Box::new(b));
+        }
+        if let Some(c) = comment_raw {
+            sets.push("comment_raw = ?");
+            params_vec.push(Box::new(c.to_string()));
         }
 
         if sets.is_empty() {

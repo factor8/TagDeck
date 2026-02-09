@@ -60,7 +60,7 @@ interface ContextMenuState {
 // Editing state: which cell is being edited
 interface EditingCell {
     trackId: number;
-    field: 'title' | 'artist' | 'album' | 'bpm';
+    field: 'title' | 'artist' | 'album' | 'bpm' | 'comment';
 }
 
 // ── EditableCell ───────────────────────────────────────────────
@@ -80,7 +80,7 @@ const EditableCell = ({
 }: {
     value: string;
     trackId: number;
-    field: 'title' | 'artist' | 'album' | 'bpm';
+    field: 'title' | 'artist' | 'album' | 'bpm' | 'comment';
     isSelected: boolean;
     editingCell: EditingCell | null;
     onStartEdit: (trackId: number, field: EditingCell['field']) => void;
@@ -149,7 +149,7 @@ const EditableCell = ({
             e.preventDefault();
             onCommitEdit(trackId, field, localValue);
             // Tab to next editable field
-            const fields: EditingCell['field'][] = ['title', 'artist', 'album', 'bpm'];
+            const fields: EditingCell['field'][] = ['title', 'artist', 'album', 'comment', 'bpm'];
             const idx = fields.indexOf(field);
             if (idx < fields.length - 1) {
                 onStartEdit(trackId, fields[idx + 1]);
@@ -508,10 +508,19 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         const track = tracks.find(t => t.id === trackId);
         if (!track) return;
 
-        // Check if value actually changed
-        const oldValue = field === 'bpm' 
-            ? String(track.bpm || '') 
-            : (track[field] || '');
+        // For the comment field, we only edit the "user comment" part (left of " && ").
+        // Extract the current user comment for comparison.
+        let oldValue: string;
+        if (field === 'comment') {
+            const raw = track.comment_raw || '';
+            const splitIdx = raw.indexOf(' && ');
+            oldValue = splitIdx !== -1 ? raw.substring(0, splitIdx) : raw;
+        } else if (field === 'bpm') {
+            oldValue = String(track.bpm || '');
+        } else {
+            oldValue = track[field] || '';
+        }
+
         if (newValue === oldValue) return;
 
         // Optimistically update local state
@@ -520,13 +529,24 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             if (field === 'bpm') {
                 return { ...t, bpm: parseInt(newValue) || 0 };
             }
+            if (field === 'comment') {
+                // Reconstruct comment_raw: new user comment + existing tags
+                const existing = t.comment_raw || '';
+                const splitIdx = existing.indexOf(' && ');
+                const tagPart = splitIdx !== -1 ? existing.substring(splitIdx) : '';
+                const newCommentRaw = newValue + tagPart;
+                return { ...t, comment_raw: newCommentRaw };
+            }
             return { ...t, [field]: newValue };
         }));
 
         // Build the update payload — only send the changed field
-        const payload: { trackId: number; title?: string; artist?: string; album?: string; bpm?: number } = { trackId };
+        const payload: { trackId: number; title?: string; artist?: string; album?: string; bpm?: number; comment?: string } = { trackId };
         if (field === 'bpm') {
             payload.bpm = parseInt(newValue) || 0;
+        } else if (field === 'comment') {
+            // Send just the user comment portion; backend will reconstruct comment_raw
+            payload.comment = newValue;
         } else {
             payload[field] = newValue;
         }
@@ -966,7 +986,20 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             cell: info => {
                 const raw = info.getValue() || '';
                 const splitIndex = raw.indexOf(' && ');
-                return splitIndex !== -1 ? raw.substring(0, splitIndex) : raw;
+                const userComment = splitIndex !== -1 ? raw.substring(0, splitIndex) : raw;
+                const trackId = info.row.original.id;
+                return (
+                    <EditableCell
+                        value={userComment}
+                        trackId={trackId}
+                        field="comment"
+                        isSelected={selectedTrackIds.has(trackId)}
+                        editingCell={editingCell}
+                        onStartEdit={handleStartEdit}
+                        onCommitEdit={handleCommitEdit}
+                        onCancelEdit={handleCancelEdit}
+                    />
+                );
             }
         }),
         columnHelper.accessor('comment_raw', {

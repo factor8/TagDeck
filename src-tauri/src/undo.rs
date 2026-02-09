@@ -1,6 +1,6 @@
 use crate::db::Database;
-use crate::apple_music::batch_update_track_comments;
-use crate::metadata::write_metadata as write_tags_to_file;
+use crate::apple_music::{batch_update_track_comments, update_track_info as apple_update_track_info, update_track_comment, touch_file};
+use crate::metadata::{write_metadata as write_tags_to_file, write_track_info};
 use anyhow::Result;
 use std::process::Command;
 
@@ -15,7 +15,29 @@ pub enum Action {
         playlist_persistent_id: String,
         // List of track IDs added
         tracks: Vec<TrackRef>,
-    }
+    },
+    UpdateTrackInfo {
+        track: TrackInfoState,
+    },
+}
+
+/// Stores old and new values for a track info edit (title, artist, album, bpm, comment).
+/// Only fields that changed will have Some values.
+#[derive(Debug, Clone)]
+pub struct TrackInfoState {
+    pub id: i64,
+    pub persistent_id: String,
+    pub file_path: String,
+    pub old_title: Option<String>,
+    pub new_title: Option<String>,
+    pub old_artist: Option<String>,
+    pub new_artist: Option<String>,
+    pub old_album: Option<String>,
+    pub new_album: Option<String>,
+    pub old_bpm: Option<i64>,
+    pub new_bpm: Option<i64>,
+    pub old_comment_raw: Option<String>,
+    pub new_comment_raw: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +140,11 @@ impl UndoStack {
                      }
                      
                      "Undo Add to Playlist".to_string()
+                },
+                Action::UpdateTrackInfo { track } => {
+                    // Revert track info to old values
+                    apply_track_info(db, track, true);
+                    "Undo Edit Track Info".to_string()
                 }
             };
             
@@ -173,6 +200,11 @@ impl UndoStack {
                      }
 
                      "Redo Add to Playlist".to_string()
+                },
+                Action::UpdateTrackInfo { track } => {
+                    // Re-apply new track info values
+                    apply_track_info(db, track, false);
+                    "Redo Edit Track Info".to_string()
                 }
              };
              
@@ -180,6 +212,60 @@ impl UndoStack {
              Ok(Some(message))
         } else {
             Ok(None)
+        }
+    }
+}
+
+/// Applies track info changes for undo/redo.
+/// If `revert` is true, applies old values (undo); otherwise applies new values (redo).
+fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
+    let (title, artist, album, bpm, comment_raw) = if revert {
+        (
+            track.old_title.as_deref(),
+            track.old_artist.as_deref(),
+            track.old_album.as_deref(),
+            track.old_bpm,
+            track.old_comment_raw.as_deref(),
+        )
+    } else {
+        (
+            track.new_title.as_deref(),
+            track.new_artist.as_deref(),
+            track.new_album.as_deref(),
+            track.new_bpm,
+            track.new_comment_raw.as_deref(),
+        )
+    };
+
+    // 1. DB
+    if let Err(e) = db.update_track_info(track.id, title, artist, album, bpm, comment_raw) {
+        eprintln!("Undo/Redo DB Error: {}", e);
+    }
+
+    // 2. File metadata (title/artist/album/bpm)
+    if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+        if let Err(e) = write_track_info(&track.file_path, title, artist, album, bpm) {
+            eprintln!("Undo/Redo File Write Error: {}", e);
+        }
+    }
+
+    // 3. Comment in file (uses write_metadata which writes the full comment_raw)
+    if let Some(c) = comment_raw {
+        let _ = write_tags_to_file(&track.file_path, c);
+    }
+
+    // 4. Touch file
+    let _ = touch_file(&track.file_path);
+
+    // 5. Apple Music sync
+    if !track.persistent_id.is_empty() {
+        // Sync title/artist/album/bpm
+        if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+            let _ = apple_update_track_info(&track.persistent_id, title, artist, album, bpm);
+        }
+        // Sync comment
+        if let Some(c) = comment_raw {
+            let _ = update_track_comment(&track.persistent_id, c);
         }
     }
 }

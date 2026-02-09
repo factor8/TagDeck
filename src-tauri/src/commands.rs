@@ -897,54 +897,122 @@ pub async fn update_track_info(
     artist: Option<String>,
     album: Option<String>,
     bpm: Option<i64>,
+    comment: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
 
-    // 1. Get track for persistent_id and file_path
+    // 1. Get track for persistent_id, file_path, and old values
     let track = db.get_track(track_id).map_err(|e| e.to_string())?
         .ok_or("Track not found")?;
 
-    // 2. Update local DB
+    // 2. Build the new comment_raw if the user edited the comment portion.
+    //    comment_raw format: "user comment && tag1; tag2; tag3"
+    //    We only replace the left side; tags (right side) are preserved.
+    let new_comment_raw = comment.as_ref().map(|new_user_comment| {
+        let existing = track.comment_raw.as_deref().unwrap_or("");
+        let tag_part = if let Some(idx) = existing.find(" && ") {
+            Some(&existing[idx..]) // " && tag1; tag2"
+        } else {
+            None
+        };
+        if let Some(tags) = tag_part {
+            if new_user_comment.is_empty() {
+                // User cleared comment but tags remain — keep " && tags" with leading &&
+                format!("{}", &tags[1..]) // "&&  tag1; tag2" -> skip the leading space
+            } else {
+                format!("{}{}", new_user_comment, tags)
+            }
+        } else {
+            new_user_comment.clone()
+        }
+    });
+
+    // 3. Build undo state (capture old values for fields that are being changed)
+    let undo_state = crate::undo::TrackInfoState {
+        id: track_id,
+        persistent_id: track.persistent_id.clone(),
+        file_path: track.file_path.clone(),
+        old_title: if title.is_some() { track.title.clone() } else { None },
+        new_title: title.clone(),
+        old_artist: if artist.is_some() { track.artist.clone() } else { None },
+        new_artist: artist.clone(),
+        old_album: if album.is_some() { track.album.clone() } else { None },
+        new_album: album.clone(),
+        old_bpm: if bpm.is_some() { Some(track.bpm as i64) } else { None },
+        new_bpm: bpm,
+        old_comment_raw: if new_comment_raw.is_some() { track.comment_raw.clone() } else { None },
+        new_comment_raw: new_comment_raw.clone(),
+    };
+
+    // 4. Update local DB
     db.update_track_info(
         track_id,
         title.as_deref(),
         artist.as_deref(),
         album.as_deref(),
         bpm,
+        new_comment_raw.as_deref(),
     ).map_err(|e| e.to_string())?;
 
     drop(db); // Release lock before IO
 
-    // 3. Write to file metadata
-    if let Err(e) = write_track_info(
-        &track.file_path,
-        title.as_deref(),
-        artist.as_deref(),
-        album.as_deref(),
-        bpm,
-    ) {
-        let msg = format!("Warning: Failed to write track info to file: {}", e);
-        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
-        eprintln!("{}", msg);
+    // 5. Write to file metadata (title/artist/album/bpm)
+    if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+        if let Err(e) = write_track_info(
+            &track.file_path,
+            title.as_deref(),
+            artist.as_deref(),
+            album.as_deref(),
+            bpm,
+        ) {
+            let msg = format!("Warning: Failed to write track info to file: {}", e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            eprintln!("{}", msg);
+        }
     }
 
-    // 4. Touch file so Finder/Rekordbox notices
+    // 5b. Write comment to file if changed
+    if let Some(ref new_cr) = new_comment_raw {
+        if let Err(e) = write_tags_to_file(&track.file_path, new_cr) {
+            let msg = format!("Warning: Failed to write comment to file: {}", e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            eprintln!("{}", msg);
+        }
+    }
+
+    // 6. Touch file so Finder/Rekordbox notices
     if let Err(e) = touch_file(&track.file_path) {
         eprintln!("Warning: Failed to touch file: {}", e);
     }
 
-    // 5. Update Apple Music
-    if let Err(e) = apple_update_track_info(
-        &track.persistent_id,
-        title.as_deref(),
-        artist.as_deref(),
-        album.as_deref(),
-        bpm,
-    ) {
-        let msg = format!("Warning: Failed to update Apple Music: {}", e);
-        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
-        eprintln!("{}", msg);
+    // 7. Update Apple Music
+    if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+        if let Err(e) = apple_update_track_info(
+            &track.persistent_id,
+            title.as_deref(),
+            artist.as_deref(),
+            album.as_deref(),
+            bpm,
+        ) {
+            let msg = format!("Warning: Failed to update Apple Music: {}", e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            eprintln!("{}", msg);
+        }
+    }
+
+    // 7b. Update comment in Apple Music if changed
+    if let Some(ref new_cr) = new_comment_raw {
+        if let Err(e) = update_track_comment(&track.persistent_id, new_cr) {
+            let msg = format!("Warning: Failed to update Apple Music comment: {}", e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            eprintln!("{}", msg);
+        }
+    }
+
+    // 8. Push Undo
+    if let Ok(mut stack) = state.undo_stack.lock() {
+        stack.push(crate::undo::Action::UpdateTrackInfo { track: undo_state });
     }
 
     Ok(())
