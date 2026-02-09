@@ -115,17 +115,19 @@ const EditableCell = ({
     };
 
     const handleClick = (e: React.MouseEvent) => {
-        e.stopPropagation();
-
         // Only enter edit mode if the row was already selected before this click
         // (iTunes "slow double click" pattern: first click selects, second click edits)
         if (wasSelectedRef.current && !isEditing) {
+            // Stop propagation only when we're about to enter edit mode,
+            // so the row's onClick doesn't re-fire selection logic
+            e.stopPropagation();
             // Use a short delay to distinguish from a double-click (play) 
             if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
             clickTimerRef.current = setTimeout(() => {
                 onStartEdit(trackId, field);
             }, 300);
         }
+        // Otherwise, let the click bubble up to the row for normal selection
     };
 
     const handleDoubleClick = (_e: React.MouseEvent) => {
