@@ -1,0 +1,30 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g8" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="33%" stop-color="#EF4444"/>
+      <stop offset="66%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0F0D13"/>
+  <!-- 6 triangular slices forming hex, each with slight gap -->
+  <!-- Top slice -->
+  <polygon points="128,128 107,42 149,42" fill="#F59E0B" opacity="0.7"/>
+  <!-- Top-right -->
+  <polygon points="128,128 155,46 216,82" fill="#FB923C" opacity="0.7"/>
+  <!-- Bottom-right -->
+  <polygon points="128,128 218,90 218,170" fill="#EF4444" opacity="0.7"/>
+  <!-- Bottom -->
+  <polygon points="128,128 212,178 149,214" fill="#8B5CF6" opacity="0.7"/>
+  <!-- Bottom-left -->
+  <polygon points="128,128 107,214 44,178" fill="#6366F1" opacity="0.7"/>
+  <!-- Top-left -->
+  <polygon points="128,128 38,168 38,88" fill="#3B82F6" opacity="0.7"/>
+  <!-- Center cutout circle to create ring effect -->
+  <circle cx="128" cy="128" r="38" fill="#0F0D13"/>
+  <!-- Inner hex outline -->
+  <polygon points="128,95 157,112 157,144 128,161 99,144 99,112" stroke="white" stroke-width="2" opacity="0.3" fill="none"/>
+  <!-- Core bright dot -->
+  <circle cx="128" cy="128" r="6" fill="white" opacity="0.9"/>
+</svg>

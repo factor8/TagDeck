@@ -1,0 +1,22 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="g6r" cx="128" cy="128" r="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="60%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#6366F1" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="g6" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0B0F14"/>
+  <!-- Subtle radial bg glow -->
+  <circle cx="128" cy="128" r="100" fill="url(#g6r)" opacity="0.08"/>
+  <!-- 5 concentric hex rings radiating out -->
+  <polygon points="128,108 140,115 140,141 128,148 116,141 116,115" stroke="url(#g6)" stroke-width="3" fill="url(#g6)" opacity="1"/>
+  <polygon points="128,90 152,104 152,152 128,166 104,152 104,104" stroke="url(#g6)" stroke-width="2.5" opacity="0.7" fill="none"/>
+  <polygon points="128,72 164,93 164,163 128,184 92,163 92,93" stroke="url(#g6)" stroke-width="2.5" opacity="0.5" fill="none"/>
+  <polygon points="128,52 178,83 178,173 128,204 78,173 78,83" stroke="url(#g6)" stroke-width="2" opacity="0.3" fill="none"/>
+  <polygon points="128,34 190,73 190,183 128,222 66,183 66,73" stroke="url(#g6)" stroke-width="2" opacity="0.15" fill="none"/>
+</svg>

@@ -1,0 +1,27 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g11" x1="50" y1="50" x2="210" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0D0B15"/>
+  <!-- Stacked cards / tags -->
+  <!-- Back card -->
+  <rect x="62" y="52" width="140" height="160" rx="16" stroke="#6366F1" stroke-width="2" opacity="0.15" fill="#6366F1" fill-opacity="0.03" transform="rotate(-6 128 128)"/>
+  <!-- Mid card -->
+  <rect x="62" y="52" width="140" height="160" rx="16" stroke="#818CF8" stroke-width="2" opacity="0.25" fill="#818CF8" fill-opacity="0.04" transform="rotate(3 128 128)"/>
+  <!-- Front card -->
+  <rect x="62" y="52" width="140" height="160" rx="16" stroke="url(#g11)" stroke-width="2.5" fill="#6366F1" fill-opacity="0.06"/>
+  <!-- Tag icon on front card -->
+  <path d="M110,100 L140,100 L155,115 L155,145 L140,160 L110,160 L110,100 Z" stroke="url(#g11)" stroke-width="2.5" fill="none" opacity="0.7"/>
+  <!-- Tag hole -->
+  <circle cx="122" cy="113" r="5" stroke="url(#g11)" stroke-width="2" fill="none" opacity="0.7"/>
+  <!-- Lines on card representing metadata -->
+  <line x1="108" y1="175" x2="155" y2="175" stroke="#A855F7" stroke-width="2" opacity="0.2" stroke-linecap="round"/>
+  <line x1="108" y1="183" x2="140" y2="183" stroke="#A855F7" stroke-width="2" opacity="0.15" stroke-linecap="round"/>
+  <!-- Music note accent -->
+  <circle cx="148" cy="88" r="6" fill="url(#g11)" opacity="0.5"/>
+  <line x1="154" y1="88" x2="154" y2="72" stroke="url(#g11)" stroke-width="2" opacity="0.5" stroke-linecap="round"/>
+  <path d="M154,72 Q160,70 158,76" stroke="url(#g11)" stroke-width="2" fill="none" opacity="0.5"/>
+</svg>

@@ -1,0 +1,52 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g12" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F97316"/>
+      <stop offset="50%" stop-color="#EF4444"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+    <linearGradient id="g12b" x1="128" y1="60" x2="128" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#34D399"/>
+      <stop offset="30%" stop-color="#FBBF24"/>
+      <stop offset="70%" stop-color="#F97316"/>
+      <stop offset="100%" stop-color="#EF4444"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0C0A12"/>
+  <!-- Mixer panel background -->
+  <rect x="40" y="50" width="176" height="156" rx="12" fill="#16131F" stroke="#2D2640" stroke-width="1.5"/>
+  <!-- Channel strips -->
+  <!-- Channel 1 -->
+  <rect x="58" y="70" width="8" height="100" rx="4" fill="#1E1B2E"/>
+  <rect x="58" y="100" width="8" height="70" rx="4" fill="url(#g12b)" opacity="0.7"/>
+  <circle cx="62" cy="95" r="5" fill="#2D2640" stroke="url(#g12)" stroke-width="1.5"/>
+  <!-- Channel 2 -->
+  <rect x="82" y="70" width="8" height="100" rx="4" fill="#1E1B2E"/>
+  <rect x="82" y="80" width="8" height="90" rx="4" fill="url(#g12b)" opacity="0.8"/>
+  <circle cx="86" cy="75" r="5" fill="#2D2640" stroke="url(#g12)" stroke-width="1.5"/>
+  <!-- Channel 3 -->
+  <rect x="106" y="70" width="8" height="100" rx="4" fill="#1E1B2E"/>
+  <rect x="106" y="65" width="8" height="105" rx="4" fill="url(#g12b)" opacity="0.9"/>
+  <circle cx="110" cy="62" r="5" fill="#2D2640" stroke="url(#g12)" stroke-width="1.5"/>
+  <!-- Channel 4 -->
+  <rect x="130" y="70" width="8" height="100" rx="4" fill="#1E1B2E"/>
+  <rect x="130" y="90" width="8" height="80" rx="4" fill="url(#g12b)" opacity="0.75"/>
+  <circle cx="134" cy="85" r="5" fill="#2D2640" stroke="url(#g12)" stroke-width="1.5"/>
+  <!-- Channel 5 -->
+  <rect x="154" y="70" width="8" height="100" rx="4" fill="#1E1B2E"/>
+  <rect x="154" y="110" width="8" height="60" rx="4" fill="url(#g12b)" opacity="0.6"/>
+  <circle cx="158" cy="105" r="5" fill="#2D2640" stroke="url(#g12)" stroke-width="1.5"/>
+  <!-- Channel 6 -->
+  <rect x="178" y="70" width="8" height="100" rx="4" fill="#1E1B2E"/>
+  <rect x="178" y="120" width="8" height="50" rx="4" fill="url(#g12b)" opacity="0.5"/>
+  <circle cx="182" cy="115" r="5" fill="#2D2640" stroke="url(#g12)" stroke-width="1.5"/>
+  <!-- Label -->
+  <text x="128" y="190" text-anchor="middle" font-family="SF Mono, Menlo, monospace" font-size="11" font-weight="600" fill="#A78BFA" letter-spacing="4" opacity="0.7">TAGDECK</text>
+  <!-- LED indicators -->
+  <circle cx="62" cy="185" r="3" fill="#34D399" opacity="0.8"/>
+  <circle cx="86" cy="185" r="3" fill="#34D399" opacity="0.8"/>
+  <circle cx="110" cy="185" r="3" fill="#FBBF24" opacity="0.8"/>
+  <circle cx="134" cy="185" r="3" fill="#34D399" opacity="0.8"/>
+  <circle cx="158" cy="185" r="3" fill="#34D399" opacity="0.8"/>
+  <circle cx="182" cy="185" r="3" fill="#EF4444" opacity="0.6"/>
+</svg>

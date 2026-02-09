@@ -1,0 +1,22 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+    <linearGradient id="g1b" x1="0" y1="256" x2="256" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#EC4899"/>
+    </linearGradient>
+  </defs>
+  <!-- Background rounded square -->
+  <rect width="256" height="256" rx="48" fill="#0F0F14"/>
+  <!-- Outer hexagon ring -->
+  <polygon points="128,18 223,73 223,183 128,238 33,183 33,73" stroke="url(#g1)" stroke-width="5" opacity="0.25" fill="none"/>
+  <!-- Middle hexagon ring -->
+  <polygon points="128,48 193,85.5 193,170.5 128,208 63,170.5 63,85.5" stroke="url(#g1)" stroke-width="5" opacity="0.5" fill="none"/>
+  <!-- Inner hexagon ring -->
+  <polygon points="128,78 163,98 163,158 128,178 93,158 93,98" stroke="url(#g1b)" stroke-width="5" opacity="0.8" fill="none"/>
+  <!-- Core solid hexagon -->
+  <polygon points="128,100 145,110 145,146 128,156 111,146 111,110" fill="url(#g1b)"/>
+</svg>

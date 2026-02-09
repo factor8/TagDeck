@@ -1,0 +1,22 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g4" x1="60" y1="40" x2="200" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="50%" stop-color="#6366F1"/>
+      <stop offset="100%" stop-color="#2DD4BF"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0C0C14"/>
+  <!-- Shadow/depth hex (offset down-right) -->
+  <polygon points="134,36 218,84 218,182 134,234 50,182 50,84" fill="#7C3AED" opacity="0.07"/>
+  <!-- Outer hex -->
+  <polygon points="128,30 212,78 212,178 128,226 44,178 44,78" stroke="url(#g4)" stroke-width="4" opacity="0.25" fill="none"/>
+  <!-- Upper-left face fill -->
+  <polygon points="128,30 44,78 44,178 128,128" fill="#7C3AED" opacity="0.08"/>
+  <!-- Mid hex -->
+  <polygon points="128,60 185,93 185,163 128,196 71,163 71,93" stroke="url(#g4)" stroke-width="4" opacity="0.5" fill="none"/>
+  <!-- Inner hex -->
+  <polygon points="128,85 160,107 160,149 128,171 96,149 96,107" stroke="url(#g4)" stroke-width="4.5" opacity="0.8" fill="none"/>
+  <!-- Core hex solid -->
+  <polygon points="128,105 144,115 144,141 128,151 112,141 112,115" fill="url(#g4)"/>
+</svg>

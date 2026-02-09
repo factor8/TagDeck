@@ -1,0 +1,24 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g7" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#C084FC"/>
+    </linearGradient>
+    <mask id="tag-mask">
+      <rect width="256" height="256" fill="white"/>
+      <!-- Tag/label cutout shape in the center -->
+      <path d="M118,108 L142,108 L152,128 L142,148 L118,148 L108,128 Z" fill="black"/>
+    </mask>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0D0B15"/>
+  <!-- Outer hex with tag cutout -->
+  <g mask="url(#tag-mask)">
+    <polygon points="128,30 212,78 212,178 128,226 44,178 44,78" fill="url(#g7)" opacity="0.12"/>
+    <polygon points="128,55 190,91 190,165 128,201 66,165 66,91" stroke="url(#g7)" stroke-width="4" opacity="0.4" fill="none"/>
+    <polygon points="128,78 162,107 162,149 128,178 94,149 94,107" stroke="url(#g7)" stroke-width="4" opacity="0.7" fill="none"/>
+  </g>
+  <!-- Tag/label shape outline -->
+  <path d="M118,108 L142,108 L152,128 L142,148 L118,148 L108,128 Z" stroke="url(#g7)" stroke-width="3.5" fill="none"/>
+  <!-- Small circle inside tag (tag hole) -->
+  <circle cx="122" cy="128" r="4" fill="url(#g7)"/>
+</svg>

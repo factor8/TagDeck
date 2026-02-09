@@ -465,7 +465,7 @@ function App() {
             flexShrink: 0
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <AppLogo size={28} />
+          <AppLogo size={36} />
           <h1 style={{ margin: 0, fontSize: '18px', color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>TagDeck</h1>
         </div>
         

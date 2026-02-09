@@ -1,11 +1,27 @@
-<svg width="512" height="512" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect width="24" height="24" fill="transparent"/>
-    <!-- Inner solid hexagon -->
-    <polygon points="15.03,10.25 15.03,13.75 12.00,15.50 8.97,13.75 8.97,10.25 12.00,8.50" fill="#3b82f6" />
-    
-    <!-- Middle ring -->
-    <polygon points="17.63,8.75 17.63,15.25 12.00,18.50 6.37,15.25 6.37,8.75 12.00,5.50" stroke="#3b82f6" stroke-width="1.5" opacity="0.6" />
-    
-    <!-- Outer ring -->
-    <polygon points="20.23,7.25 20.23,16.75 12.00,21.50 3.77,16.75 3.77,7.25 12.00,2.50" stroke="#3b82f6" stroke-width="1.5" opacity="0.3" />
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g5" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#F472B6"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0E0B16"/>
+  <!-- Outer hex r=100 - broken/dashed segments -->
+  <line x1="128" y1="28" x2="214.6" y2="78" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+  <line x1="214.6" y1="78" x2="214.6" y2="178" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+  <line x1="214.6" y1="178" x2="128" y2="228" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+  <line x1="128" y1="228" x2="41.4" y2="178" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+  <line x1="41.4" y1="178" x2="41.4" y2="78" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+  <line x1="41.4" y1="78" x2="128" y2="28" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+  <!-- Mid hex r=68 - partial segments for modern look -->
+  <line x1="128" y1="60" x2="186.9" y2="94" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+  <line x1="186.9" y1="106" x2="186.9" y2="156" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+  <line x1="180" y1="162" x2="128" y2="196" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+  <line x1="76" y1="162" x2="69.1" y2="156" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+  <line x1="69.1" y1="148" x2="69.1" y2="106" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+  <line x1="76" y1="94" x2="120" y2="60" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+  <!-- Inner hex r=43 solid -->
+  <polygon points="128,85 165.2,106.5 165.2,149.5 128,171 90.8,149.5 90.8,106.5" fill="url(#g5)" opacity="0.85"/>
+  <!-- Bright core r=24 -->
+  <polygon points="128,104 148.8,116 148.8,140 128,152 107.2,140 107.2,116" fill="#F9A8D4"/>
 </svg>

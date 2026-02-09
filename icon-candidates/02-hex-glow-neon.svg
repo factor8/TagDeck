@@ -1,0 +1,27 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="glow2" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="glow2big" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <linearGradient id="g2" x1="0" y1="0" x2="256" y2="256" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="100%" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="48" fill="#0A0A12"/>
+  <!-- Ambient glow behind -->
+  <polygon points="128,38 205,82 205,174 128,218 51,174 51,82" fill="#6366F1" opacity="0.08" filter="url(#glow2big)"/>
+  <!-- Outer hex -->
+  <polygon points="128,28 215,78 215,178 128,228 41,178 41,78" stroke="#22D3EE" stroke-width="3" opacity="0.2" fill="none" filter="url(#glow2)"/>
+  <!-- Mid hex -->
+  <polygon points="128,58 185,97 185,159 128,198 71,159 71,97" stroke="#6366F1" stroke-width="4" opacity="0.55" fill="none" filter="url(#glow2)"/>
+  <!-- Inner hex -->
+  <polygon points="128,88 155,116 155,140 128,168 101,140 101,116" stroke="url(#g2)" stroke-width="5" fill="none" filter="url(#glow2)"/>
+  <!-- Core dot -->
+  <circle cx="128" cy="128" r="10" fill="#22D3EE" filter="url(#glow2)"/>
+</svg>
