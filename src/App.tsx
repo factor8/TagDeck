@@ -18,9 +18,11 @@ import { BpmCounter } from './components/BpmCounter';
 import { CopyPlaylistsModal } from './components/CopyPlaylistsModal';
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
+import { useDebug } from './components/DebugContext';
 
 function App() {
   const { showSuccess, showError } = useToast();
+  const { debugMode, log } = useDebug();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
   const [playingTrack, setPlayingTrack] = useState<Track | null>(() => {
@@ -115,6 +117,7 @@ function App() {
         
         console.log("[App] music-library-changed event received!");
         showSuccess('Library change detected. Syncing...');
+        log('INFO', 'Library change detected, starting auto-sync');
         
         try {
           const lastSync = localStorage.getItem('app_last_sync_time');
@@ -182,6 +185,7 @@ function App() {
         } catch (e) {
           console.error("Auto-sync failed:", e);
           showError(`Auto-sync failed: ${e}`);
+          log('ERROR', `Auto-sync failed: ${e}`);
         }
       });
 
@@ -477,6 +481,21 @@ function App() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <AppLogo size={36} />
           <h1 style={{ margin: 0, fontSize: '18px', color: 'var(--text-primary)', letterSpacing: '-0.5px' }}>TagDeck</h1>
+          {debugMode && (
+            <span style={{
+              fontSize: '9px',
+              fontWeight: 700,
+              padding: '2px 6px',
+              borderRadius: '4px',
+              background: 'rgba(251, 191, 36, 0.2)',
+              color: '#fbbf24',
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              border: '1px solid rgba(251, 191, 36, 0.3)',
+            }}>
+              DEBUG
+            </span>
+          )}
         </div>
         
         {/* Search Bar */}

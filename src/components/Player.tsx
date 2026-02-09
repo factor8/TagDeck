@@ -4,6 +4,14 @@ import { Track } from '../types';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw, Music } from 'lucide-react';
+import { useDebug } from './DebugContext';
+
+function formatFileSize(bytes: number): string {
+    if (!bytes) return '';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
 
 interface Props {
     track: Track | null;
@@ -21,6 +29,7 @@ interface Props {
 }
 
 export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange }: Props) {
+    const { debugMode } = useDebug();
     const containerRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
     const prevTrackIdRef = useRef<number | null>(null);
@@ -446,6 +455,20 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     >
                         {playlistName || 'All Tracks'}
                     </div>
+                    )}
+                    {track && debugMode && (
+                        <div style={{ 
+                            fontSize: '9px', 
+                            color: 'var(--text-secondary)', 
+                            fontFamily: 'monospace',
+                            opacity: 0.7,
+                            marginTop: '1px',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis'
+                        }}>
+                            {track.format}{track.bit_rate ? ` ${track.bit_rate}kbps` : ''}{track.bpm ? ` ${track.bpm}bpm` : ''} • {formatFileSize(track.size_bytes)}
+                        </div>
                     )}
                 </div>
             </div>

@@ -1,7 +1,8 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2 } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, Bug } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
+import { useDebug } from './DebugContext';
 
 interface SettingsPanelProps {
     isOpen: boolean;
@@ -20,6 +21,13 @@ interface SyncInfo {
     duration?: number;
 }
 
+interface LogStats {
+    log_dir: string;
+    total_size_bytes: number;
+    file_count: number;
+    current_file_size_bytes: number;
+}
+
 const THEMES = [
     { id: 'dark', name: 'Dark', color: '#0f172a' },
     { id: 'light', name: 'Light', color: '#ffffff' },
@@ -35,6 +43,13 @@ const ACCENTS = [
     { id: 'rose', color: '#f43f5e', name: 'Rose' },
 ];
 
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
 export function SettingsPanel({ 
     isOpen, 
     onClose, 
@@ -48,6 +63,8 @@ export function SettingsPanel({
     const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
     const [importing, setImporting] = useState(false);
     const [status, setStatus] = useState('');
+    const [logStats, setLogStats] = useState<LogStats | null>(null);
+    const { debugMode, setDebugMode } = useDebug();
     const [realTimeSyncEnabled, setRealTimeSyncEnabled] = useState(() => {
         return localStorage.getItem('app_real_time_sync_enabled') !== 'false';
     });
@@ -73,6 +90,7 @@ export function SettingsPanel({
     useEffect(() => {
         if (isOpen) {
              loadSyncInfo();
+             invoke<LogStats | null>('get_log_stats').then(setLogStats).catch(console.error);
         }
     }, [isOpen]);
 
@@ -396,6 +414,96 @@ export function SettingsPanel({
                              {isCustomAccent && <Check size={18} color="white" style={{ filter: 'drop-shadow(0 0 2px rgba(0,0,0,0.5))' }} />}
                         </div>
                     </div>
+                </div>
+            </div>
+
+            {/* Developer / Debug Section */}
+            <div style={{ marginTop: '28px', padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Bug size={14} /> Developer
+                </h4>
+
+                {/* Debug Mode Toggle */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                    <div>
+                        <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Debug Mode</span>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>Show extra info &amp; verbose logs</div>
+                    </div>
+                    <button
+                        onClick={() => setDebugMode(!debugMode)}
+                        style={{
+                            width: '40px',
+                            height: '22px',
+                            background: debugMode ? 'var(--accent-color)' : 'var(--bg-secondary)',
+                            borderRadius: '11px',
+                            position: 'relative',
+                            border: '1px solid var(--border-color)',
+                            cursor: 'pointer',
+                            transition: 'background 0.2s',
+                            padding: 0
+                        }}
+                    >
+                        <div style={{
+                            width: '18px',
+                            height: '18px',
+                            background: 'white',
+                            borderRadius: '50%',
+                            position: 'absolute',
+                            top: '1px',
+                            left: debugMode ? '19px' : '1px',
+                            transition: 'left 0.2s',
+                            boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                        }} />
+                    </button>
+                </div>
+
+                {/* Log Stats */}
+                {logStats && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                            <span>Log files:</span>
+                            <span>{logStats.file_count} ({formatBytes(logStats.total_size_bytes)})</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                            <span>Current log:</span>
+                            <span>{formatBytes(logStats.current_file_size_bytes)}</span>
+                        </div>
+                    </div>
+                )}
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                        onClick={() => invoke('open_log_folder').catch(console.error)}
+                        style={{
+                            fontSize: '12px',
+                            padding: '5px 10px',
+                            background: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--text-primary)',
+                            borderRadius: '6px',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                        }}
+                    >
+                        <FolderOpen size={12} /> Open Log Folder
+                    </button>
+                    <button
+                        onClick={() => invoke('toggle_logs').catch(console.error)}
+                        style={{
+                            fontSize: '12px',
+                            padding: '5px 10px',
+                            background: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-color)',
+                            color: 'var(--text-primary)',
+                            borderRadius: '6px',
+                            cursor: 'pointer'
+                        }}
+                    >
+                        Logs Window
+                    </button>
                 </div>
             </div>
         </div>

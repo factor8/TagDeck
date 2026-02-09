@@ -38,6 +38,7 @@ import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight, Trash2 } from 'lucide-react';
 import { Track } from '../types';
+import { useDebug } from './DebugContext';
 
 interface Props {
     refreshTrigger: number;
@@ -597,6 +598,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
 };
 
 export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete }, ref) => {
+    const { debugMode } = useDebug();
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
@@ -1760,6 +1762,41 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         )}
                     </table>
                 </div>
+
+            {/* Debug Status Bar */}
+            {debugMode && (
+                <div style={{
+                    padding: '4px 12px',
+                    background: 'var(--bg-tertiary)',
+                    borderTop: '1px solid var(--border-color)',
+                    fontSize: '11px',
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    gap: '16px',
+                    flexShrink: 0,
+                    fontFamily: 'monospace',
+                    alignItems: 'center',
+                }}>
+                    <span>Tracks: {tracks.length}</span>
+                    <span>Filtered: {filteredTracks.length}</span>
+                    <span>Selected: {selectedTrackIds.size}</span>
+                    {playlistId !== null && <span>Playlist ID: {playlistId}</span>}
+                    {selectedTrackIds.size === 1 && (() => {
+                        const t = tracks.find(t => selectedTrackIds.has(t.id));
+                        if (!t) return null;
+                        return (
+                            <>
+                                <span title={t.file_path} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px' }}>
+                                    Path: {t.file_path}
+                                </span>
+                                <span>PID: {t.persistent_id}</span>
+                                <span>ID: {t.id}</span>
+                                <span>{t.format} {t.bit_rate ? `${t.bit_rate}kbps` : ''}</span>
+                            </>
+                        );
+                    })()}
+                </div>
+            )}
 
             {/* Context Menu */}
             {contextMenu && (

@@ -31,7 +31,9 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            app.manage(logging::LogState::new());
+            let log_state = logging::LogState::new();
+            log_state.init_log_dir();
+            app.manage(log_state);
 
             // Menu construction
             let window_menu = Submenu::with_items(app, "Window", true, &[
@@ -114,6 +116,12 @@ pub fn run() {
             greet,
             logging::get_logs,
             logging::log_error,
+            logging::log_from_frontend,
+            logging::get_debug_mode,
+            logging::set_debug_mode,
+            logging::open_log_folder,
+            logging::get_log_file_path,
+            logging::get_log_stats,
             toggle_logs::toggle_logs,
             commands::import_library,
             commands::get_tracks,

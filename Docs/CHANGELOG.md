@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Persistent Logging**: All application logs now write to `~/Library/Logs/TagDeck/` following macOS conventions. Log files auto-rotate at 5 MB with up to 5 rotated files kept.
+- **Debug Mode**: New toggle in Settings → Developer section. When enabled:
+  - A `DEBUG` badge appears in the header bar.
+  - TrackList shows a debug status bar with track count, file path, persistent ID, format, and bitrate for the selected track.
+  - Player footer shows format, bitrate, BPM, and file size for the playing track.
+  - Backend emits verbose `DEBUG`-level log entries (suppressed when debug mode is off).
+- **Enhanced Logs Window**: Level filter pills (ERROR / WARN / INFO / DEBUG), text search, log count indicator, and a Clear button.
+- **Log Management in Settings**: Developer section shows log file stats (count, total size) with buttons to open the log folder in Finder or launch the Logs window.
+- **Frontend → Backend Logging**: New `log_from_frontend` Tauri command allows React code to send structured log entries through the same persistent logging pipeline.
+
 ## [0.1.2] - 2026-02-02
 
 ### Fixed
