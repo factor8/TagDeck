@@ -426,16 +426,18 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     }, [currentUrl]);
 
     // Handle Play/Pause — use ref for synchronous access (no stale closure issues)
+    // Don't manually set isPlaying here — let WaveSurfer's play/pause events
+    // handle state updates to avoid race conditions with async play().
     const togglePlayPause = useCallback(() => {
         const ws = wavesurferRef.current;
-        console.log("Toggle Play/Pause clicked. WaveSurfer instance:", !!ws);
+        console.log("Toggle Play/Pause clicked. WaveSurfer instance:", !!ws, "isPlaying:", ws?.isPlaying());
         if (ws) {
             try {
-                ws.playPause();
-                const isPlayingNow = ws.isPlaying();
-                console.log("WaveSurfer isPlaying:", isPlayingNow);
-                setIsPlaying(isPlayingNow);
-                if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(isPlayingNow);
+                if (ws.isPlaying()) {
+                    ws.pause();
+                } else {
+                    ws.play().catch(e => console.warn("Play failed:", e));
+                }
             } catch (e) {
                 console.error("Error toggling playback:", e);
             }
