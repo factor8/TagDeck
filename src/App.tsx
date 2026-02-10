@@ -799,6 +799,7 @@ function App() {
             }
         }}
         autoPlay={shouldAutoPlay}
+        onAutoPlayProcessed={() => setShouldAutoPlay(false)}
         playerMode={playerMode}
         onTrackError={handleRefresh}
         accentColor={accentColor}

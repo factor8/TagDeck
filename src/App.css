@@ -117,6 +117,16 @@ input:focus, textarea:focus {
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 /* Table Resizer */
 .resizer {
   position: absolute;

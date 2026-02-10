@@ -46,9 +46,10 @@ interface Props {
     onArtworkClick?: () => void;
     onTrackClick?: () => void;
     onPlayStateChange?: (isPlaying: boolean) => void;
+    onAutoPlayProcessed?: () => void;
 }
 
-export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, playerMode = 'standard', onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange }: Props) {
+export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, playerMode = 'standard', onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange, onAutoPlayProcessed }: Props) {
     const { debugMode } = useDebug();
     const containerRef = useRef<HTMLDivElement>(null);
     const waveformRef = useRef<HTMLDivElement>(null);
@@ -57,6 +58,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const prevTrackIdRef = useRef<number | null>(null);
     const onPlayStateChangeRef = useRef(onPlayStateChange);
     const onNextRef = useRef(onNext);
+    const onAutoPlayProcessedRef = useRef(onAutoPlayProcessed);
 
     // Keep refs up to date
     useEffect(() => {
@@ -64,7 +66,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         playerModeRef.current = playerMode;
         onPlayStateChangeRef.current = onPlayStateChange;
         onNextRef.current = onNext;
-    }, [autoPlay, playerMode, onPlayStateChange, onNext]);
+        onAutoPlayProcessedRef.current = onAutoPlayProcessed;
+    }, [autoPlay, playerMode, onPlayStateChange, onNext, onAutoPlayProcessed]);
 
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -186,7 +189,13 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
         ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
         ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
-        ws.on('ready', () => { if (autoPlayRef.current) { ws.play().catch(() => {}); } });
+        ws.on('ready', () => { 
+            if (autoPlayRef.current) { 
+                ws.play().catch(() => {}); 
+                // Notify parent that autoplay has been processed
+                onAutoPlayProcessedRef.current?.();
+            } 
+        });
         // Don't set error toast from WaveSurfer's error event — loadAudio handles errors
         ws.on('error', (err: any) => { console.warn('WaveSurfer error event (handled by loadAudio):', err); });
         return ws;
@@ -230,6 +239,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                 // Use ws.play() so WaveSurfer tracks play state (enables playPause)
                 userPausedRef.current = false;
                 ws.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
+                // Notify parent that autoplay has been processed
+                onAutoPlayProcessedRef.current?.();
             }
         };
         if (audioEl.readyState >= 3) {
@@ -455,6 +466,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             ws.play().catch(() => {});
                         }
                     }
+                    // Notify parent that autoplay has been processed
+                    onAutoPlayProcessedRef.current?.();
                  } catch(e) { console.warn("AutoPlay trigger failed", e); }
             }
         }
@@ -635,7 +648,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             gap: '4px'
                         }}>
                             {track.format}{track.bit_rate ? ` ${track.bit_rate}kbps` : ''}{track.bpm ? ` ${track.bpm}bpm` : ''} • {formatFileSize(track.size_bytes)}
-                            {usingMediaFallback && (
+                            {usingMediaFallback && playerMode === 'waveform' && (
                                 <span style={{ color: '#fbbf24', display: 'inline-flex', alignItems: 'center', gap: '2px' }} title="Using native audio decoder fallback (Web Audio decode failed)">
                                     <AlertTriangle size={9} /> fallback
                                 </span>
