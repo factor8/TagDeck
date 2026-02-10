@@ -181,20 +181,18 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         return ws;
     }, [accentColor]);
 
-    // Helper: create a MediaElement-backed fallback WaveSurfer
+    // Helper: create a MediaElement-backed WaveSurfer (used in standard mode and as fallback)
+    // In standard mode, the waveform canvas is hidden (height: 0) — only the scrub bar overlay shows.
     const createFallbackWaveSurfer = useCallback((audioEl: HTMLAudioElement) => {
         if (!containerRef.current) return null;
         const ws = WaveSurfer.create({
             container: containerRef.current,
-            waveColor: '#475569',
-            progressColor: accentColor,
-            cursorColor: '#f1f5f9',
-            barWidth: 2,
-            barGap: 1,
-            barRadius: 2,
-            height: 40,
+            waveColor: 'transparent',
+            progressColor: 'transparent',
+            cursorColor: 'transparent',
+            height: 0,
             normalize: true,
-            interact: true,
+            interact: false, // scrub bar handles interaction
             media: audioEl,
         });
         ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
@@ -230,7 +228,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
 
         return ws;
-    }, [accentColor]);
+    }, []); // No deps — standard mode hides the waveform canvas, no accentColor needed
 
 
     // Load audio when track changes
