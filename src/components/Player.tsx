@@ -66,6 +66,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     }, [autoPlay, playerMode, onPlayStateChange, onNext]);
 
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
+    const wavesurferRef = useRef<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [currentUrl, setCurrentUrl] = useState<string | null>(null);
@@ -119,95 +120,42 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
     }, [error]);
 
-    // Initialize WaveSurfer
+    // Cleanup on unmount: destroy any active WaveSurfer
     useEffect(() => {
-        if (!containerRef.current) {
-            console.error("WaveSurfer container ref is null!");
-            return;
-        }
-
-        console.log("Initializing WaveSurfer instance...");
-
-        let ws: WaveSurfer;
-        try {
-            ws = WaveSurfer.create({
-                container: containerRef.current,
-                waveColor: '#475569', // slate-600
-                progressColor: accentColor,
-                cursorColor: '#f1f5f9', // slate-100
-                barWidth: 2,
-                barGap: 1,
-                barRadius: 2,
-                height: 40,
-                normalize: true,
-                minPxPerSec: 0, // Fit to container
-                interact: true,
-            });
-        } catch (err) {
-            console.error("Failed to create WaveSurfer:", err);
-            setError(`Init Error: ${err}`);
-            return;
-        }
-
-        // Event listeners
-        ws.on('play', () => {
-            setIsPlaying(true);
-            if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true);
-        });
-        ws.on('pause', () => {
-            setIsPlaying(false);
-            if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
-        });
-        ws.on('finish', () => {
-            setIsPlaying(false);
-            if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false);
-            if (onNextRef.current) onNextRef.current();
-        });
-        ws.on('ready', () => {
-            console.log("WaveSurfer Ready. Duration:", ws.getDuration());
-            if (autoPlayRef.current) {
-                console.log("Auto-play triggering...");
-                ws.play().catch(e => {
-                    console.warn("Auto-play validation failed:", e);
-                    // Ignore "The user canceled the play request" etc.
-                });
-            }
-        });
-        
-        // Initial basic error logging
-        ws.on('error', (err: any) => {
-            console.error("WaveSurfer internal error:", err);
-            // Don't show toast for "user aborted" etc if trivial
-            // setError(`WaveSurfer Error: ${err?.message || err}`);
-        });
-
-        // Add a redraw on resize just in case
-        const resizeObserver = new ResizeObserver(() => {
-             // ws.drawBuffer(); // v7 handles this? v7 uses internal observer usually.
-        });
-        resizeObserver.observe(containerRef.current);
-
-        setWavesurfer(ws);
-
         return () => {
-            console.log("Destroying WaveSurfer instance");
-            resizeObserver.disconnect();
-            try {
-                ws.destroy();
-            } catch (e) {
-                console.warn('Error destroying WaveSurfer instance:', e);
+            if (wavesurferRef.current) {
+                try { wavesurferRef.current.destroy(); } catch (_) { /* ignore */ }
+                wavesurferRef.current = null;
             }
         };
-    }, []); // Only on mount
+    }, []);
 
     // Update WaveSurfer colors when accent/theme changes
     useEffect(() => {
-        if (wavesurfer) {
-            wavesurfer.setOptions({
+        if (wavesurferRef.current) {
+            wavesurferRef.current.setOptions({
                 progressColor: accentColor
             });
         }
-    }, [accentColor, wavesurfer]);
+    }, [accentColor, wavesurfer]); // wavesurfer state triggers re-run when instance changes
+
+    // Helper: destroy current WaveSurfer and clear container of ghost canvases
+    const destroyCurrentWaveSurfer = useCallback(() => {
+        if (wavesurferRef.current) {
+            try { wavesurferRef.current.destroy(); } catch (_) { /* ignore */ }
+            wavesurferRef.current = null;
+        }
+        // Clear any leftover DOM (ghost canvases from destroyed instances)
+        if (containerRef.current) {
+            containerRef.current.innerHTML = '';
+        }
+    }, []);
+
+    // Helper: set the active WaveSurfer (both state + ref)
+    const setActiveWaveSurfer = useCallback((ws: WaveSurfer | null) => {
+        wavesurferRef.current = ws;
+        setWavesurfer(ws);
+    }, []);
 
     // Helper: create a standard WaveSurfer with all event listeners
     const createStandardWaveSurfer = useCallback(() => {
@@ -287,13 +235,13 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
     // Load audio when track changes
     useEffect(() => {
-        if (!wavesurfer) return;
-
         // If track is null, clear player
         if (!track) {
             setCurrentUrl(null);
             prevTrackIdRef.current = null;
-            try { wavesurfer.stop(); } catch (e) { /* ignore */ }
+            if (wavesurferRef.current) {
+                try { wavesurferRef.current.stop(); } catch (_) { /* ignore */ }
+            }
             return;
         }
 
@@ -307,41 +255,19 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
             const useWaveform = playerModeRef.current === 'waveform';
 
-            // Clean up previous MediaElement state if needed
-            const cleanupMediaElement = () => {
-                if (mediaElementRef.current) {
-                    mediaElementRef.current.pause();
-                    mediaElementRef.current.src = '';
-                    mediaElementRef.current = null;
-                }
-                setFallbackProgress(0);
-                setFallbackDuration(0);
-                setFallbackCurrentTime(0);
-                fallbackInProgressRef.current = false;
-            };
-
-            // Determine if we need to rebuild WaveSurfer (mode mismatch)
-            let activeWs = wavesurfer;
-            const needsRebuild = (usingMediaFallback && useWaveform) || (!usingMediaFallback && !useWaveform);
-
-            if (usingMediaFallback || needsRebuild) {
-                cleanupMediaElement();
-                try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
-
-                if (useWaveform) {
-                    // Rebuild standard WebAudio WaveSurfer
-                    setUsingMediaFallback(false);
-                    const ws = createStandardWaveSurfer();
-                    if (!ws) return;
-                    activeWs = ws;
-                    setWavesurfer(ws);
-                } else {
-                    // Standard mode: create a placeholder WaveSurfer that will be
-                    // replaced by createFallbackWaveSurfer once the audio element is ready.
-                    // We'll handle this in loadAudioStandard below.
-                    activeWs = null as any; // signal to skip ws.load()
-                }
+            // Clean up everything from previous track
+            if (mediaElementRef.current) {
+                mediaElementRef.current.pause();
+                mediaElementRef.current.src = '';
+                mediaElementRef.current = null;
             }
+            setFallbackProgress(0);
+            setFallbackDuration(0);
+            setFallbackCurrentTime(0);
+            fallbackInProgressRef.current = false;
+
+            // Destroy previous WaveSurfer and clear container DOM
+            destroyCurrentWaveSurfer();
             
             // --- Standard mode: MediaElement path (instant playback) ---
             const loadAudioStandard = async () => {
@@ -357,18 +283,15 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     audioEl.src = blobUrl;
                     mediaElementRef.current = audioEl;
 
-                    // Destroy whatever WaveSurfer exists (could be stale standard or placeholder)
-                    try { wavesurfer.destroy(); } catch (_) { /* ignore */ }
-
-                    const fallbackWs = createFallbackWaveSurfer(audioEl);
-                    if (!fallbackWs) {
+                    const ws = createFallbackWaveSurfer(audioEl);
+                    if (!ws) {
                         setError('Playback Error: Could not create player.');
                         return;
                     }
 
                     setCurrentUrl(blobUrl);
                     setUsingMediaFallback(true);
-                    setWavesurfer(fallbackWs);
+                    setActiveWaveSurfer(ws);
 
                     console.log(`[Standard] Loaded: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
                 } catch (err) {
@@ -387,11 +310,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             };
 
             // --- Waveform mode: full decode path ---
-            const loadAudioWaveform = async (ws: WaveSurfer) => {
+            const loadAudioWaveform = async () => {
                 const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
                 try {
-                     try { ws.stop(); } catch(e) { /* ignore */ }
-                    
                     console.log('[Waveform] Reading file:', track.file_path);
                     const contents = await readFile(track.file_path);
                     const mimeType = getMimeType(track.format);
@@ -400,7 +321,13 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     const blobUrl = URL.createObjectURL(blob);
                     
                     console.log(`[Waveform] Loading audio: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
+
+                    const ws = createStandardWaveSurfer();
+                    if (!ws) return;
+
                     setCurrentUrl(blobUrl);
+                    setUsingMediaFallback(false);
+                    setActiveWaveSurfer(ws);
                     
                     await ws.load(blobUrl);
                     
@@ -426,7 +353,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             audioEl.src = blobUrl;
                             mediaElementRef.current = audioEl;
 
-                            try { ws.destroy(); } catch (_) { /* ignore */ }
+                            // Destroy the failed waveform WaveSurfer
+                            destroyCurrentWaveSurfer();
 
                             const fallbackWs = createFallbackWaveSurfer(audioEl);
                             if (!fallbackWs) {
@@ -436,7 +364,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
                             setCurrentUrl(blobUrl);
                             setUsingMediaFallback(true);
-                            setWavesurfer(fallbackWs);
+                            setActiveWaveSurfer(fallbackWs);
 
                             invoke('log_from_frontend', { level: 'INFO', message: `MediaElement fallback loaded for: ${track.title}` }).catch(console.error);
                         } catch (fallbackErr) {
@@ -466,7 +394,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
             // Dispatch based on player mode
             if (useWaveform) {
-                loadAudioWaveform(activeWs);
+                loadAudioWaveform();
             } else {
                 loadAudioStandard();
             }
@@ -474,18 +402,18 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
              // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
              if (autoPlay) {
                  try {
-                    if (usingMediaFallback && mediaElementRef.current) {
-                        if (mediaElementRef.current.paused) {
-                            mediaElementRef.current.play().catch(() => {});
+                    const ws = wavesurferRef.current;
+                    if (ws) {
+                        if (!ws.isPlaying()) {
+                            ws.play().catch(() => {});
                         }
-                    } else if (wavesurfer.getDuration() > 0 && !wavesurfer.isPlaying()) {
-                        wavesurfer.play();
                     }
                  } catch(e) { console.warn("AutoPlay trigger failed", e); }
             }
         }
         
-    }, [track, wavesurfer, autoPlay, usingMediaFallback, accentColor, createStandardWaveSurfer, createFallbackWaveSurfer, onTrackError, playerMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [track, autoPlay, createStandardWaveSurfer, createFallbackWaveSurfer, destroyCurrentWaveSurfer, setActiveWaveSurfer, onTrackError]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
@@ -497,13 +425,14 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         };
     }, [currentUrl]);
 
-    // Handle Play/Pause
+    // Handle Play/Pause — use ref for synchronous access (no stale closure issues)
     const togglePlayPause = useCallback(() => {
-        console.log("Toggle Play/Pause clicked. WaveSurfer instance:", !!wavesurfer);
-        if (wavesurfer) {
+        const ws = wavesurferRef.current;
+        console.log("Toggle Play/Pause clicked. WaveSurfer instance:", !!ws);
+        if (ws) {
             try {
-                wavesurfer.playPause();
-                const isPlayingNow = wavesurfer.isPlaying();
+                ws.playPause();
+                const isPlayingNow = ws.isPlaying();
                 console.log("WaveSurfer isPlaying:", isPlayingNow);
                 setIsPlaying(isPlayingNow);
                 if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(isPlayingNow);
@@ -513,19 +442,20 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         } else {
             console.warn("WaveSurfer instance not ready");
         }
-    }, [wavesurfer]);
+    }, []);
 
     const skip = (seconds: number) => {
-        if (wavesurfer) {
-            wavesurfer.skip(seconds);
+        if (wavesurferRef.current) {
+            wavesurferRef.current.skip(seconds);
         }
     };
 
     const toggleMute = () => {
-        if (wavesurfer) {
+        const ws = wavesurferRef.current;
+        if (ws) {
             const newMuted = !isMuted;
             setIsMuted(newMuted);
-            wavesurfer.setVolume(newMuted ? 0 : volume);
+            ws.setVolume(newMuted ? 0 : volume);
         }
     };
 
@@ -533,8 +463,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         const newVolume = parseFloat(e.target.value);
         setVolume(newVolume);
         setIsMuted(newVolume === 0);
-        if (wavesurfer) {
-            wavesurfer.setVolume(newVolume);
+        if (wavesurferRef.current) {
+            wavesurferRef.current.setVolume(newVolume);
         }
     };
 
@@ -553,7 +483,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [togglePlayPause]);
+    }, []); // togglePlayPause is stable (uses refs internally)
 
     const hasTrack = !!track;
 
@@ -734,10 +664,10 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                             {/* Progress track */}
                             <div
                                 onClick={(e) => {
-                                    if (!wavesurfer) return;
+                                    if (!wavesurferRef.current) return;
                                     const rect = e.currentTarget.getBoundingClientRect();
                                     const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-                                    wavesurfer.seekTo(ratio);
+                                    wavesurferRef.current.seekTo(ratio);
                                 }}
                                 style={{
                                     position: 'relative',
