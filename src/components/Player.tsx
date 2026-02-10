@@ -51,6 +51,7 @@ interface Props {
 export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, playerMode = 'standard', onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange }: Props) {
     const { debugMode } = useDebug();
     const containerRef = useRef<HTMLDivElement>(null);
+    const waveformRef = useRef<HTMLDivElement>(null);
     const autoPlayRef = useRef(autoPlay);
     const playerModeRef = useRef(playerMode);
     const prevTrackIdRef = useRef<number | null>(null);
@@ -79,6 +80,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const [fallbackCurrentTime, setFallbackCurrentTime] = useState(0);
     const mediaElementRef = useRef<HTMLAudioElement | null>(null);
     const fallbackInProgressRef = useRef(false);
+    const userPausedRef = useRef(false);
+    const prevPlayerModeRef = useRef(playerMode);
+    const [reloadCounter, setReloadCounter] = useState(0);
 
     // Fetch Artwork
     useEffect(() => {
@@ -120,12 +124,17 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
     }, [error]);
 
-    // Cleanup on unmount: destroy any active WaveSurfer
+    // Cleanup on unmount: destroy any active WaveSurfer and audio element
     useEffect(() => {
         return () => {
             if (wavesurferRef.current) {
                 try { wavesurferRef.current.destroy(); } catch (_) { /* ignore */ }
                 wavesurferRef.current = null;
+            }
+            if (mediaElementRef.current) {
+                mediaElementRef.current.pause();
+                mediaElementRef.current.src = '';
+                mediaElementRef.current = null;
             }
         };
     }, []);
@@ -139,15 +148,17 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
     }, [accentColor, wavesurfer]); // wavesurfer state triggers re-run when instance changes
 
-    // Helper: destroy current WaveSurfer and clear container of ghost canvases
+    // Helper: destroy current WaveSurfer and clear waveform sub-div of ghost canvases
+    // IMPORTANT: Only clear the waveform sub-div, NOT the container — the container
+    // has React-managed children (scrub bar) that would crash React if removed.
     const destroyCurrentWaveSurfer = useCallback(() => {
         if (wavesurferRef.current) {
             try { wavesurferRef.current.destroy(); } catch (_) { /* ignore */ }
             wavesurferRef.current = null;
         }
-        // Clear any leftover DOM (ghost canvases from destroyed instances)
-        if (containerRef.current) {
-            containerRef.current.innerHTML = '';
+        // Clear only the waveform sub-div (WaveSurfer canvases), not the React container
+        if (waveformRef.current) {
+            waveformRef.current.innerHTML = '';
         }
     }, []);
 
@@ -159,9 +170,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
 
     // Helper: create a standard WaveSurfer with all event listeners
     const createStandardWaveSurfer = useCallback(() => {
-        if (!containerRef.current) return null;
+        if (!waveformRef.current) return null;
         const ws = WaveSurfer.create({
-            container: containerRef.current,
+            container: waveformRef.current,
             waveColor: '#475569',
             progressColor: accentColor,
             cursorColor: '#f1f5f9',
@@ -184,9 +195,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     // Helper: create a MediaElement-backed WaveSurfer (used in standard mode and as fallback)
     // In standard mode, the waveform canvas is hidden (height: 0) — only the scrub bar overlay shows.
     const createFallbackWaveSurfer = useCallback((audioEl: HTMLAudioElement) => {
-        if (!containerRef.current) return null;
+        if (!waveformRef.current) return null;
         const ws = WaveSurfer.create({
-            container: containerRef.current,
+            container: waveformRef.current,
             waveColor: 'transparent',
             progressColor: 'transparent',
             cursorColor: 'transparent',
@@ -215,8 +226,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         // event is unreliable when the waveform decode fails.
         const startPlayback = () => {
             setFallbackDuration(audioEl.duration || 0);
-            if (autoPlayRef.current) {
+            if (autoPlayRef.current && !userPausedRef.current) {
                 // Use ws.play() so WaveSurfer tracks play state (enables playPause)
+                userPausedRef.current = false;
                 ws.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
             }
         };
@@ -231,6 +243,36 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     }, []); // No deps — standard mode hides the waveform canvas, no accentColor needed
 
 
+    // When playerMode changes, force-reload the current track
+    useEffect(() => {
+        if (playerMode !== prevPlayerModeRef.current) {
+            console.log(`[Player] Mode changed: ${prevPlayerModeRef.current} -> ${playerMode}`);
+            prevPlayerModeRef.current = playerMode;
+            playerModeRef.current = playerMode;
+
+            // If a track is loaded, force a reload by clearing prevTrackIdRef
+            // and bumping reloadCounter to trigger the load effect
+            if (track && prevTrackIdRef.current !== null) {
+                // Stop current playback and clean up
+                if (mediaElementRef.current) {
+                    mediaElementRef.current.pause();
+                    mediaElementRef.current.src = '';
+                    mediaElementRef.current = null;
+                }
+                destroyCurrentWaveSurfer();
+                setIsPlaying(false);
+                setUsingMediaFallback(false);
+                setFallbackProgress(0);
+                setFallbackDuration(0);
+                setFallbackCurrentTime(0);
+                // Reset the track ID ref so the load effect treats this as a new track
+                prevTrackIdRef.current = null;
+                // Bump counter to force the load effect to re-run
+                setReloadCounter(c => c + 1);
+            }
+        }
+    }, [playerMode, track, destroyCurrentWaveSurfer]);
+
     // Load audio when track changes
     useEffect(() => {
         // If track is null, clear player
@@ -239,6 +281,12 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             prevTrackIdRef.current = null;
             if (wavesurferRef.current) {
                 try { wavesurferRef.current.stop(); } catch (_) { /* ignore */ }
+            }
+            // Also stop any orphaned <audio> element
+            if (mediaElementRef.current) {
+                mediaElementRef.current.pause();
+                mediaElementRef.current.src = '';
+                mediaElementRef.current = null;
             }
             return;
         }
@@ -250,6 +298,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             
             setError(null);
             setIsPlaying(false);
+            userPausedRef.current = false;
 
             const useWaveform = playerModeRef.current === 'waveform';
 
@@ -411,7 +460,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         }
         
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [track, autoPlay, createStandardWaveSurfer, createFallbackWaveSurfer, destroyCurrentWaveSurfer, setActiveWaveSurfer, onTrackError]);
+    }, [track, autoPlay, reloadCounter, createStandardWaveSurfer, createFallbackWaveSurfer, destroyCurrentWaveSurfer, setActiveWaveSurfer, onTrackError]);
     
     // Revoke Blob URL when currentUrl changes if it was a blob
     useEffect(() => {
@@ -432,8 +481,14 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         if (ws) {
             try {
                 if (ws.isPlaying()) {
+                    userPausedRef.current = true;
                     ws.pause();
+                    // Also pause underlying <audio> directly as a safety net
+                    if (mediaElementRef.current) {
+                        mediaElementRef.current.pause();
+                    }
                 } else {
+                    userPausedRef.current = false;
                     ws.play().catch(e => console.warn("Play failed:", e));
                 }
             } catch (e) {
@@ -649,6 +704,8 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                         width: '100%',
                     }} 
                 >
+                    {/* WaveSurfer renders its canvases here — separate from React children */}
+                    <div ref={waveformRef} style={{ position: 'absolute', inset: 0, zIndex: 1 }} />
                     {/* Fallback scrub bar for MediaElement-decoded tracks (no waveform data) */}
                     {usingMediaFallback && (
                         <div
