@@ -509,6 +509,13 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
         }
     };
 
+    const handleClick = (e: React.MouseEvent) => {
+        // Only trigger onClick for left-clicks, not right-clicks
+        if (e.button === 0) {
+            onClick();
+        }
+    };
+
     const handleDelete = async () => {
         setContextMenu(null);
         if (onDelete) {
@@ -531,7 +538,7 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
                 style={{...styles.pillWrapper, ...style}}
             >
                  <div 
-                    onClick={onClick}
+                    onMouseDown={handleClick}
                     style={{
                         ...styles.pill,
                         background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
