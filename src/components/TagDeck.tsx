@@ -124,6 +124,16 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
 
         if (activeDragType === 'tag') {
             const tagId = Number(active.id);
+            
+            // Check if dropped on delete zone
+            if (String(over.id) === 'delete-zone') {
+                const tag = tags.find(t => t.id === tagId);
+                if (tag && tag.usage_count === 0) {
+                    await handleDeleteTag(tagId);
+                }
+                return;
+            }
+            
             // over.id is either "uncategorized" or "group-{id}"
             let newGroupId: number | null = null;
             
@@ -278,7 +288,6 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                                 tag={tag} 
                                 isActive={currentTrackTags.includes(tag.name)}
                                 onClick={() => onTagClick(tag.name)}
-                                onDelete={handleDeleteTag}
                             />
                         ))}
                         {organizedTags.uncategorized.length === 0 && !filter && (
@@ -305,7 +314,6 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                                         tag={tag} 
                                         isActive={currentTrackTags.includes(tag.name)}
                                         onClick={() => onTagClick(tag.name)}
-                                        onDelete={handleDeleteTag}
                                     />
                                 ))}
                             </DroppableSection>
@@ -363,6 +371,11 @@ function DroppableSection({ id, title, children, isUncategorized, onDelete, onRe
 
 function PlainDroppableSection({ id, title, children, isUncategorized, collapsed, onToggle }: any) {
     const { setNodeRef, isOver } = useDroppable({ id });
+    const { setNodeRef: deleteZoneRef, isOver: isOverDelete } = useDroppable({ 
+        id: 'delete-zone',
+        disabled: !isUncategorized 
+    });
+    
     return (
         <div 
              ref={setNodeRef} 
@@ -382,6 +395,26 @@ function PlainDroppableSection({ id, title, children, isUncategorized, collapsed
                      </div>
                      <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)'}}>{title}</span>
                  </div>
+                 {isUncategorized && (
+                     <div 
+                         ref={deleteZoneRef}
+                         style={{
+                             padding: '4px 8px',
+                             borderRadius: 4,
+                             display: 'flex',
+                             alignItems: 'center',
+                             gap: 4,
+                             backgroundColor: isOverDelete ? 'rgba(239, 68, 68, 0.3)' : 'rgba(255,255,255,0.05)',
+                             border: isOverDelete ? '1px solid rgba(239, 68, 68, 0.5)' : '1px solid rgba(255,255,255,0.1)',
+                             transition: 'all 0.2s',
+                             cursor: 'pointer',
+                         }}
+                         title="Drop tags here to delete (zero usage only)"
+                     >
+                         <Trash2 size={12} style={{color: isOverDelete ? '#ef4444' : 'var(--text-secondary)'}} />
+                         <span style={{fontSize: '11px', color: isOverDelete ? '#ef4444' : 'var(--text-secondary)'}}>Delete</span>
+                     </div>
+                 )}
             </div>
              {!collapsed && (
                  <div style={styles.tagContainer}>
@@ -489,8 +522,7 @@ function SortableGroupSection({ id, title, children, onDelete, onRename, collaps
     );
 }
 
-function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive: boolean, onClick: () => void, onDelete?: (tagId: number) => void }) {
-    const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+function DraggableTag({ tag, isActive, onClick }: { tag: Tag, isActive: boolean, onClick: () => void }) {
     const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
         id: tag.id,
     });
@@ -501,14 +533,6 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
         opacity: isDragging ? 0 : 1, // Hide original when dragging
     } : undefined;
 
-    const handleContextMenu = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (tag.usage_count === 0) {
-            setContextMenu({ x: e.clientX, y: e.clientY });
-        }
-    };
-
     const handleClick = (e: React.MouseEvent) => {
         // Only trigger onClick for left-clicks, not right-clicks
         if (e.button === 0 && e.type === 'click') {
@@ -516,59 +540,25 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
         }
     };
 
-    const handleDelete = async () => {
-        setContextMenu(null);
-        if (onDelete) {
-            onDelete(tag.id);
-        }
-    };
-
     return (
-        <>
-            <div 
-                ref={setNodeRef}
-                {...listeners}
-                {...attributes}
-                style={{...styles.pillWrapper, ...style}}
-                onContextMenu={handleContextMenu}
+        <div 
+            ref={setNodeRef}
+            {...listeners}
+            {...attributes}
+            style={{...styles.pillWrapper, ...style}}
+        >
+             <div 
+                onClick={handleClick}
+                style={{
+                    ...styles.pill,
+                    background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
+                    color: isActive ? '#fff' : 'var(--text-secondary)',
+                    border: isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)',
+                }}
             >
-                 <div 
-                    onClick={handleClick}
-                    style={{
-                        ...styles.pill,
-                        background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
-                        color: isActive ? '#fff' : 'var(--text-secondary)',
-                        border: isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)',
-                    }}
-                >
-                    {tag.name}
-                </div>
+                {tag.name}
             </div>
-            {contextMenu && (
-                <>
-                    <div
-                        style={{ position: 'fixed', inset: 0, zIndex: 9998 }}
-                        onClick={() => setContextMenu(null)}
-                        onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
-                    />
-                    <div
-                        className="context-menu"
-                        style={{
-                            left: Math.min(contextMenu.x, window.innerWidth - 240),
-                            top: Math.min(contextMenu.y, window.innerHeight - 100),
-                        }}
-                    >
-                        <div
-                            className="context-menu-item"
-                            onClick={handleDelete}
-                        >
-                            <Trash2 size={14} className="context-menu-icon" />
-                            <span>Remove Tag</span>
-                        </div>
-                    </div>
-                </>
-            )}
-        </>
+        </div>
     );
 }
 
