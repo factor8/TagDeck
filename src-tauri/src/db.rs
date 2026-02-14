@@ -690,6 +690,9 @@ impl Database {
     }
     
     pub fn sync_tags(&self) -> Result<()> {
+         // First, reset all usage counts to 0
+         self.conn.execute("UPDATE tags SET usage_count = 0", [])?;
+         
          let tracks = self.get_all_tracks()?;
          let mut tag_counts = std::collections::HashMap::new();
          

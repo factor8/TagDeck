@@ -86,10 +86,12 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
 
     const handleDeleteTag = async (tagId: number) => {
         try {
+            console.log('🗑️ handleDeleteTag called with tagId:', tagId);
             await invoke('delete_tag', { tagId });
+            console.log('✅ Tag deleted successfully, reloading data');
             loadData();
         } catch (err) {
-            console.error('Failed to delete tag:', err);
+            console.error('❌ Failed to delete tag:', err);
             setError('Failed to delete tag');
         }
     };
@@ -128,8 +130,12 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
             // Check if dropped on delete zone
             if (String(over.id) === 'delete-zone') {
                 const tag = tags.find(t => t.id === tagId);
+                console.log('🗑️ Dropped on delete zone:', { tagId, tag, usage_count: tag?.usage_count });
                 if (tag && tag.usage_count === 0) {
+                    console.log('✅ Deleting tag with zero usage:', tag.name);
                     await handleDeleteTag(tagId);
+                } else {
+                    console.log('❌ Cannot delete tag - usage_count is not zero:', tag?.usage_count);
                 }
                 return;
             }
@@ -540,6 +546,8 @@ function DraggableTag({ tag, isActive, onClick }: { tag: Tag, isActive: boolean,
         }
     };
 
+    const hasZeroUsage = tag.usage_count === 0;
+    
     return (
         <div 
             ref={setNodeRef}
@@ -553,8 +561,12 @@ function DraggableTag({ tag, isActive, onClick }: { tag: Tag, isActive: boolean,
                     ...styles.pill,
                     background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
                     color: isActive ? '#fff' : 'var(--text-secondary)',
-                    border: isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)',
+                    border: hasZeroUsage 
+                        ? '1px solid rgba(239, 68, 68, 0.6)' 
+                        : (isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)'),
+                    boxShadow: hasZeroUsage ? '0 0 0 1px rgba(239, 68, 68, 0.3)' : 'none',
                 }}
+                title={hasZeroUsage ? 'No songs use this tag - drag to delete zone' : undefined}
             >
                 {tag.name}
             </div>
