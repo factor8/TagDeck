@@ -448,10 +448,10 @@ function App() {
   const handleDeckTagClick = (tag: string) => {
       if (selectedTrackIds.size === 0) {
           setSearchTerm(prev => {
-              if (!prev) return tag;
-              // Check if tag is already in search term to avoid duplicates if desired? 
-              // User said "adds to the text bar", implies appending.
-              return `${prev} ${tag}`;
+              const tagQuery = `tag:${tag}`;
+              if (!prev) return tagQuery;
+              // Append with space separator
+              return `${prev} ${tagQuery}`;
           });
           return;
       }
