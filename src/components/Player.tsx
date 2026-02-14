@@ -86,6 +86,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const userPausedRef = useRef(false);
     const prevPlayerModeRef = useRef(playerMode);
     const [reloadCounter, setReloadCounter] = useState(0);
+    const savedPlaybackStateRef = useRef<{ position: number; wasPlaying: boolean } | null>(null);
 
     // Fetch Artwork
     useEffect(() => {
@@ -190,11 +191,22 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
         ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
         ws.on('ready', () => { 
-            if (autoPlayRef.current) { 
+            // Restore saved playback state if available
+            if (savedPlaybackStateRef.current) {
+                const { position, wasPlaying } = savedPlaybackStateRef.current;
+                console.log(`[Player] Restoring playback state: position=${position.toFixed(2)}s, wasPlaying=${wasPlaying}`);
+                ws.seekTo(position / ws.getDuration());
+                if (wasPlaying) {
+                    ws.play().catch(() => {});
+                }
+                savedPlaybackStateRef.current = null;
+            } else if (autoPlayRef.current) { 
                 ws.play().catch(() => {}); 
-                // Notify parent that autoplay has been processed
+            }
+            // Notify parent that autoplay has been processed
+            if (autoPlayRef.current) {
                 onAutoPlayProcessedRef.current?.();
-            } 
+            }
         });
         // Don't set error toast from WaveSurfer's error event — loadAudio handles errors
         ws.on('error', (err: any) => { console.warn('WaveSurfer error event (handled by loadAudio):', err); });
@@ -235,7 +247,21 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
         // event is unreliable when the waveform decode fails.
         const startPlayback = () => {
             setFallbackDuration(audioEl.duration || 0);
-            if (autoPlayRef.current && !userPausedRef.current) {
+            
+            // Restore saved playback state if available
+            if (savedPlaybackStateRef.current) {
+                const { position, wasPlaying } = savedPlaybackStateRef.current;
+                console.log(`[Player] Restoring playback state (fallback): position=${position.toFixed(2)}s, wasPlaying=${wasPlaying}`);
+                audioEl.currentTime = position;
+                if (wasPlaying && !userPausedRef.current) {
+                    userPausedRef.current = false;
+                    ws.play().catch(e => console.warn('Play after restore (fallback) failed:', e));
+                }
+                savedPlaybackStateRef.current = null;
+                if (autoPlayRef.current) {
+                    onAutoPlayProcessedRef.current?.();
+                }
+            } else if (autoPlayRef.current && !userPausedRef.current) {
                 // Use ws.play() so WaveSurfer tracks play state (enables playPause)
                 userPausedRef.current = false;
                 ws.play().catch(e => console.warn('Auto-play (fallback) failed:', e));
@@ -264,6 +290,15 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             // If a track is loaded, force a reload by clearing prevTrackIdRef
             // and bumping reloadCounter to trigger the load effect
             if (track && prevTrackIdRef.current !== null) {
+                // Save current playback state before destroying
+                const ws = wavesurferRef.current;
+                if (ws) {
+                    const currentTime = ws.getCurrentTime();
+                    const wasPlaying = ws.isPlaying();
+                    savedPlaybackStateRef.current = { position: currentTime, wasPlaying };
+                    console.log(`[Player] Saved playback state: position=${currentTime.toFixed(2)}s, wasPlaying=${wasPlaying}`);
+                }
+
                 // Stop current playback and clean up
                 if (mediaElementRef.current) {
                     mediaElementRef.current.pause();
