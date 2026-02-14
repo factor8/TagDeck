@@ -821,12 +821,18 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         case 'album': fieldValue = track.album; break;
                         case 'tag': 
                             // Tags are stored in comment_raw after " && " separator
+                            // Support comma-separated tag search with OR logic: tag:Ambient,Chill
                             if (track.comment_raw) {
                                 const tagSeparatorIdx = track.comment_raw.indexOf(' && ');
                                 if (tagSeparatorIdx !== -1) {
                                     const tagsPart = track.comment_raw.substring(tagSeparatorIdx + 4);
-                                    const tags = tagsPart.split(';').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
-                                    match = tags.includes(targetValue);
+                                    const trackTags = tagsPart.split(';').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
+                                    
+                                    // Split search value by comma for OR logic
+                                    const searchTags = targetValue.split(',').map(t => t.trim()).filter(t => t.length > 0);
+                                    
+                                    // Match if ANY of the search tags exist in track tags
+                                    match = searchTags.some(searchTag => trackTags.includes(searchTag));
                                 } else {
                                     match = false;
                                 }

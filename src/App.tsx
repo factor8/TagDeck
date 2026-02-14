@@ -448,10 +448,19 @@ function App() {
   const handleDeckTagClick = (tag: string) => {
       if (selectedTrackIds.size === 0) {
           setSearchTerm(prev => {
-              const tagQuery = `tag:${tag}`;
-              if (!prev) return tagQuery;
-              // Append with space separator
-              return `${prev} ${tagQuery}`;
+              if (!prev) return `tag:${tag}`;
+              
+              // Check if there's already a tag: filter
+              const tagMatch = prev.match(/tag:([^\s]+)/);
+              if (tagMatch) {
+                  // Append to existing tag: filter with comma
+                  const existingTags = tagMatch[1];
+                  const newTagFilter = `tag:${existingTags},${tag}`;
+                  return prev.replace(/tag:[^\s]+/, newTagFilter);
+              } else {
+                  // Add new tag: filter
+                  return `${prev} tag:${tag}`;
+              }
           });
           return;
       }
