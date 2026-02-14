@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight, Trash2, Activity } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity } from 'lucide-react';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
 
@@ -1108,11 +1108,32 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             id: 'position',
             header: '#',
             cell: info => {
+                const isCurrentTrack = playingTrackId === info.row.original.id;
                 if (playlistOrderMap) {
                     const val = info.getValue() as number;
-                    return val < Number.MAX_SAFE_INTEGER ? val + 1 : '';
+                    const position = val < Number.MAX_SAFE_INTEGER ? val + 1 : '';
+                    return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ minWidth: '20px', textAlign: 'right' }}>{position}</span>
+                            {isCurrentTrack && (
+                                isPlaying 
+                                ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                                : <Volume size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+                            )}
+                        </div>
+                    );
                 }
-                return info.row.index + 1;
+                const position = info.row.index + 1;
+                return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ minWidth: '20px', textAlign: 'right' }}>{position}</span>
+                        {isCurrentTrack && (
+                            isPlaying 
+                            ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                            : <Volume size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+                        )}
+                    </div>
+                );
             },
             size: 40,
         }),
@@ -1120,12 +1141,10 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             id: 'artist',
             header: 'Artist',
             cell: info => {
-                const isCurrentTrack = playingTrackId === info.row.original.id;
                 const trackId = info.row.original.id;
-                const val = info.getValue() || '';
                 return (
                     <EditableCell
-                        value={val}
+                        value={info.getValue() || ''}
                         trackId={trackId}
                         field="artist"
                         isSelected={selectedTrackIds.has(trackId)}
@@ -1133,16 +1152,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         onStartEdit={handleStartEdit}
                         onCommitEdit={handleCommitEdit}
                         onCancelEdit={handleCancelEdit}
-                    >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            {isCurrentTrack && (
-                                 isPlaying 
-                                 ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
-                                 : <Volume1 size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-                            )}
-                            <span>{val}</span>
-                        </div>
-                    </EditableCell>
+                    />
                 );
             },
             size: 150,
