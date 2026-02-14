@@ -684,6 +684,11 @@ impl Database {
         Ok(())
     }
     
+    pub fn delete_tag(&self, tag_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
+        Ok(())
+    }
+    
     pub fn sync_tags(&self) -> Result<()> {
          let tracks = self.get_all_tracks()?;
          let mut tag_counts = std::collections::HashMap::new();

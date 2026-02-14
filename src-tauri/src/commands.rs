@@ -1092,6 +1092,12 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::model
 }
 
 #[tauri::command]
+pub async fn delete_tag(tag_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .delete_tag(tag_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn update_track_info(
     app: tauri::AppHandle,
     track_id: i64,
