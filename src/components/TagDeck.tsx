@@ -85,8 +85,11 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     };
 
     const handleDeleteTag = async (tagId: number) => {
+        console.log('handleDeleteTag called with tagId:', tagId);
         try {
+            console.log('Invoking delete_tag command...');
             await invoke('delete_tag', { tagId });
+            console.log('Delete successful, reloading data...');
             loadData();
         } catch (err) {
             console.error('Failed to delete tag:', err);
@@ -126,10 +129,15 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
             const tagId = Number(active.id);
             
             // Check if dropped on delete zone
+            console.log('Dropped on:', over.id);
             if (String(over.id) === 'delete-zone') {
                 const tag = tags.find(t => t.id === tagId);
+                console.log('Tag to delete:', tag);
                 if (tag && tag.usage_count === 0) {
+                    console.log('Deleting tag:', tag.name);
                     await handleDeleteTag(tagId);
+                } else {
+                    console.log('Tag cannot be deleted - usage count:', tag?.usage_count);
                 }
                 return;
             }
