@@ -18,6 +18,7 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     const [groups, setGroups] = useState<TagGroup[]>([]);
     const [filter, setFilter] = useState('');
     const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
+    const [uncategorizedCollapsed, setUncategorizedCollapsed] = useState(false);
     const [newGroupName, setNewGroupName] = useState('');
     const [activeDragId, setActiveDragId] = useState<string | number | null>(null);
     const [activeDragType, setActiveDragType] = useState<'tag' | 'group' | null>(null);
@@ -287,7 +288,13 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
             <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
                 <div style={styles.grid}>
                     {/* Uncategorized Section */}
-                    <DroppableSection id="uncategorized" title="Uncategorized" isUncategorized>
+                    <DroppableSection 
+                        id="uncategorized" 
+                        title="Uncategorized" 
+                        isUncategorized
+                        collapsed={uncategorizedCollapsed}
+                        onToggle={() => setUncategorizedCollapsed(!uncategorizedCollapsed)}
+                    >
                         {organizedTags.uncategorized.map(tag => (
                             <DraggableTag 
                                 key={tag.id} 
@@ -393,11 +400,9 @@ function PlainDroppableSection({ id, title, children, isUncategorized, collapsed
              }}
          >
             <div style={styles.sectionHeader}>
-                 <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} >
-                     <div onClick={onToggle} style={{display:'flex', alignItems:'center'}}>
-                         {!isUncategorized && (
-                             collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/>
-                         )}
+                 <div style={{display:'flex', alignItems:'center', cursor: 'pointer', flex: 1}} onClick={onToggle}>
+                     <div style={{display:'flex', alignItems:'center'}}>
+                         {collapsed ? <ChevronRight size={14} style={{marginRight: 5}}/> : <ChevronDown size={14} style={{marginRight: 5}}/> }
                      </div>
                      <span style={{fontWeight: 600, fontSize: '13px', color: 'var(--text-secondary)'}}>{title}</span>
                  </div>
@@ -583,7 +588,7 @@ const styles: Record<string, React.CSSProperties> = {
         background: 'var(--bg-secondary)',
     },
     header: {
-        padding: '15px',
+        padding: '12px 15px',
         borderBottom: '1px solid var(--border-color)',
     },
     title: {
@@ -608,7 +613,7 @@ const styles: Record<string, React.CSSProperties> = {
         background: 'var(--bg-primary)',
         border: '1px solid var(--border-color)',
         borderRadius: '4px',
-        padding: '8px',
+        padding: '6px 8px',
         color: '#fff',
         fontSize: '13px',
     },
