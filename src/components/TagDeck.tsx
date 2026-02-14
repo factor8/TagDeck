@@ -88,7 +88,7 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
         console.log('handleDeleteTag called with tagId:', tagId);
         try {
             console.log('Invoking delete_tag command...');
-            await invoke('delete_tag', { tagId });
+            await invoke('delete_tag', { tag_id: tagId });
             console.log('Delete successful, reloading data...');
             loadData();
         } catch (err) {
