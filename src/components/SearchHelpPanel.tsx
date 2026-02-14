@@ -108,7 +108,10 @@ export function SearchHelpPanel({ isOpen, onClose }: SearchHelpPanelProps) {
                         <CodeBadge>label:</CodeBadge>
                         <CodeBadge>tag:</CodeBadge>
                     </div>
-                    <CodeExample code='artist:Prince title:"Rain"' desc="Specific artist and title" />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <CodeExample code='artist:Prince title:"Rain"' desc="Specific artist and title" />
+                        <CodeExample code='tag:Ambient tag:Downtempo' desc="Multiple tags (AND logic)" />
+                    </div>
                 </Section>
 
                 <Section title="Numeric Ranges (BPM)">

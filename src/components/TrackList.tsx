@@ -819,7 +819,21 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         case 'artist': fieldValue = track.artist; break;
                         case 'title': fieldValue = track.title; break;
                         case 'album': fieldValue = track.album; break;
-                        case 'tag': fieldValue = track.comment_raw; break;
+                        case 'tag': 
+                            // Tags are stored in comment_raw after " && " separator
+                            if (track.comment_raw) {
+                                const tagSeparatorIdx = track.comment_raw.indexOf(' && ');
+                                if (tagSeparatorIdx !== -1) {
+                                    const tagsPart = track.comment_raw.substring(tagSeparatorIdx + 4);
+                                    const tags = tagsPart.split(';').map(t => t.trim().toLowerCase()).filter(t => t.length > 0);
+                                    match = tags.includes(targetValue);
+                                } else {
+                                    match = false;
+                                }
+                            } else {
+                                match = false;
+                            }
+                            break;
                         case 'label': fieldValue = track.grouping_raw; break;
                         case 'key': 
                             // Try parsing key from comment or look for future key field
@@ -831,11 +845,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         default: fieldValue = undefined;
                     }
 
-                    if (fieldValue) {
-                        const val = fieldValue.toLowerCase();
-                        match = val.includes(targetValue);
-                    } else {
-                        match = false;
+                    if (filter.field !== 'tag') {
+                        if (fieldValue) {
+                            const val = fieldValue.toLowerCase();
+                            match = val.includes(targetValue);
+                        } else {
+                            match = false;
+                        }
                     }
                 }
 
