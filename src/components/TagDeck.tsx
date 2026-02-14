@@ -561,7 +561,10 @@ function DraggableTag({ tag, isActive, onClick }: { tag: Tag, isActive: boolean,
                     ...styles.pill,
                     background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
                     color: isActive ? '#fff' : 'var(--text-secondary)',
-                    border: isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)',
+                    border: tag.usage_count === 0 
+                        ? '1px solid rgba(239, 68, 68, 0.6)' 
+                        : (isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)'),
+                    opacity: tag.usage_count === 0 ? 0.7 : 1,
                 }}
             >
                 {tag.name}
