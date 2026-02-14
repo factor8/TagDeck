@@ -511,7 +511,7 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
 
     const handleClick = (e: React.MouseEvent) => {
         // Only trigger onClick for left-clicks, not right-clicks
-        if (e.button === 0) {
+        if (e.button === 0 && e.type === 'click') {
             onClick();
         }
     };
@@ -523,22 +523,17 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
         }
     };
 
-    // Custom drag handler that doesn't interfere with context menu
-    const customListeners = {
-        ...listeners,
-        onContextMenu: handleContextMenu, // Override to allow context menu
-    };
-
     return (
         <>
             <div 
                 ref={setNodeRef}
-                {...customListeners}
+                {...listeners}
                 {...attributes}
                 style={{...styles.pillWrapper, ...style}}
+                onContextMenu={handleContextMenu}
             >
                  <div 
-                    onMouseDown={handleClick}
+                    onClick={handleClick}
                     style={{
                         ...styles.pill,
                         background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
