@@ -110,8 +110,8 @@ export function SearchHelpPanel({ isOpen, onClose }: SearchHelpPanelProps) {
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                         <CodeExample code='artist:Prince title:"Rain"' desc="Specific artist and title" />
-                        <CodeExample code='tag:Ambient,Downtempo' desc="Tags with OR (any match)" />
-                        <CodeExample code='tag:Ambient tag:Chill' desc="Multiple filters (AND logic)" />
+                        <CodeExample code='tag:Ambient tag:Chill' desc="Multiple tags (AND logic)" />
+                        <CodeExample code='tag:Ambient,Downtempo' desc="Comma-separated (OR logic)" />
                     </div>
                 </Section>
 
