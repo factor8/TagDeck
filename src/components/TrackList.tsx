@@ -210,7 +210,7 @@ const EditableCell = ({
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
             style={{ 
-                cursor: isSelected ? 'text' : 'pointer',
+                cursor: 'default',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
@@ -383,7 +383,7 @@ const TrackRowContent = ({
                 : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
         fontWeight: isPlaying ? '600' : 'normal',
         opacity: isDragging ? 0.5 : (isMissing ? 0.5 : 1),
-        cursor: isMissing ? 'default' : 'pointer',
+        cursor: 'default',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         position: 'relative',
@@ -511,7 +511,7 @@ const DraggableTableHeader = ({ header }: { header: Header<Track, unknown>, tabl
                     <div 
                         onClick={header.column.getToggleSortingHandler()}
                         style={{ 
-                            cursor: header.column.getCanSort() ? 'pointer' : 'default',
+                            cursor: 'default',
                             display: 'flex',
                             alignItems: 'center',
                             gap: '4px',
@@ -566,7 +566,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
         display: 'flex',
         alignItems: 'center',
         gap: '8px',
-        cursor: isDragging ? 'grabbing' : 'pointer',
+        cursor: isDragging ? 'grabbing' : 'default',
         userSelect: 'none' as const,
         zIndex: isDragging ? 10 : 1,
         position: 'relative' as const,

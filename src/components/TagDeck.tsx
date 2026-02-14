@@ -85,11 +85,8 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     };
 
     const handleDeleteTag = async (tagId: number) => {
-        console.log('handleDeleteTag called with tagId:', tagId);
         try {
-            console.log('Invoking delete_tag command...');
-            await invoke('delete_tag', { tag_id: tagId });
-            console.log('Delete successful, reloading data...');
+            await invoke('delete_tag', { tagId });
             loadData();
         } catch (err) {
             console.error('Failed to delete tag:', err);
@@ -129,15 +126,10 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
             const tagId = Number(active.id);
             
             // Check if dropped on delete zone
-            console.log('Dropped on:', over.id);
             if (String(over.id) === 'delete-zone') {
                 const tag = tags.find(t => t.id === tagId);
-                console.log('Tag to delete:', tag);
                 if (tag && tag.usage_count === 0) {
-                    console.log('Deleting tag:', tag.name);
                     await handleDeleteTag(tagId);
-                } else {
-                    console.log('Tag cannot be deleted - usage count:', tag?.usage_count);
                 }
                 return;
             }
@@ -561,10 +553,7 @@ function DraggableTag({ tag, isActive, onClick }: { tag: Tag, isActive: boolean,
                     ...styles.pill,
                     background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
                     color: isActive ? '#fff' : 'var(--text-secondary)',
-                    border: tag.usage_count === 0 
-                        ? '1px solid rgba(239, 68, 68, 0.6)' 
-                        : (isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)'),
-                    opacity: tag.usage_count === 0 ? 0.7 : 1,
+                    border: isActive ? '1px solid var(--accent-color)' : '1px solid rgba(255,255,255,0.1)',
                 }}
             >
                 {tag.name}

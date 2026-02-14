@@ -1093,15 +1093,8 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::model
 
 #[tauri::command]
 pub async fn delete_tag(tag_id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    println!("Deleting tag with ID: {}", tag_id);
-    let result = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
-        .delete_tag(tag_id).map_err(|e| e.to_string());
-    if result.is_ok() {
-        println!("Tag {} deleted successfully", tag_id);
-    } else {
-        println!("Failed to delete tag {}: {:?}", tag_id, result);
-    }
-    result
+    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .delete_tag(tag_id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

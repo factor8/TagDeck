@@ -29,7 +29,7 @@ export const StarRating: React.FC<StarRatingProps> = ({ value, onChange, readonl
 
     return (
         <div 
-            style={{ display: 'inline-flex', cursor: readonly ? 'default' : 'pointer' }}
+            style={{ display: 'inline-flex', cursor: 'default' }}
             onMouseLeave={() => setHoverValue(null)}
         >
             {[...Array(stars)].map((_, index) => {
