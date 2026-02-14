@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight, Trash2 } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume1, ListMusic, ChevronRight, Trash2, Activity } from 'lucide-react';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
 
@@ -1844,6 +1844,37 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         >
                             <Folder size={14} className="context-menu-icon" />
                             <span>Show in Finder</span>
+                        </div>
+                        <div className="context-menu-separator" />
+                        <div
+                            className="context-menu-item"
+                            onClick={async () => {
+                                const tracksToAnalyze = selectedTrackIds.has(contextMenu.track.id)
+                                    ? tracks.filter(t => selectedTrackIds.has(t.id))
+                                    : [contextMenu.track];
+                                
+                                const trackIds = tracksToAnalyze.map(t => t.id);
+                                const filePaths = tracksToAnalyze.map(t => t.file_path);
+                                const count = filePaths.length;
+                                
+                                setContextMenu(null);
+                                
+                                try {
+                                    await invoke('analyze_with_mixed_in_key', { trackIds, filePaths });
+                                    console.log(`Mixed In Key analysis complete for ${count} track${count > 1 ? 's' : ''}. Refreshing...`);
+                                    onRefresh?.();
+                                } catch (err) {
+                                    console.error('Failed to launch Mixed In Key:', err);
+                                    alert(`Error: ${err}`);
+                                }
+                            }}
+                        >
+                            <Activity size={14} className="context-menu-icon" />
+                            <span>
+                                {selectedTrackIds.has(contextMenu.track.id) && selectedTrackIds.size > 1
+                                    ? `Analyze with Mixed In Key (${selectedTrackIds.size} tracks)`
+                                    : 'Analyze with Mixed In Key'}
+                            </span>
                         </div>
                         <div className="context-menu-separator" />
                         {/* Playlists submenu */}

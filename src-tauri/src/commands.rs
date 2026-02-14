@@ -140,6 +140,185 @@ pub fn show_in_finder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn analyze_with_mixed_in_key(app: tauri::AppHandle, track_ids: Vec<i64>, file_paths: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let file_count = file_paths.len();
+    
+    #[cfg(target_os = "macos")]
+    {
+        let mik_path = "/Applications/Mixed In Key 8.app";
+        if !std::path::Path::new(mik_path).exists() {
+            return Err("Mixed In Key 8 not found. Please install from https://mixedinkey.com/".to_string());
+        }
+
+        // Validate files exist and capture their current modification times
+        let mut file_mod_times: Vec<(String, std::time::SystemTime)> = Vec::new();
+        for path in &file_paths {
+            let path_obj = std::path::Path::new(path);
+            if !path_obj.exists() {
+                return Err(format!("File not found: {}", path));
+            }
+            
+            // Get current modification time
+            let metadata = std::fs::metadata(path_obj)
+                .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+            let mod_time = metadata.modified()
+                .map_err(|e| format!("Failed to get modification time: {}", e))?;
+            
+            file_mod_times.push((path.clone(), mod_time));
+        }
+
+        // Build AppleScript to automate Mixed In Key 8
+        let paths_arg = file_paths.iter()
+            .map(|p| format!("POSIX file \"{}\"", p.replace("\"", "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let script = format!(r#"
+tell application "Mixed In Key 8"
+    activate
+    delay 1
+    
+    -- Add files to queue
+    set fileList to {{{}}}
+    repeat with aFile in fileList
+        try
+            open aFile
+        end try
+    end repeat
+    
+    -- Give MiK8 time to start processing
+    delay 3
+end tell
+"#, paths_arg);
+
+        let launch_msg = format!("Launching Mixed In Key 8 with {} file(s)", file_count);
+        app.state::<crate::logging::LogState>().add_log("INFO", &launch_msg, &app);
+        
+        // Launch MiK8 in the background
+        std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .spawn()
+            .map_err(|e| format!("Failed to launch Mixed In Key with AppleScript: {}", e))?;
+        
+        // Wait for all files to be modified (indicating MiK8 has processed them)
+        let max_wait_seconds = 10 + (file_count * 15); // 10s base + 15s per file
+        let poll_interval = std::time::Duration::from_secs(2);
+        let start_time = std::time::Instant::now();
+        
+        let mut files_processed = 0;
+        
+        loop {
+            // Check if we've exceeded the timeout
+            if start_time.elapsed().as_secs() > max_wait_seconds as u64 {
+                let timeout_msg = format!("Mixed In Key timeout: {} of {} files processed", files_processed, file_count);
+                app.state::<crate::logging::LogState>().add_log("ERROR", &timeout_msg, &app);
+                break;
+            }
+            
+            // Check each file's modification time
+            let mut all_processed = true;
+            files_processed = 0;
+            
+            for (path, original_time) in &file_mod_times {
+                if let Ok(metadata) = std::fs::metadata(path) {
+                    if let Ok(current_time) = metadata.modified() {
+                        if current_time > *original_time {
+                            files_processed += 1;
+                        } else {
+                            all_processed = false;
+                        }
+                    }
+                }
+            }
+            
+            if all_processed {
+                break;
+            }
+            
+            std::thread::sleep(poll_interval);
+        }
+        
+        // Give MiK8 a moment to finish writing
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        
+        // Try to quit MiK8
+        let quit_script = r#"
+tell application "Mixed In Key 8"
+    quit
+end tell
+"#;
+        let _ = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(quit_script)
+            .output();
+        
+        // After MiK8 finishes, refresh the metadata for all processed tracks
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        
+        let mut success_count = 0;
+        for track_id in &track_ids {
+            if let Err(e) = refresh_track_metadata_from_file(&db, *track_id) {
+                let error_msg = format!("Failed to refresh track {}: {}", track_id, e);
+                app.state::<crate::logging::LogState>().add_log("ERROR", &error_msg, &app);
+            } else {
+                success_count += 1;
+            }
+        }
+        
+        let completion_msg = format!("Mixed In Key analysis complete: {} of {} tracks updated", success_count, file_count);
+        app.state::<crate::logging::LogState>().add_log("INFO", &completion_msg, &app);
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Err("Mixed In Key integration is only supported on macOS".to_string());
+    }
+    
+    Ok(())
+}
+
+/// Helper function to refresh a track's metadata from its file
+fn refresh_track_metadata_from_file(db: &Database, track_id: i64) -> Result<(), String> {
+    use crate::metadata::read_metadata;
+    use lofty::read_from_path;
+    use lofty::prelude::*;
+    use lofty::tag::ItemKey;
+    
+    // Get the track from database to get its file path
+    let track = db.get_track(track_id)
+        .map_err(|e| format!("Failed to get track: {}", e))?
+        .ok_or_else(|| format!("Track {} not found", track_id))?;
+    
+    // Read metadata from the file
+    let (comment, grouping) = read_metadata(&track.file_path)
+        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    
+    // Read BPM from file using lofty
+    let tagged_file = read_from_path(&track.file_path)
+        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+    
+    let tag = tagged_file.primary_tag().or_else(|| tagged_file.first_tag());
+    
+    // Read BPM from the standard BPM tag field
+    let bpm = tag
+        .and_then(|t| t.get_string(&ItemKey::Bpm))
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(0);
+    
+    // Update the database with the new metadata
+    let mut updated_track = track;
+    updated_track.comment_raw = Some(comment);
+    updated_track.grouping_raw = Some(grouping);
+    updated_track.bpm = bpm;
+    
+    db.update_track(&updated_track)
+        .map_err(|e| format!("Failed to update track in database: {}", e))?;
+    
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn write_tags(
     id: i64,
     new_tags: String,

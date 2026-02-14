@@ -127,6 +127,7 @@ pub fn run() {
             commands::get_tracks,
             commands::get_global_tags,
             commands::show_in_finder,
+            commands::analyze_with_mixed_in_key,
             commands::write_tags,
             commands::batch_add_tag,
             commands::batch_remove_tag,
