@@ -516,17 +516,22 @@ function DraggableTag({ tag, isActive, onClick, onDelete }: { tag: Tag, isActive
         }
     };
 
+    // Custom drag handler that doesn't interfere with context menu
+    const customListeners = {
+        ...listeners,
+        onContextMenu: handleContextMenu, // Override to allow context menu
+    };
+
     return (
         <>
             <div 
                 ref={setNodeRef}
-                {...listeners}
+                {...customListeners}
                 {...attributes}
                 style={{...styles.pillWrapper, ...style}}
             >
                  <div 
                     onClick={onClick}
-                    onContextMenu={handleContextMenu}
                     style={{
                         ...styles.pill,
                         background: isActive ? 'var(--accent-color)' : 'rgba(255,255,255,0.05)',
