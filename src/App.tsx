@@ -571,14 +571,14 @@ function App() {
                         width: '100%',
                         padding: '8px 30px 8px 36px',
                         borderRadius: '6px',
-                        border: '1px solid var(--border-color)',
+                        border: searchTerm ? '2px solid var(--accent-color)' : '1px solid var(--border-color)',
                         background: 'var(--bg-tertiary)',
                         color: 'var(--text-primary)',
                         fontSize: '13px',
                         outline: 'none'
                     }}
-                    onFocus={(e) => e.target.style.borderColor = 'var(--accent-color)'}
-                    onBlur={(e) => e.target.style.borderColor = 'var(--border-color)'}
+                    onFocus={(e) => e.target.style.border = '2px solid var(--accent-color)'}
+                    onBlur={(e) => e.target.style.border = searchTerm ? '2px solid var(--accent-color)' : '1px solid var(--border-color)'}
                 />
                 {searchTerm && (
                     <button
