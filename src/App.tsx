@@ -307,6 +307,23 @@ function App() {
     }
   }, [selectedPlaylistId]);
 
+  // Restore search term when switching playlists
+  useEffect(() => {
+    const key = selectedPlaylistId === null ? 'search_all' : `search_${selectedPlaylistId}`;
+    const savedSearch = sessionStorage.getItem(key);
+    if (savedSearch !== null) {
+      setSearchTerm(savedSearch);
+    } else {
+      setSearchTerm('');
+    }
+  }, [selectedPlaylistId]);
+
+  // Save search term for current playlist
+  useEffect(() => {
+    const key = selectedPlaylistId === null ? 'search_all' : `search_${selectedPlaylistId}`;
+    sessionStorage.setItem(key, searchTerm);
+  }, [searchTerm, selectedPlaylistId]);
+
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
         // Cmd+F or Ctrl+F -> Focus Search

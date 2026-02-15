@@ -933,6 +933,16 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 e.preventDefault();
                 handleRemoveFromPlaylist();
             }
+
+            // Cmd+R or Cmd+Shift+R -> Reveal in Finder
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R') && lastSelectedTrackId) {
+                const trackToReveal = filteredTracks.find(t => t.id === lastSelectedTrackId);
+                if (trackToReveal && trackToReveal.file_path) {
+                    e.preventDefault();
+                    invoke('show_in_finder', { path: trackToReveal.file_path })
+                        .catch(err => console.error('Failed to reveal in Finder:', err));
+                }
+            }
         };
 
         window.addEventListener('keydown', handleKeyDown);
