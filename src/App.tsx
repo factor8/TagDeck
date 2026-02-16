@@ -16,6 +16,7 @@ import { TagEditor } from './components/TagEditor';
 import { TagDeck } from './components/TagDeck';
 import { BpmCounter } from './components/BpmCounter';
 import { CopyPlaylistsModal } from './components/CopyPlaylistsModal';
+import { ImportDropZone } from './components/ImportDropZone';
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 import { useDebug } from './components/DebugContext';
@@ -872,6 +873,12 @@ function App() {
           onRefresh={handleRefresh}
         />
       )}
+
+      {/* File import drop zone (full-window overlay) */}
+      <ImportDropZone
+        onImportComplete={handleRefresh}
+        targetPlaylistId={selectedPlaylistId}
+      />
     </>
   );
 }

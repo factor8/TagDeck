@@ -53,6 +53,11 @@ const DB_SCHEMA: &str = r#"
         usage_count INTEGER DEFAULT 0,
         group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL
     );
+
+    CREATE TABLE IF NOT EXISTS library_config (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
 "#;
 
 pub struct Database {
@@ -83,6 +88,11 @@ impl Database {
         
         // Add columns to existing tags table
         let _ = conn.execute("ALTER TABLE tags ADD COLUMN group_id INTEGER REFERENCES tag_groups(id) ON DELETE SET NULL", []);
+
+        // File management columns
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN original_path TEXT", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN import_date INTEGER", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN file_hash TEXT", []);
         
         Ok(Self { conn })
     }
@@ -719,5 +729,89 @@ impl Database {
          }
          
          Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Library configuration helpers
+    // -----------------------------------------------------------------------
+
+    /// Read a single config value by key.
+    pub fn get_config(&self, key: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM library_config WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    /// Write (insert or update) a config key/value pair.
+    pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO library_config (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // File-management import helpers
+    // -----------------------------------------------------------------------
+
+    /// Insert a track that was imported via drag-and-drop (no persistent_id from
+    /// iTunes). Returns the new database row id.
+    pub fn insert_imported_track(&self, track: &crate::models::Track, original_path: Option<&str>) -> Result<i64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        self.conn.execute(
+            "INSERT INTO tracks (
+                persistent_id, file_path, artist, title, album,
+                comment_raw, grouping_raw, duration_secs, format,
+                size_bytes, bit_rate, modified_date, rating, date_added, bpm,
+                original_path, import_date
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                track.persistent_id,
+                track.file_path,
+                track.artist,
+                track.title,
+                track.album,
+                track.comment_raw,
+                track.grouping_raw,
+                track.duration_secs,
+                track.format,
+                track.size_bytes,
+                track.bit_rate,
+                track.modified_date,
+                track.rating,
+                now,
+                track.bpm,
+                original_path,
+                now,
+            ],
+        )?;
+
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Check whether a file is already in the library (by its current *or*
+    /// original path).
+    pub fn find_track_by_path(&self, file_path: &str) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM tracks WHERE file_path = ?1 OR original_path = ?1 LIMIT 1",
+                params![file_path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(id)
     }
 }

@@ -2,6 +2,10 @@ use crate::db::Database;
 use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork, write_track_info};
+use crate::file_manager::{
+    LibraryConfig, ImportResult, ImportSummary,
+    import_file, is_supported_audio_file, collect_audio_files,
+};
 use crate::apple_music::{
     update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot,
     remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count, update_track_info as apple_update_track_info,
@@ -1513,4 +1517,215 @@ pub async fn copy_playlist_memberships(
     }
 
     Ok(format!("Added to {} playlist{}", added_count, if added_count != 1 { "s" } else { "" }))
+}
+
+// ---------------------------------------------------------------------------
+// File Management Commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_library_config(state: State<'_, AppState>) -> Result<LibraryConfig, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    LibraryConfig::load(&db).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_library_config(
+    config: LibraryConfig,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    config.save(&db).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn import_files(
+    app: tauri::AppHandle,
+    file_paths: Vec<String>,
+    target_playlist_id: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<ImportSummary, String> {
+    // Load config once
+    let config = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        LibraryConfig::load(&db).map_err(|e| e.to_string())?
+    };
+
+    // Recursively collect all audio files from the provided paths
+    let audio_files = collect_audio_files(&file_paths);
+
+    let total = audio_files.len();
+    let mut results = Vec::with_capacity(total);
+    let mut imported_track_ids: Vec<i64> = Vec::new();
+
+    for source in &audio_files {
+        let source_str = source.to_string_lossy().to_string();
+
+        // Check supported format
+        if !is_supported_audio_file(source) {
+            results.push(ImportResult {
+                success: false,
+                original_path: source_str,
+                new_path: None,
+                error: Some("Unsupported file format".to_string()),
+            });
+            continue;
+        }
+
+        // Check duplicate
+        {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            if let Ok(Some(_)) = db.find_track_by_path(&source_str) {
+                results.push(ImportResult {
+                    success: false,
+                    original_path: source_str,
+                    new_path: None,
+                    error: Some("Already in library".to_string()),
+                });
+                continue;
+            }
+        }
+
+        // Read metadata
+        let meta = match crate::metadata::read_full_metadata(source) {
+            Ok(m) => m,
+            Err(e) => {
+                results.push(ImportResult {
+                    success: false,
+                    original_path: source_str,
+                    new_path: None,
+                    error: Some(format!("Failed to read metadata: {}", e)),
+                });
+                continue;
+            }
+        };
+
+        // Import (copy / move / in-place)
+        let dest = match import_file(source, &config, &meta) {
+            Ok(p) => p,
+            Err(e) => {
+                results.push(ImportResult {
+                    success: false,
+                    original_path: source_str,
+                    new_path: None,
+                    error: Some(format!("Import failed: {}", e)),
+                });
+                continue;
+            }
+        };
+
+        let dest_str = dest.to_string_lossy().to_string();
+
+        // Determine file size from the destination
+        let size_bytes = std::fs::metadata(&dest)
+            .map(|m| m.len() as i64)
+            .unwrap_or(0);
+
+        // File extension as format string
+        let file_format = dest
+            .extension()
+            .and_then(|ext: &std::ffi::OsStr| ext.to_str())
+            .unwrap_or("unknown")
+            .to_uppercase();
+
+        // Generate a unique persistent_id for non-iTunes tracks
+        let persistent_id = format!("TD-{}", uuid_v4_simple());
+
+        // Build track model
+        let track = crate::models::Track {
+            id: 0,
+            persistent_id: persistent_id.clone(),
+            file_path: dest_str.clone(),
+            artist: meta.artist.clone(),
+            title: meta.title.clone(),
+            album: meta.album.clone(),
+            comment_raw: meta.comment.clone(),
+            grouping_raw: meta.grouping.clone(),
+            duration_secs: meta.duration_secs,
+            format: file_format,
+            size_bytes,
+            bit_rate: meta.bit_rate,
+            modified_date: 0,
+            rating: 0,
+            date_added: 0,
+            bpm: meta.bpm.unwrap_or(0),
+            missing: false,
+        };
+
+        // Insert into database
+        let track_id = {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            db.insert_imported_track(&track, Some(&source_str))
+                .map_err(|e| e.to_string())?
+        };
+
+        imported_track_ids.push(track_id);
+
+        results.push(ImportResult {
+            success: true,
+            original_path: source_str.clone(),
+            new_path: Some(dest_str),
+            error: None,
+        });
+
+        app.state::<crate::logging::LogState>().add_log(
+            "INFO",
+            &format!("Imported: {}", source_str),
+            &app,
+        );
+    }
+
+    // Add to playlist if requested
+    if let Some(playlist_id) = target_playlist_id {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        for tid in &imported_track_ids {
+            let _ = db.add_track_to_playlist_db(playlist_id, *tid);
+        }
+    }
+
+    // Sync tag index
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let _ = db.sync_tags();
+    }
+
+    let imported = results.iter().filter(|r| r.success).count();
+    let failed = results
+        .iter()
+        .filter(|r| {
+            !r.success
+                && r.error
+                    .as_ref()
+                    .map(|e: &String| !e.contains("Already in library"))
+                    .unwrap_or(false)
+        })
+        .count();
+    let skipped = results.len() - imported - failed;
+
+    let summary_msg = format!(
+        "Import complete: {} imported, {} skipped, {} failed (of {} total)",
+        imported, skipped, failed, total
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &summary_msg, &app);
+
+    Ok(ImportSummary {
+        total,
+        imported,
+        skipped,
+        failed,
+        results,
+    })
+}
+
+/// Simple pseudo-UUID v4 generator (no external crate needed).
+fn uuid_v4_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    // Mix nanos with a counter for uniqueness within the same nanosecond
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("{:016x}{:08x}", nanos as u64, count as u32)
 }

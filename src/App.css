@@ -776,3 +776,9 @@ input[type=range].volume-slider:focus {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Import Drop Zone animation */
+@keyframes importBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-16px); }
+}

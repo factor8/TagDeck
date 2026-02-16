@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform, HardDrive } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useDebug } from './DebugContext';
@@ -26,6 +26,12 @@ interface LogStats {
     total_size_bytes: number;
     file_count: number;
     current_file_size_bytes: number;
+}
+
+interface LibraryConfig {
+    root_path: string;
+    import_mode: 'Copy' | 'Move' | 'InPlace';
+    organize_files: boolean;
 }
 
 const THEMES = [
@@ -71,6 +77,7 @@ export function SettingsPanel({
     const [playerMode, setPlayerMode] = useState<'standard' | 'waveform'>(() => {
         return (localStorage.getItem('app_player_mode') as 'standard' | 'waveform') || 'standard';
     });
+    const [libraryConfig, setLibraryConfig] = useState<LibraryConfig | null>(null);
 
     const handleRealTimeSyncToggle = () => {
         const newValue = !realTimeSyncEnabled;
@@ -94,6 +101,7 @@ export function SettingsPanel({
         if (isOpen) {
              loadSyncInfo();
              invoke<LogStats | null>('get_log_stats').then(setLogStats).catch(console.error);
+             invoke<LibraryConfig>('get_library_config').then(setLibraryConfig).catch(console.error);
         }
     }, [isOpen]);
 
@@ -346,6 +354,111 @@ export function SettingsPanel({
                                     transition: 'left 0.2s', boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
                                 }} />
                             </button>
+                        </div>
+                    </div>
+
+                    {/* Library Management */}
+                    <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                        <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <HardDrive size={14} /> Library Management
+                        </h4>
+
+                        {/* Library root folder */}
+                        <div style={{ marginBottom: '14px' }}>
+                            <span style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>Library Location</span>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                <input
+                                    type="text"
+                                    readOnly
+                                    value={libraryConfig?.root_path ?? '~/Music/TagDeck'}
+                                    style={{
+                                        flex: 1, fontSize: '12px', padding: '6px 8px',
+                                        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                        borderRadius: '6px', color: 'var(--text-primary)',
+                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                    }}
+                                />
+                                <button
+                                    onClick={async () => {
+                                        const selected = await open({ directory: true, multiple: false, title: 'Choose Library Folder' });
+                                        if (selected && typeof selected === 'string' && libraryConfig) {
+                                            const updated = { ...libraryConfig, root_path: selected };
+                                            invoke('set_library_config', { config: updated }).then(() => setLibraryConfig(updated)).catch(console.error);
+                                        }
+                                    }}
+                                    style={{
+                                        fontSize: '12px', padding: '6px 10px',
+                                        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                        color: 'var(--text-primary)', borderRadius: '6px', cursor: 'pointer',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                >
+                                    Choose…
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Import mode */}
+                        <div style={{ marginBottom: '14px' }}>
+                            <span style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>When importing files</span>
+                            {(['Copy', 'Move', 'InPlace'] as const).map((mode) => {
+                                const labels: Record<string, string> = {
+                                    Copy: 'Copy to library (recommended)',
+                                    Move: 'Move to library',
+                                    InPlace: 'Keep files in place (advanced)',
+                                };
+                                return (
+                                    <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', marginBottom: '4px', cursor: 'pointer' }}>
+                                        <input
+                                            type="radio"
+                                            name="import-mode"
+                                            checked={libraryConfig?.import_mode === mode}
+                                            onChange={() => {
+                                                if (!libraryConfig) return;
+                                                const updated = { ...libraryConfig, import_mode: mode };
+                                                invoke('set_library_config', { config: updated }).then(() => setLibraryConfig(updated)).catch(console.error);
+                                            }}
+                                            style={{ accentColor: 'var(--accent-color)' }}
+                                        />
+                                        {labels[mode]}
+                                    </label>
+                                );
+                            })}
+                        </div>
+
+                        {/* Organize toggle */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <div>
+                                <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Organize by Artist / Album</span>
+                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                                    iTunes-style folder structure
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    if (!libraryConfig) return;
+                                    const updated = { ...libraryConfig, organize_files: !libraryConfig.organize_files };
+                                    invoke('set_library_config', { config: updated }).then(() => setLibraryConfig(updated)).catch(console.error);
+                                }}
+                                style={{
+                                    width: '40px', height: '22px',
+                                    background: libraryConfig?.organize_files ? 'var(--accent-color)' : 'var(--bg-secondary)',
+                                    borderRadius: '11px', position: 'relative',
+                                    border: '1px solid var(--border-color)', cursor: 'pointer',
+                                    transition: 'background 0.2s', padding: 0
+                                }}
+                            >
+                                <div style={{
+                                    width: '18px', height: '18px', background: 'white', borderRadius: '50%',
+                                    position: 'absolute', top: '1px',
+                                    left: libraryConfig?.organize_files ? '19px' : '1px',
+                                    transition: 'left 0.2s', boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                                }} />
+                            </button>
+                        </div>
+
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', fontStyle: 'italic' }}>
+                            Drag audio files onto the window to import them into your library.
                         </div>
                     </div>
 

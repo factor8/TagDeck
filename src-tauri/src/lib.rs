@@ -9,6 +9,7 @@ pub mod models;
 pub mod toggle_logs;
 pub mod undo;
 pub mod library_watcher;
+pub mod file_manager;
 
 use commands::AppState;
 use db::Database;
@@ -153,7 +154,10 @@ pub fn run() {
             commands::update_track_info,
             commands::sync_recent_changes,
             commands::remove_from_playlist,
-            commands::reorder_playlist_tracks
+            commands::reorder_playlist_tracks,
+            commands::get_library_config,
+            commands::set_library_config,
+            commands::import_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

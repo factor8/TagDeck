@@ -7,6 +7,8 @@ use lofty::tag::ItemKey;
 use lofty::tag::{Tag, TagType};
 use std::path::Path;
 
+use crate::file_manager::TrackImportMeta;
+
 const DELIMITER: &str = " && ";
 
 /// Overwrites the comment field with exactly the provided string.
@@ -227,4 +229,63 @@ pub fn write_track_info<P: AsRef<Path>>(
         .context("Failed to save track info to disk")?;
 
     Ok(())
+}
+
+/// Read comprehensive metadata from an audio file for the import flow.
+///
+/// This extracts everything needed by the file-manager to organise the file
+/// and populate the database row.
+pub fn read_full_metadata<P: AsRef<Path>>(path: P) -> Result<TrackImportMeta> {
+    let path_ref = path.as_ref();
+    let tagged_file =
+        read_from_path(path_ref).context(format!("Failed to read file: {:?}", path_ref))?;
+
+    let properties = tagged_file.properties();
+    let duration_secs = properties.duration().as_secs_f64();
+    let bit_rate = properties
+        .audio_bitrate()
+        .map(|b| b as i64)
+        .unwrap_or(0);
+
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag());
+
+    let get = |key: &ItemKey| -> Option<String> {
+        tag.and_then(|t| t.get_string(key)).map(|s| s.to_string())
+    };
+
+    let artist = get(&ItemKey::TrackArtist);
+    let title = get(&ItemKey::TrackTitle);
+    let album = get(&ItemKey::AlbumTitle);
+    let comment = get(&ItemKey::Comment);
+    let grouping = get(&ItemKey::ContentGroup);
+    let bpm = get(&ItemKey::Bpm).and_then(|s| s.trim().parse::<i64>().ok());
+
+    let track_number = tag
+        .and_then(|t| t.get_string(&ItemKey::TrackNumber))
+        .and_then(|s| {
+            // Handle "3/12" style track numbers
+            let s = s.split('/').next().unwrap_or(s);
+            s.trim().parse::<u32>().ok()
+        });
+
+    // Detect compilation flag (iTunes sets a specific flag)
+    let is_compilation = tag
+        .and_then(|t| t.get_string(&ItemKey::FlagCompilation))
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    Ok(TrackImportMeta {
+        artist,
+        title,
+        album,
+        track_number,
+        duration_secs,
+        bpm,
+        comment,
+        grouping,
+        is_compilation,
+        bit_rate,
+    })
 }
