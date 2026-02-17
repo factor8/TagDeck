@@ -257,6 +257,25 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<PlaylistNode | null>(null);
 
+  // iTunes section collapse state
+  const [itunesCollapsed, setItunesCollapsed] = useState(() => {
+    try {
+      const saved = localStorage.getItem('sidebar-itunes-collapsed');
+      return saved ? JSON.parse(saved) : false;
+    } catch {
+      return false;
+    }
+  });
+
+  // Persist iTunes collapse state
+  useEffect(() => {
+    try {
+      localStorage.setItem('sidebar-itunes-collapsed', JSON.stringify(itunesCollapsed));
+    } catch (e) {
+      console.error('Failed to save iTunes collapse state', e);
+    }
+  }, [itunesCollapsed]);
+
   useEffect(() => {
     loadPlaylists();
   }, [refreshTrigger]);
@@ -593,45 +612,45 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           }}>All Tracks</span>
         </div>
         
-        {/* TagDeck Playlists Section */}
-        {tagdeckTree.length > 0 && (
-          <>
-            <div style={{ 
-              padding: '12px 16px 4px', 
-              fontWeight: 600, 
-              fontSize: '11px',
-              color: 'var(--text-secondary)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              marginTop: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
-              <span>TagDeck Playlists</span>
-              <button
-                  className="sidebar-add-btn"
-                  title="New Playlist"
-                  onClick={(e) => {
-                      e.stopPropagation();
-                      handleCreatePlaylist(false);
-                  }}
-                  style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      color: 'var(--text-secondary)',
-                      padding: '0 2px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      borderRadius: '3px',
-                      transition: 'color 0.15s ease',
-                  }}
-              >
-                  <Plus size={14} />
-              </button>
-            </div>
+        {/* TagDeck Playlists Section - Always show header with + button */}
+        <div style={{ 
+          padding: '12px 16px 4px', 
+          fontWeight: 600, 
+          fontSize: '11px',
+          color: 'var(--text-secondary)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          marginTop: '8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+        }}>
+          <span>TagDeck Playlists</span>
+          <button
+              className="sidebar-add-btn"
+              title="New Playlist"
+              onClick={(e) => {
+                  e.stopPropagation();
+                  handleCreatePlaylist(false);
+              }}
+              style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: 'var(--text-secondary)',
+                  padding: '0 2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  borderRadius: '3px',
+                  transition: 'color 0.15s ease',
+              }}
+          >
+              <Plus size={14} />
+          </button>
+        </div>
 
+        {tagdeckTree.length > 0 ? (
+          <>
             {tagdeckTree.map(node => (
               <PlaylistRow 
                   key={node.persistent_id}
@@ -654,27 +673,47 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               />
             ))}
           </>
+        ) : (
+          <div style={{
+              padding: '8px 16px',
+              textAlign: 'center',
+              color: 'var(--text-secondary)',
+              fontSize: '12px',
+              fontStyle: 'italic',
+          }}>
+              No TagDeck playlists yet
+          </div>
         )}
 
         {/* iTunes Playlists Section */}
         {itunesTree.length > 0 && (
           <>
-            <div style={{ 
-              padding: '12px 16px 4px', 
-              fontWeight: 600, 
-              fontSize: '11px',
-              color: 'var(--text-secondary)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              marginTop: tagdeckTree.length > 0 ? '16px' : '8px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
+            <div 
+              onClick={() => setItunesCollapsed(!itunesCollapsed)}
+              style={{ 
+                padding: '12px 16px 4px', 
+                fontWeight: 600, 
+                fontSize: '11px',
+                color: 'var(--text-secondary)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                marginTop: tagdeckTree.length > 0 ? '16px' : '8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              {itunesCollapsed ? (
+                <ChevronRight size={12} style={{ minWidth: 12, flexShrink: 0 }} />
+              ) : (
+                <ChevronDown size={12} style={{ minWidth: 12, flexShrink: 0 }} />
+              )}
               <span>iTunes Playlists</span>
             </div>
 
-            {itunesTree.map(node => (
+            {!itunesCollapsed && itunesTree.map(node => (
               <PlaylistRow 
                   key={node.persistent_id}
                   node={node}
@@ -696,20 +735,6 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               />
             ))}
           </>
-        )}
-
-        {/* Empty state */}
-        {tagdeckTree.length === 0 && itunesTree.length === 0 && (
-            <div style={{
-                padding: '16px',
-                textAlign: 'center',
-                color: 'var(--text-secondary)',
-                fontSize: '12px',
-                lineHeight: '1.5',
-            }}>
-                No playlists yet.<br />
-                Click <strong>+</strong> or right-click to create one.
-            </div>
         )}
       </div>
       
