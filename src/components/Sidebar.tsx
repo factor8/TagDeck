@@ -226,9 +226,10 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       setExpandedFolders(newSet);
   };
 
-  const playlistTree = useMemo(() => {
+  const { tagdeckTree, itunesTree } = useMemo(() => {
       const map = new Map<string, PlaylistNode>();
-      const roots: PlaylistNode[] = [];
+      const tagdeckRoots: PlaylistNode[] = [];
+      const itunesRoots: PlaylistNode[] = [];
 
       // Initialize nodes
       playlists.forEach(p => {
@@ -242,7 +243,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               const parent = map.get(p.parent_persistent_id)!;
               parent.children.push(node);
           } else {
-              roots.push(node);
+              // Root level — split by origin (persistent_id starting with "TD-" = TagDeck)
+              if (p.persistent_id.startsWith('TD-')) {
+                  tagdeckRoots.push(node);
+              } else {
+                  itunesRoots.push(node);
+              }
           }
       });
 
@@ -262,8 +268,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           nodes.forEach(n => sortNodes(n.children));
       };
 
-      sortNodes(roots);
-      return roots;
+      sortNodes(tagdeckRoots);
+      sortNodes(itunesRoots);
+      return { tagdeckTree: tagdeckRoots, itunesTree: itunesRoots };
   }, [playlists]);
 
 
@@ -323,31 +330,67 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           }}>All Tracks</span>
         </div>
         
-        <div style={{ 
-          padding: '12px 16px 4px', 
-          fontWeight: 600, 
-          fontSize: '11px',
-          color: 'var(--text-secondary)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-          marginTop: '8px'
-        }}>
-          Playlists
-        </div>
+        {/* TagDeck Playlists Section */}
+        {tagdeckTree.length > 0 && (
+          <>
+            <div style={{ 
+              padding: '12px 16px 4px', 
+              fontWeight: 600, 
+              fontSize: '11px',
+              color: 'var(--text-secondary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginTop: '8px'
+            }}>
+              TagDeck Playlists
+            </div>
 
-        {playlistTree.map(node => (
-          <PlaylistRow 
-              key={node.persistent_id}
-              node={node}
-              level={0}
-              expandedFolders={expandedFolders}
-              selectedPlaylistId={selectedPlaylistId}
-              onSelectPlaylist={onSelectPlaylist}
-              toggleFolder={toggleFolder}
-              scrollRef={scrollRef}
-              highlightedPlaylistId={highlightedPlaylistId}
-          />
-        ))}
+            {tagdeckTree.map(node => (
+              <PlaylistRow 
+                  key={node.persistent_id}
+                  node={node}
+                  level={0}
+                  expandedFolders={expandedFolders}
+                  selectedPlaylistId={selectedPlaylistId}
+                  onSelectPlaylist={onSelectPlaylist}
+                  toggleFolder={toggleFolder}
+                  scrollRef={scrollRef}
+                  highlightedPlaylistId={highlightedPlaylistId}
+              />
+            ))}
+          </>
+        )}
+
+        {/* iTunes Playlists Section */}
+        {itunesTree.length > 0 && (
+          <>
+            <div style={{ 
+              padding: '12px 16px 4px', 
+              fontWeight: 600, 
+              fontSize: '11px',
+              color: 'var(--text-secondary)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginTop: tagdeckTree.length > 0 ? '16px' : '8px'
+            }}>
+              iTunes Playlists
+            </div>
+
+            {itunesTree.map(node => (
+              <PlaylistRow 
+                  key={node.persistent_id}
+                  node={node}
+                  level={0}
+                  expandedFolders={expandedFolders}
+                  selectedPlaylistId={selectedPlaylistId}
+                  onSelectPlaylist={onSelectPlaylist}
+                  toggleFolder={toggleFolder}
+                  scrollRef={scrollRef}
+                  highlightedPlaylistId={highlightedPlaylistId}
+              />
+            ))}
+          </>
+        )}
       </div>
       
       {showArtwork && selectedTrack && (
