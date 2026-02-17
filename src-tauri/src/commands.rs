@@ -1514,3 +1514,56 @@ pub async fn copy_playlist_memberships(
 
     Ok(format!("Added to {} playlist{}", added_count, if added_count != 1 { "s" } else { "" }))
 }
+
+// ─── Playlist Backup / Restore ──────────────────────────────────────────────
+
+/// Backup format written to disk
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PlaylistBackupFile {
+    version: u32,
+    created_at: String,
+    app_version: String,
+    playlists: Vec<crate::db::PlaylistBackupEntry>,
+}
+
+#[tauri::command]
+pub async fn export_playlist_backup(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let entries = db.export_playlist_backup().map_err(|e| e.to_string())?;
+    let count = entries.iter().filter(|e| !e.is_folder).count();
+
+    let backup = PlaylistBackupFile {
+        version: 1,
+        created_at: chrono::Local::now().to_rfc3339(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        playlists: entries,
+    };
+
+    let json = serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("Failed to write backup file: {}", e))?;
+
+    Ok(count)
+}
+
+#[tauri::command]
+pub async fn read_playlist_backup(
+    path: String,
+) -> Result<Vec<crate::db::PlaylistBackupEntry>, String> {
+    let data = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read backup file: {}", e))?;
+    let backup: PlaylistBackupFile = serde_json::from_str(&data)
+        .map_err(|e| format!("Invalid backup file: {}", e))?;
+    Ok(backup.playlists)
+}
+
+#[tauri::command]
+pub async fn restore_playlist_backup(
+    entries: Vec<crate::db::PlaylistBackupEntry>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.restore_playlists_from_backup(&entries).map_err(|e| e.to_string())
+}

@@ -153,7 +153,10 @@ pub fn run() {
             commands::update_track_info,
             commands::sync_recent_changes,
             commands::remove_from_playlist,
-            commands::reorder_playlist_tracks
+            commands::reorder_playlist_tracks,
+            commands::export_playlist_backup,
+            commands::read_playlist_backup,
+            commands::restore_playlist_backup
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
