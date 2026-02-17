@@ -782,3 +782,70 @@ input[type=range].volume-slider:focus {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-16px); }
 }
+
+/* ==============================
+   Sidebar Context Menu
+   ============================== */
+
+.sidebar-context-menu {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 180px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  border-radius: 0;
+  position: relative;
+}
+
+.ctx-item:hover {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.ctx-danger:hover {
+  background: var(--error-color);
+}
+
+.ctx-separator {
+  height: 1px;
+  background: var(--glass-border);
+  margin: 4px 0;
+}
+
+.ctx-submenu-trigger {
+  position: relative;
+}
+
+.ctx-submenu {
+  position: absolute;
+  left: 100%;
+  top: -4px;
+}
+
+/* Sidebar "+" button */
+.sidebar-add-btn:hover {
+  color: var(--text-primary) !important;
+}
+
+/* Sidebar rename input */
+.sidebar-rename-input {
+  font-family: inherit;
+}

@@ -97,6 +97,13 @@ pub async fn fetch_system_library(app: &AppHandle) -> Result<(Vec<Track>, Vec<Pl
             name: p.name,
             is_folder: p.is_folder,
             track_ids: Some(p.track_ids),
+            origin: "itunes".to_string(),
+            itunes_sync_enabled: false,
+            description: None,
+            color: None,
+            sort_position: 0,
+            created_at: 0,
+            updated_at: 0,
         })
         .collect();
 

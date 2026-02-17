@@ -884,9 +884,12 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 .collect();
 
             // Detect deleted playlists (in DB but not in Music.app)
-            let deleted_pids: Vec<String> = db_snapshot.keys()
-                .filter(|pid| !music_pids.contains(*pid))
-                .cloned()
+            // Only consider iTunes-origin playlists for deletion — TagDeck-native ones are independent.
+            let deleted_pids: Vec<String> = db_snapshot.iter()
+                .filter(|(pid, (_name, _is_folder, _parent, _tracks, origin))| {
+                    origin == "itunes" && !music_pids.contains(*pid)
+                })
+                .map(|(pid, _)| pid.clone())
                 .collect();
 
             if !deleted_pids.is_empty() {
@@ -925,21 +928,28 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                     .collect();
 
                 let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
-                    None => true, // New playlist
-                    Some((db_name, db_is_folder, db_parent_pid, db_track_ids)) => {
-                        // Compare track membership using sorted lists to avoid false
-                        // positives caused by Music.app returning tracks in a
-                        // non-deterministic order (current UI sort, etc.).
-                        let mut sorted_filtered = filtered_track_ids.clone();
-                        sorted_filtered.sort();
-                        let mut sorted_db = db_track_ids.clone();
-                        sorted_db.sort();
+                    None => true, // New playlist from Music.app
+                    Some((_db_name, _db_is_folder, _db_parent_pid, _db_track_ids, origin)) => {
+                        // Skip TagDeck-native playlists — they are not managed by Music.app
+                        if origin == "tagdeck" {
+                            false
+                        } else {
+                            let (db_name, db_is_folder, db_parent_pid, db_track_ids, _) =
+                                db_snapshot.get(&mp.persistent_id).unwrap();
+                            // Compare track membership using sorted lists to avoid false
+                            // positives caused by Music.app returning tracks in a
+                            // non-deterministic order (current UI sort, etc.).
+                            let mut sorted_filtered = filtered_track_ids.clone();
+                            sorted_filtered.sort();
+                            let mut sorted_db = db_track_ids.clone();
+                            sorted_db.sort();
 
-                        // Check if any field changed
-                        db_name != &mp.name
-                            || db_is_folder != &mp.is_folder
-                            || db_parent_pid != &mp.parent_persistent_id
-                            || sorted_db != sorted_filtered
+                            // Check if any field changed
+                            db_name != &mp.name
+                                || db_is_folder != &mp.is_folder
+                                || db_parent_pid != &mp.parent_persistent_id
+                                || sorted_db != sorted_filtered
+                        }
                     }
                 };
                 
@@ -954,6 +964,13 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                         name: mp.name.clone(),
                         is_folder: mp.is_folder,
                         track_ids: Some(filtered_track_ids),
+                        origin: "itunes".to_string(),
+                        itunes_sync_enabled: false,
+                        description: None,
+                        color: None,
+                        sort_position: 0,
+                        created_at: 0,
+                        updated_at: 0,
                     };
                     if let Err(e) = db.insert_playlist(&playlist) {
                         let msg = format!("DB Error upserting playlist {}: {}", mp.name, e);
@@ -996,6 +1013,119 @@ pub async fn get_playlists(state: State<'_, AppState>) -> Result<Vec<crate::mode
 }
 
 #[tauri::command]
+pub async fn create_playlist(
+    name: String,
+    parent_id: Option<i64>,
+    is_folder: bool,
+    state: State<'_, AppState>,
+) -> Result<crate::models::Playlist, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+
+    // Resolve parent persistent_id if parent_id is provided
+    let parent_persistent_id = if let Some(pid) = parent_id {
+        Some(db.get_playlist_persistent_id(pid).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+
+    // Generate a unique persistent_id for TagDeck-native playlists
+    let persistent_id = format!("TD-{}", uuid_v4_simple());
+
+    db.create_playlist(
+        &name,
+        parent_persistent_id.as_deref(),
+        is_folder,
+        &persistent_id,
+    ).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn rename_playlist(
+    app: tauri::AppHandle,
+    id: i64,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
+
+    // If this is an iTunes-origin playlist, also rename in Music.app
+    let origin = db.get_playlist_origin(id).unwrap_or_default();
+    if origin == "itunes" {
+        let pid = db.get_playlist_persistent_id(id).map_err(|e| e.to_string())?;
+        drop(db); // Release lock before AppleScript call
+        if let Err(e) = crate::apple_music::rename_playlist_in_music(&pid, &name) {
+            let msg = format!("Warning: Failed to rename playlist in Music.app: {}", e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_playlist(
+    id: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    // Safety: We never delete playlists from Music.app, only from TagDeck's DB
+    db.delete_playlist(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn move_playlist(
+    id: i64,
+    new_parent_id: Option<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+
+    let new_parent_persistent_id = if let Some(pid) = new_parent_id {
+        Some(db.get_playlist_persistent_id(pid).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+
+    db.move_playlist(id, new_parent_persistent_id.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn duplicate_playlist(
+    id: i64,
+    new_name: String,
+    state: State<'_, AppState>,
+) -> Result<crate::models::Playlist, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let persistent_id = format!("TD-{}", uuid_v4_simple());
+    db.duplicate_playlist(id, &new_name, &persistent_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn reorder_sibling_playlists(
+    ordered_ids: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.reorder_sibling_playlists(&ordered_ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_playlist_metadata(
+    id: i64,
+    description: Option<String>,
+    color: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.update_playlist_metadata(id, description.as_deref(), color.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn add_to_playlist(
     app: tauri::AppHandle,
     track_ids: Vec<i64>,
@@ -1003,10 +1133,11 @@ pub async fn add_to_playlist(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // 1. Get IDs
-    let (playlist_pid, track_data) = {
+    let (playlist_pid, track_data, origin) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
+        let origin = db.get_playlist_origin(playlist_id).unwrap_or_default();
 
         let mut data = Vec::new();
         for tid in &track_ids {
@@ -1014,16 +1145,18 @@ pub async fn add_to_playlist(
                 data.push((*tid, pid));
             }
         }
-        (pid, data)
+        (pid, data, origin)
     };
 
     let valid_track_ids: Vec<i64> = track_data.iter().map(|(t, _)| *t).collect();
     
-    // 2. Apple Music Sync
-    for (_, pid) in &track_data {
-        if let Err(e) = add_track_to_playlist(pid, &playlist_pid) {
-             let msg = format!("Failed to add track {} to playlist: {}", pid, e);
-             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+    // 2. Apple Music Sync (only for iTunes-origin playlists)
+    if origin == "itunes" {
+        for (_, pid) in &track_data {
+            if let Err(e) = add_track_to_playlist(pid, &playlist_pid) {
+                 let msg = format!("Failed to add track {} to playlist: {}", pid, e);
+                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            }
         }
     }
 
@@ -1064,24 +1197,27 @@ pub async fn remove_from_playlist(
     playlist_id: i64,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let (playlist_pid, track_data) = {
+    let (playlist_pid, track_data, origin) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
+        let origin = db.get_playlist_origin(playlist_id).unwrap_or_default();
         let mut data = Vec::new();
         for tid in &track_ids {
             if let Ok(tpid) = db.get_track_persistent_id(*tid) {
                 data.push((*tid, tpid));
             }
         }
-        (pid, data)
+        (pid, data, origin)
     };
 
-    // Remove from Apple Music
-    for (_, tpid) in &track_data {
-        if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
-            let msg = format!("Failed to remove track from playlist in Music.app: {}", e);
-            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+    // Remove from Apple Music (only for iTunes-origin playlists)
+    if origin == "itunes" {
+        for (_, tpid) in &track_data {
+            if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
+                let msg = format!("Failed to remove track from playlist in Music.app: {}", e);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            }
         }
     }
 

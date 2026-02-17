@@ -24,6 +24,13 @@ export interface Playlist {
     parent_persistent_id?: string;
     name: string;
     is_folder: boolean;
+    origin: 'itunes' | 'tagdeck';
+    itunes_sync_enabled: boolean;
+    description?: string;
+    color?: string;
+    sort_position: number;
+    created_at: number;
+    updated_at: number;
 }
 
 export interface Tag {

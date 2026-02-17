@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight } from 'lucide-react';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
@@ -11,6 +11,13 @@ interface SidebarProps {
   selectedTrack?: Track | null;
   showArtwork?: boolean;
   highlightedPlaylistId?: number | null;
+  onPlaylistsChanged?: () => void;
+}
+
+interface ContextMenuState {
+    x: number;
+    y: number;
+    node: PlaylistNode | null;
 }
 
 interface PlaylistNode extends Playlist {
@@ -26,6 +33,14 @@ interface PlaylistRowProps {
     toggleFolder: (id: string) => void;
     scrollRef: (node: HTMLDivElement | null) => void;
     highlightedPlaylistId?: number | null;
+    renamingId: number | null;
+    renameValue: string;
+    onRenameChange: (val: string) => void;
+    onRenameCommit: () => void;
+    onRenameCancel: () => void;
+    onStartRename: (node: PlaylistNode) => void;
+    onContextMenu: (e: React.MouseEvent, node: PlaylistNode) => void;
+    folders: PlaylistNode[];
 }
 
 const PlaylistRow = ({ 
@@ -37,7 +52,15 @@ const PlaylistRow = ({
     toggleFolder, 
     scrollRef,
     highlightedPlaylistId,
+    renamingId,
+    renameValue,
+    onRenameChange,
+    onRenameCommit,
+    onRenameCancel,
+    onStartRename,
+    onContextMenu,
 }: PlaylistRowProps) => {
+    const renameInputRef = useRef<HTMLInputElement>(null);
     const { isOver, setNodeRef } = useDroppable({
         id: `playlist-${node.id}`,
         data: {
@@ -50,7 +73,15 @@ const PlaylistRow = ({
     const isExpanded = expandedFolders.has(node.persistent_id);
     const isSelected = selectedPlaylistId === node.id;
     const isHighlighted = highlightedPlaylistId === node.id;
+    const isRenaming = renamingId === node.id;
     const paddingLeft = 16 + (level * 16);
+
+    useEffect(() => {
+        if (isRenaming && renameInputRef.current) {
+            renameInputRef.current.focus();
+            renameInputRef.current.select();
+        }
+    }, [isRenaming]);
 
     return (
         <div key={node.persistent_id}>
@@ -60,12 +91,18 @@ const PlaylistRow = ({
                       if (isSelected) scrollRef(el);
                   }}
                   onClick={() => {
+                      if (isRenaming) return;
                       if (node.is_folder) {
                           toggleFolder(node.persistent_id);
                       } else {
                           onSelectPlaylist(node.id);
                       }
                   }}
+                  onDoubleClick={(e) => {
+                      e.preventDefault();
+                      onStartRename(node);
+                  }}
+                  onContextMenu={(e) => onContextMenu(e, node)}
                   className={isHighlighted ? 'flash-highlight' : ''}
                   style={{
                       padding: `6px 16px 6px ${paddingLeft}px`,
@@ -80,7 +117,6 @@ const PlaylistRow = ({
                       gap: '6px',
                       userSelect: 'none',
                       transition: 'background-color 0.2s ease',
-                      // Override transition if highlighted to allow flash
                   }}
                   onMouseEnter={(e) => {
                       if (!isSelected && !isOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
@@ -111,18 +147,61 @@ const PlaylistRow = ({
                      <ListMusic size={16} style={{ minWidth: 16, flexShrink: 0 }} />
                   )}
                   
-                  <span style={{ 
-                      flex: 1,
-                      minWidth: 0,
-                      fontSize: '13px',
-                      fontWeight: 400,
-                      lineHeight: '20px',
-                      whiteSpace: 'nowrap', 
-                      overflow: 'hidden', 
-                      textOverflow: 'ellipsis'
-                  }}>
-                      {node.name}
-                  </span>
+                  {isRenaming ? (
+                      <input
+                          ref={renameInputRef}
+                          className="sidebar-rename-input"
+                          value={renameValue}
+                          onChange={(e) => onRenameChange(e.target.value)}
+                          onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  onRenameCommit();
+                              } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  onRenameCancel();
+                              }
+                          }}
+                          onBlur={onRenameCommit}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                              flex: 1,
+                              minWidth: 0,
+                              fontSize: '13px',
+                              fontWeight: 400,
+                              lineHeight: '20px',
+                              background: 'var(--bg-primary)',
+                              color: 'var(--text-primary)',
+                              border: '1px solid var(--accent-color)',
+                              borderRadius: '3px',
+                              padding: '0 4px',
+                              outline: 'none',
+                              fontFamily: 'inherit',
+                          }}
+                      />
+                  ) : (
+                      <span style={{ 
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: '13px',
+                          fontWeight: 400,
+                          lineHeight: '20px',
+                          whiteSpace: 'nowrap', 
+                          overflow: 'hidden', 
+                          textOverflow: 'ellipsis'
+                      }}>
+                          {node.name}
+                      </span>
+                  )}
+
+                  {node.origin === 'itunes' && !isRenaming && (
+                      <Music size={12} style={{ 
+                          minWidth: 12, 
+                          flexShrink: 0, 
+                          opacity: 0.4,
+                          color: isSelected ? '#fff' : 'var(--text-secondary)'
+                      }} />
+                  )}
               </div>
               
               {node.is_folder && isExpanded && (
@@ -138,6 +217,14 @@ const PlaylistRow = ({
                             toggleFolder={toggleFolder}
                             scrollRef={scrollRef}
                             highlightedPlaylistId={highlightedPlaylistId}
+                            renamingId={renamingId}
+                            renameValue={renameValue}
+                            onRenameChange={onRenameChange}
+                            onRenameCommit={onRenameCommit}
+                            onRenameCancel={onRenameCancel}
+                            onStartRename={onStartRename}
+                            onContextMenu={onContextMenu}
+                            folders={[]}
                         />
                       ))}
                   </div>
@@ -146,7 +233,7 @@ const PlaylistRow = ({
     );
 };
 
-export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId }: SidebarProps) {
+export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -158,6 +245,17 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
     }
   });
   const [hasScrolledToSelection, setHasScrolledToSelection] = useState(false);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [moveSubmenuOpen, setMoveSubmenuOpen] = useState(false);
+
+  // Inline rename state
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  // Delete confirmation state
+  const [deleteTarget, setDeleteTarget] = useState<PlaylistNode | null>(null);
 
   useEffect(() => {
     loadPlaylists();
@@ -226,6 +324,155 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       setExpandedFolders(newSet);
   };
 
+  // Close context menu when clicking outside or pressing Escape
+  useEffect(() => {
+      if (!contextMenu) return;
+
+      const handleClose = (e: MouseEvent) => {
+          const target = e.target as HTMLElement;
+          if (target.closest('.sidebar-context-menu')) return;
+          setContextMenu(null);
+          setMoveSubmenuOpen(false);
+      };
+
+      const handleEscape = (e: KeyboardEvent) => {
+          if (e.key === 'Escape') {
+              setContextMenu(null);
+              setMoveSubmenuOpen(false);
+          }
+      };
+
+      // Defer attachment so we don't catch the right-click that opened the menu
+      const frame = requestAnimationFrame(() => {
+          window.addEventListener('mousedown', handleClose, true);
+          window.addEventListener('contextmenu', handleClose, true);
+          window.addEventListener('keydown', handleEscape);
+      });
+
+      return () => {
+          cancelAnimationFrame(frame);
+          window.removeEventListener('mousedown', handleClose, true);
+          window.removeEventListener('contextmenu', handleClose, true);
+          window.removeEventListener('keydown', handleEscape);
+      };
+  }, [contextMenu]);
+
+  // --- CRUD Helpers ---
+
+  const refreshPlaylists = useCallback(async () => {
+      await loadPlaylists();
+      onPlaylistsChanged?.();
+  }, [onPlaylistsChanged]);
+
+  const handleCreatePlaylist = useCallback(async (isFolder: boolean, parentId?: number) => {
+      try {
+          const name = isFolder ? 'New Folder' : 'New Playlist';
+          const created = await invoke<Playlist>('create_playlist', {
+              name,
+              parentId: parentId ?? null,
+              isFolder,
+          });
+          // Auto-expand parent folder so the new item is visible
+          if (created.parent_persistent_id) {
+              setExpandedFolders(prev => {
+                  const next = new Set(prev);
+                  next.add(created.parent_persistent_id!);
+                  return next;
+              });
+          }
+          await refreshPlaylists();
+          // Select the new playlist and start renaming
+          if (!isFolder) {
+              onSelectPlaylist(created.id);
+          }
+          setRenamingId(created.id);
+          setRenameValue(name);
+      } catch (e) {
+          console.error('Failed to create playlist', e);
+      }
+  }, [refreshPlaylists, onSelectPlaylist]);
+
+  const onStartRename = useCallback((node: PlaylistNode) => {
+      setRenamingId(node.id);
+      setRenameValue(node.name);
+  }, []);
+
+  const onRenameChange = useCallback((val: string) => {
+      setRenameValue(val);
+  }, []);
+
+  const onRenameCommit = useCallback(async () => {
+      if (renamingId === null) return;
+      const trimmed = renameValue.trim();
+      if (trimmed.length === 0) {
+          setRenamingId(null);
+          setRenameValue('');
+          return;
+      }
+      try {
+          await invoke('rename_playlist', { id: renamingId, name: trimmed });
+          await refreshPlaylists();
+      } catch (e) {
+          console.error('Failed to rename playlist', e);
+      } finally {
+          setRenamingId(null);
+          setRenameValue('');
+      }
+  }, [renamingId, renameValue, refreshPlaylists]);
+
+  const onRenameCancel = useCallback(() => {
+      setRenamingId(null);
+      setRenameValue('');
+  }, []);
+
+  const handleDelete = useCallback(async () => {
+      if (!deleteTarget) return;
+      try {
+          await invoke('delete_playlist', { id: deleteTarget.id });
+          if (selectedPlaylistId === deleteTarget.id) {
+              onSelectPlaylist(null);
+          }
+          await refreshPlaylists();
+      } catch (e) {
+          console.error('Failed to delete playlist', e);
+      } finally {
+          setDeleteTarget(null);
+      }
+  }, [deleteTarget, selectedPlaylistId, onSelectPlaylist, refreshPlaylists]);
+
+  const handleDuplicate = useCallback(async (node: PlaylistNode) => {
+      try {
+          const newName = `${node.name} Copy`;
+          const created = await invoke<Playlist>('duplicate_playlist', { id: node.id, newName });
+          await refreshPlaylists();
+          onSelectPlaylist(created.id);
+      } catch (e) {
+          console.error('Failed to duplicate playlist', e);
+      }
+  }, [refreshPlaylists, onSelectPlaylist]);
+
+  const handleMove = useCallback(async (node: PlaylistNode, newParentId: number | null) => {
+      try {
+          await invoke('move_playlist', { id: node.id, newParentId });
+          await refreshPlaylists();
+      } catch (e) {
+          console.error('Failed to move playlist', e);
+      }
+  }, [refreshPlaylists]);
+
+  const onContextMenu = useCallback((e: React.MouseEvent, node: PlaylistNode) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({ x: e.clientX, y: e.clientY, node });
+      setMoveSubmenuOpen(false);
+  }, []);
+
+  const handleBackgroundContextMenu = useCallback((e: React.MouseEvent) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, node: null });
+      setMoveSubmenuOpen(false);
+  }, []);
+
   const { tagdeckTree, itunesTree } = useMemo(() => {
       const map = new Map<string, PlaylistNode>();
       const tagdeckRoots: PlaylistNode[] = [];
@@ -243,7 +490,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               const parent = map.get(p.parent_persistent_id)!;
               parent.children.push(node);
           } else {
-              // Root level — split by origin (persistent_id starting with "TD-" = TagDeck)
+              // Split into TagDeck vs iTunes based on persistent_id prefix
               if (p.persistent_id.startsWith('TD-')) {
                   tagdeckRoots.push(node);
               } else {
@@ -273,16 +520,30 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       return { tagdeckTree: tagdeckRoots, itunesTree: itunesRoots };
   }, [playlists]);
 
+  // Collect all folders for the "Move to" submenu
+  const allFolders = useMemo(() => {
+      const collectFolders = (nodes: PlaylistNode[]): PlaylistNode[] => {
+          const result: PlaylistNode[] = [];
+          for (const n of nodes) {
+              if (n.is_folder) {
+                  result.push(n);
+                  result.push(...collectFolders(n.children));
+              }
+          }
+          return result;
+      };
+      return [...collectFolders(tagdeckTree), ...collectFolders(itunesTree)];
+  }, [tagdeckTree, itunesTree]);
+
 
 
   return (
     <div className="no-select" style={{
       width: '100%',
-      minWidth: '100px', // Handled by Panel now
+      minWidth: '100px',
       maxWidth: '100%',
       height: '100%',
       backgroundColor: 'var(--bg-secondary)', 
-      // borderRight: '1px solid var(--border-color)', // Handled by Panel Resize Handle
       display: 'flex',
       flexDirection: 'column',
       overflow: 'hidden',
@@ -299,7 +560,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
         Library
       </div>
       
-      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}
+           onContextMenu={handleBackgroundContextMenu}
+      >
         <div 
           ref={(node) => {
               if (selectedPlaylistId === null) scrollRef(node);
@@ -340,9 +603,33 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               color: 'var(--text-secondary)',
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
-              marginTop: '8px'
+              marginTop: '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
             }}>
-              TagDeck Playlists
+              <span>TagDeck Playlists</span>
+              <button
+                  className="sidebar-add-btn"
+                  title="New Playlist"
+                  onClick={(e) => {
+                      e.stopPropagation();
+                      handleCreatePlaylist(false);
+                  }}
+                  style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--text-secondary)',
+                      padding: '0 2px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      borderRadius: '3px',
+                      transition: 'color 0.15s ease',
+                  }}
+              >
+                  <Plus size={14} />
+              </button>
             </div>
 
             {tagdeckTree.map(node => (
@@ -356,6 +643,14 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   toggleFolder={toggleFolder}
                   scrollRef={scrollRef}
                   highlightedPlaylistId={highlightedPlaylistId}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
+                  onRenameChange={onRenameChange}
+                  onRenameCommit={onRenameCommit}
+                  onRenameCancel={onRenameCancel}
+                  onStartRename={onStartRename}
+                  onContextMenu={onContextMenu}
+                  folders={allFolders}
               />
             ))}
           </>
@@ -371,9 +666,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               color: 'var(--text-secondary)',
               textTransform: 'uppercase',
               letterSpacing: '0.05em',
-              marginTop: tagdeckTree.length > 0 ? '16px' : '8px'
+              marginTop: tagdeckTree.length > 0 ? '16px' : '8px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
             }}>
-              iTunes Playlists
+              <span>iTunes Playlists</span>
             </div>
 
             {itunesTree.map(node => (
@@ -387,14 +685,157 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   toggleFolder={toggleFolder}
                   scrollRef={scrollRef}
                   highlightedPlaylistId={highlightedPlaylistId}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
+                  onRenameChange={onRenameChange}
+                  onRenameCommit={onRenameCommit}
+                  onRenameCancel={onRenameCancel}
+                  onStartRename={onStartRename}
+                  onContextMenu={onContextMenu}
+                  folders={allFolders}
               />
             ))}
           </>
+        )}
+
+        {/* Empty state */}
+        {tagdeckTree.length === 0 && itunesTree.length === 0 && (
+            <div style={{
+                padding: '16px',
+                textAlign: 'center',
+                color: 'var(--text-secondary)',
+                fontSize: '12px',
+                lineHeight: '1.5',
+            }}>
+                No playlists yet.<br />
+                Click <strong>+</strong> or right-click to create one.
+            </div>
         )}
       </div>
       
       {showArtwork && selectedTrack && (
           <SidebarArtwork track={selectedTrack} />
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+          <div 
+              className="sidebar-context-menu"
+              style={{
+                  position: 'fixed',
+                  left: contextMenu.x,
+                  top: contextMenu.y,
+                  zIndex: 9999,
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+          >
+              <button className="ctx-item" onClick={() => { setContextMenu(null); handleCreatePlaylist(false, contextMenu.node?.is_folder ? contextMenu.node.id : undefined); }}>
+                  <ListPlus size={14} /> New Playlist
+              </button>
+              <button className="ctx-item" onClick={() => { setContextMenu(null); handleCreatePlaylist(true, contextMenu.node?.is_folder ? contextMenu.node.id : undefined); }}>
+                  <FolderPlus size={14} /> New Folder
+              </button>
+
+              {contextMenu.node && (
+                  <>
+                      <div className="ctx-separator" />
+                      <button className="ctx-item" onClick={() => { setContextMenu(null); onStartRename(contextMenu.node!); }}>
+                          <Pencil size={14} /> Rename
+                      </button>
+                      {!contextMenu.node.is_folder && (
+                          <button className="ctx-item" onClick={() => { setContextMenu(null); handleDuplicate(contextMenu.node!); }}>
+                              <Copy size={14} /> Duplicate
+                          </button>
+                      )}
+                      
+                      {/* Move to submenu */}
+                      <div 
+                          className="ctx-item ctx-submenu-trigger"
+                          onMouseEnter={() => setMoveSubmenuOpen(true)}
+                          onMouseLeave={() => setMoveSubmenuOpen(false)}
+                      >
+                          <ArrowRight size={14} /> Move to…
+                          {moveSubmenuOpen && (
+                              <div className="sidebar-context-menu ctx-submenu">
+                                  <button className="ctx-item" onClick={() => {
+                                      setContextMenu(null);
+                                      handleMove(contextMenu.node!, null);
+                                  }}>
+                                      Root
+                                  </button>
+                                  {allFolders
+                                      .filter(f => f.id !== contextMenu.node!.id)
+                                      .map(f => (
+                                          <button key={f.id} className="ctx-item" onClick={() => {
+                                              setContextMenu(null);
+                                              handleMove(contextMenu.node!, f.id);
+                                          }}>
+                                              {f.name}
+                                          </button>
+                                      ))
+                                  }
+                              </div>
+                          )}
+                      </div>
+
+                      <div className="ctx-separator" />
+                      <button className="ctx-item ctx-danger" onClick={() => { setContextMenu(null); setDeleteTarget(contextMenu.node!); }}>
+                          <Trash2 size={14} /> Delete
+                      </button>
+                  </>
+              )}
+          </div>
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+          <div style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 10000,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          }}
+              onClick={() => setDeleteTarget(null)}
+          >
+              <div 
+                  className="sidebar-delete-dialog"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-color)',
+                      borderRadius: '8px',
+                      padding: '20px',
+                      maxWidth: '360px',
+                      width: '90%',
+                  }}
+              >
+                  <h3 style={{ margin: '0 0 8px', fontSize: '15px', fontWeight: 600 }}>
+                      Delete {deleteTarget.is_folder ? 'Folder' : 'Playlist'}
+                  </h3>
+                  <p style={{ margin: '0 0 16px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                      {deleteTarget.origin === 'itunes' 
+                          ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Apple Music.`
+                          : `Are you sure you want to permanently delete "${deleteTarget.name}"? This cannot be undone.`
+                      }
+                      {deleteTarget.is_folder && deleteTarget.children.length > 0 && (
+                          <><br /><br /><strong>This folder contains {deleteTarget.children.length} item{deleteTarget.children.length !== 1 ? 's' : ''} that will also be deleted.</strong></>
+                      )}
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                      <button className="btn" onClick={() => setDeleteTarget(null)}>Cancel</button>
+                      <button 
+                          className="btn" 
+                          style={{ backgroundColor: 'var(--error-color)', borderColor: 'var(--error-color)', color: '#fff' }}
+                          onClick={handleDelete}
+                      >
+                          Delete
+                      </button>
+                  </div>
+              </div>
+          </div>
       )}
     </div>
   );

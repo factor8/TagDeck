@@ -702,6 +702,7 @@ function App() {
             selectedTrack={playingTrack}
             showArtwork={isSidebarArtworkVisible}
             highlightedPlaylistId={highlightedPlaylistId}
+            onPlaylistsChanged={() => setRefreshTrigger(p => p + 1)}
             />
         </Panel>
         

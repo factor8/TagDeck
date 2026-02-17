@@ -891,3 +891,34 @@ pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option
     }
     Ok(())
 }
+
+/// Renames a playlist in Apple Music by its Persistent ID.
+pub fn rename_playlist_in_music(persistent_id: &str, new_name: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let escaped_name = new_name.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            r#"
+            if application "Music" is running then
+                tell application "Music"
+                    try
+                        set thePlaylist to (first playlist whose persistent ID is "{}")
+                        set name of thePlaylist to "{}"
+                    end try
+                end tell
+            end if
+            "#,
+            persistent_id, escaped_name
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+            eprintln!("AppleScript error (rename_playlist): {}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+    Ok(())
+}

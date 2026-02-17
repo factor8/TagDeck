@@ -93,6 +93,15 @@ impl Database {
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN original_path TEXT", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN import_date INTEGER", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN file_hash TEXT", []);
+
+        // Playlist management columns (Phase 1)
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN origin TEXT DEFAULT 'itunes'", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN itunes_sync_enabled BOOLEAN DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN description TEXT", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN color TEXT", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN sort_position INTEGER DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN created_at INTEGER DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN updated_at INTEGER DEFAULT 0", []);
         
         Ok(Self { conn })
     }
@@ -234,14 +243,14 @@ impl Database {
     }
 
     /// Returns a snapshot of all playlists in the DB for diffing.
-    /// Maps persistent_id → (name, is_folder, parent_persistent_id, vec of track persistent_ids)
-    pub fn get_playlist_snapshot(&self) -> Result<std::collections::HashMap<String, (String, bool, Option<String>, Vec<String>)>> {
+    /// Maps persistent_id → (name, is_folder, parent_persistent_id, vec of track persistent_ids, origin)
+    pub fn get_playlist_snapshot(&self) -> Result<std::collections::HashMap<String, (String, bool, Option<String>, Vec<String>, String)>> {
         use std::collections::HashMap;
 
-        let mut map: HashMap<String, (String, bool, Option<String>, Vec<String>)> = HashMap::new();
+        let mut map: HashMap<String, (String, bool, Option<String>, Vec<String>, String)> = HashMap::new();
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists"
+            "SELECT id, persistent_id, parent_persistent_id, name, is_folder, COALESCE(origin, 'itunes') FROM playlists"
         )?;
         let rows = stmt.query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -249,10 +258,11 @@ impl Database {
             let parent_pid: Option<String> = row.get(2)?;
             let name: String = row.get(3)?;
             let is_folder: bool = row.get(4)?;
-            Ok((id, pid, parent_pid, name, is_folder))
+            let origin: String = row.get(5)?;
+            Ok((id, pid, parent_pid, name, is_folder, origin))
         })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
-        for (db_id, pid, parent_pid, name, is_folder) in &rows {
+        for (db_id, pid, parent_pid, name, is_folder, origin) in &rows {
             // Get track persistent IDs for this playlist
             let mut track_stmt = self.conn.prepare(
                 "SELECT t.persistent_id FROM playlist_tracks pt 
@@ -263,7 +273,7 @@ impl Database {
             let track_pids = track_stmt.query_map(params![db_id], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
-            map.insert(pid.clone(), (name.clone(), *is_folder, parent_pid.clone(), track_pids));
+            map.insert(pid.clone(), (name.clone(), *is_folder, parent_pid.clone(), track_pids, origin.clone()));
         }
 
         Ok(map)
@@ -302,7 +312,13 @@ impl Database {
     }
 
     pub fn get_playlists(&self) -> Result<Vec<crate::models::Playlist>> {
-        let mut stmt = self.conn.prepare("SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists WHERE name != 'Music' ORDER BY is_folder DESC, name ASC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, persistent_id, parent_persistent_id, name, is_folder,
+                    COALESCE(origin, 'itunes'), COALESCE(itunes_sync_enabled, 0),
+                    description, color, COALESCE(sort_position, 0),
+                    COALESCE(created_at, 0), COALESCE(updated_at, 0)
+             FROM playlists WHERE name != 'Music' ORDER BY is_folder DESC, sort_position ASC, name ASC"
+        )?;
         let playlists = stmt.query_map([], |row| {
             Ok(crate::models::Playlist {
                 id: row.get(0)?,
@@ -310,7 +326,14 @@ impl Database {
                 parent_persistent_id: row.get(2)?,
                 name: row.get(3)?,
                 is_folder: row.get(4)?,
-                track_ids: None, // Not loaded by default
+                track_ids: None,
+                origin: row.get(5)?,
+                itunes_sync_enabled: row.get(6)?,
+                description: row.get(7)?,
+                color: row.get(8)?,
+                sort_position: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
         Ok(playlists)
@@ -380,6 +403,209 @@ impl Database {
         }
         
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Playlist CRUD methods (Phase 1 — TagDeck-native playlists)
+    // -----------------------------------------------------------------------
+
+    /// Creates a new TagDeck-native playlist or folder.
+    /// Returns the newly created Playlist with its database ID.
+    pub fn create_playlist(
+        &self,
+        name: &str,
+        parent_persistent_id: Option<&str>,
+        is_folder: bool,
+        persistent_id: &str,
+    ) -> Result<crate::models::Playlist> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+
+        // Get next sort_position for siblings at this level
+        let max_pos: Option<i64> = if let Some(ppid) = parent_persistent_id {
+            self.conn.query_row(
+                "SELECT MAX(sort_position) FROM playlists WHERE parent_persistent_id = ?1",
+                params![ppid],
+                |row| row.get(0),
+            ).unwrap_or(None)
+        } else {
+            self.conn.query_row(
+                "SELECT MAX(sort_position) FROM playlists WHERE parent_persistent_id IS NULL",
+                [],
+                |row| row.get(0),
+            ).unwrap_or(None)
+        };
+        let sort_position = max_pos.map(|p| p + 1).unwrap_or(0);
+
+        self.conn.execute(
+            "INSERT INTO playlists (persistent_id, parent_persistent_id, name, is_folder, origin, itunes_sync_enabled, sort_position, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'tagdeck', 0, ?5, ?6, ?7)",
+            params![persistent_id, parent_persistent_id, name, is_folder, sort_position, now, now],
+        )?;
+
+        let id = self.conn.last_insert_rowid();
+
+        Ok(crate::models::Playlist {
+            id,
+            persistent_id: persistent_id.to_string(),
+            parent_persistent_id: parent_persistent_id.map(|s| s.to_string()),
+            name: name.to_string(),
+            is_folder,
+            track_ids: None,
+            origin: "tagdeck".to_string(),
+            itunes_sync_enabled: false,
+            description: None,
+            color: None,
+            sort_position,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    /// Renames a playlist by its database ID.
+    pub fn rename_playlist(&self, id: i64, name: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        self.conn.execute(
+            "UPDATE playlists SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes a playlist and its track associations by database ID.
+    pub fn delete_playlist(&self, id: i64) -> Result<()> {
+        // First remove child playlists if this is a folder
+        let persistent_id: String = self.conn.query_row(
+            "SELECT persistent_id FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+
+        // Get all children (recursive would be ideal but 2-level max is fine)
+        let child_ids: Vec<i64> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id FROM playlists WHERE parent_persistent_id = ?1"
+            )?;
+            let rows = stmt.query_map(params![persistent_id], |row| row.get(0))?
+                .collect::<Result<Vec<i64>, rusqlite::Error>>()?;
+            rows
+        };
+
+        // Delete children's playlist_tracks and the children themselves
+        for child_id in &child_ids {
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                params![child_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM playlists WHERE id = ?1",
+                params![child_id],
+            )?;
+        }
+
+        // Delete this playlist's tracks and the playlist itself
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+            params![id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM playlists WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    /// Moves a playlist to a new parent folder (or root if parent_persistent_id is None).
+    pub fn move_playlist(&self, id: i64, new_parent_persistent_id: Option<&str>) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        self.conn.execute(
+            "UPDATE playlists SET parent_persistent_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_parent_persistent_id, now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Duplicates a playlist (tracks only, not folders) with a new name.
+    /// Returns the new playlist.
+    pub fn duplicate_playlist(&self, id: i64, new_name: &str, new_persistent_id: &str) -> Result<crate::models::Playlist> {
+        // Get the source playlist details
+        let (parent_pid, _origin): (Option<String>, String) = self.conn.query_row(
+            "SELECT parent_persistent_id, COALESCE(origin, 'itunes') FROM playlists WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+        // Create the new playlist
+        let new_playlist = self.create_playlist(
+            new_name,
+            parent_pid.as_deref(),
+            false,
+            new_persistent_id,
+        )?;
+
+        // Copy track associations
+        let track_ids = self.get_playlist_track_ids(id)?;
+        for (pos, tid) in track_ids.iter().enumerate() {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+                params![new_playlist.id, tid, pos as i64],
+            )?;
+        }
+
+        Ok(new_playlist)
+    }
+
+    /// Reorders playlists within a parent level by updating sort_position.
+    pub fn reorder_sibling_playlists(&self, ordered_ids: &[i64]) -> Result<()> {
+        for (i, id) in ordered_ids.iter().enumerate() {
+            self.conn.execute(
+                "UPDATE playlists SET sort_position = ?1 WHERE id = ?2",
+                params![i as i64, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Updates optional metadata fields on a playlist.
+    pub fn update_playlist_metadata(
+        &self,
+        id: i64,
+        description: Option<&str>,
+        color: Option<&str>,
+    ) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        self.conn.execute(
+            "UPDATE playlists SET description = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
+            params![description, color, now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns the origin of a playlist by its database ID.
+    pub fn get_playlist_origin(&self, id: i64) -> Result<String> {
+        let origin: String = self.conn.query_row(
+            "SELECT COALESCE(origin, 'itunes') FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(origin)
+    }
+
+    /// Returns the track count for a playlist.
+    pub fn get_playlist_track_count(&self, playlist_id: i64) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?1",
+            params![playlist_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 
     pub fn get_track_persistent_id(&self, id: i64) -> Result<String> {

@@ -25,11 +25,30 @@ pub struct Track {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Playlist {
     pub id: i64,               // Database ID
-    pub persistent_id: String, // From iTunes XML
+    pub persistent_id: String, // From iTunes XML or TD-xxx for TagDeck-native
     pub parent_persistent_id: Option<String>,
     pub name: String,
     pub is_folder: bool,
     pub track_ids: Option<Vec<String>>, // Persistent IDs of tracks
+    // Playlist management fields
+    #[serde(default = "default_origin")]
+    pub origin: String,                    // "itunes" | "tagdeck"
+    #[serde(default)]
+    pub itunes_sync_enabled: bool,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub sort_position: i64,
+    #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
+fn default_origin() -> String {
+    "itunes".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
