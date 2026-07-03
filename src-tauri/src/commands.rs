@@ -1675,16 +1675,34 @@ pub async fn set_library_config(
 }
 
 #[tauri::command]
+pub async fn check_apple_music_available() -> bool {
+    crate::apple_music::is_apple_music_available()
+}
+
+#[tauri::command]
 pub async fn import_files(
     app: tauri::AppHandle,
     file_paths: Vec<String>,
     target_playlist_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<ImportSummary, String> {
-    // Load config once
+    // Load config once (used for standalone path)
     let config = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         LibraryConfig::load(&db).map_err(|e| e.to_string())?
+    };
+
+    // Detect Apple Music availability once before the loop
+    let apple_music_available = crate::apple_music::is_apple_music_available();
+
+    // Resolve target playlist info once (origin + persistent ID) so we can sync to Apple Music after each import
+    let target_playlist_info: Option<(String, String)> = if let Some(pid) = target_playlist_id {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let origin = db.get_playlist_origin(pid).unwrap_or_default();
+        let ppid = db.get_playlist_persistent_id(pid).unwrap_or_default();
+        Some((origin, ppid))
+    } else {
+        None
     };
 
     // Recursively collect all audio files from the provided paths
@@ -1708,10 +1726,14 @@ pub async fn import_files(
             continue;
         }
 
-        // Check duplicate
+        // Check duplicate (by source path in local DB)
         {
             let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-            if let Ok(Some(_)) = db.find_track_by_path(&source_str) {
+            if let Ok(Some(existing_id)) = db.find_track_by_path(&source_str) {
+                // Still add existing track to the target playlist if requested
+                if target_playlist_id.is_some() {
+                    imported_track_ids.push(existing_id);
+                }
                 results.push(ImportResult {
                     success: false,
                     original_path: source_str,
@@ -1722,93 +1744,174 @@ pub async fn import_files(
             }
         }
 
-        // Read metadata
-        let meta = match crate::metadata::read_full_metadata(source) {
-            Ok(m) => m,
-            Err(e) => {
-                results.push(ImportResult {
-                    success: false,
-                    original_path: source_str,
-                    new_path: None,
-                    error: Some(format!("Failed to read metadata: {}", e)),
-                });
-                continue;
+        if apple_music_available {
+            // ── Apple Music path ──────────────────────────────────────────────
+            // Check if Apple Music already has this file to prevent duplicates on re-import.
+            // This handles the case where the file was previously imported and moved to Apple's
+            // organized folder — the DB check above only matches the source path.
+            let existing_pid = crate::apple_music::find_track_in_music_by_path(&source_str)
+                .unwrap_or(None);
+
+            let apple_pid_result = if let Some(pid) = existing_pid {
+                app.state::<crate::logging::LogState>().add_log(
+                    "INFO",
+                    &format!("File already in Apple Music library, skipping re-add: {}", source_str),
+                    &app,
+                );
+                Ok(pid)
+            } else {
+                crate::apple_music::add_file_to_music_library(&source_str)
+            };
+
+            match apple_pid_result {
+                Ok(apple_pid) => {
+                    // Fetch the full track data back (gets Apple's final file path)
+                    match crate::apple_music::get_tracks_by_persistent_ids(&[apple_pid.clone()]) {
+                        Ok(apple_tracks) if !apple_tracks.is_empty() => {
+                            let apple_track = &apple_tracks[0];
+                            let track_id = {
+                                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                                db.insert_track(apple_track).map_err(|e| e.to_string())?;
+                                db.get_track_id_by_persistent_id(&apple_pid)
+                                    .map_err(|e| e.to_string())?
+                                    .unwrap_or(0)
+                            };
+                            // Add to Apple Music playlist if the target playlist is iTunes-origin
+                            if let Some((ref origin, ref ppid)) = target_playlist_info {
+                                if origin == "itunes" && !ppid.is_empty() {
+                                    if let Err(e) = crate::apple_music::add_track_to_playlist(&apple_pid, ppid) {
+                                        let msg = format!("Failed to add track to Apple Music playlist: {}", e);
+                                        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                                    }
+                                }
+                            }
+                            if track_id > 0 {
+                                imported_track_ids.push(track_id);
+                            }
+                            results.push(ImportResult {
+                                success: true,
+                                original_path: source_str.clone(),
+                                new_path: Some(apple_track.file_path.clone()),
+                                error: None,
+                            });
+                            app.state::<crate::logging::LogState>().add_log(
+                                "INFO",
+                                &format!("Imported via Apple Music: {}", source_str),
+                                &app,
+                            );
+                        }
+                        Ok(_) => {
+                            results.push(ImportResult {
+                                success: false,
+                                original_path: source_str,
+                                new_path: None,
+                                error: Some("Added to Apple Music but could not retrieve track data".to_string()),
+                            });
+                        }
+                        Err(e) => {
+                            results.push(ImportResult {
+                                success: false,
+                                original_path: source_str,
+                                new_path: None,
+                                error: Some(format!("Failed to fetch track from Apple Music: {}", e)),
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    results.push(ImportResult {
+                        success: false,
+                        original_path: source_str,
+                        new_path: None,
+                        error: Some(format!("Failed to add to Apple Music: {}", e)),
+                    });
+                }
             }
-        };
+        } else {
+            // ── Standalone path ───────────────────────────────────────────────
+            // Apple Music is not present. TagDeck manages the file itself.
 
-        // Import (copy / move / in-place)
-        let dest = match import_file(source, &config, &meta) {
-            Ok(p) => p,
-            Err(e) => {
-                results.push(ImportResult {
-                    success: false,
-                    original_path: source_str,
-                    new_path: None,
-                    error: Some(format!("Import failed: {}", e)),
-                });
-                continue;
-            }
-        };
+            // Read metadata
+            let meta = match crate::metadata::read_full_metadata(source) {
+                Ok(m) => m,
+                Err(e) => {
+                    results.push(ImportResult {
+                        success: false,
+                        original_path: source_str,
+                        new_path: None,
+                        error: Some(format!("Failed to read metadata: {}", e)),
+                    });
+                    continue;
+                }
+            };
 
-        let dest_str = dest.to_string_lossy().to_string();
+            // Copy / move / in-place based on LibraryConfig
+            let dest = match import_file(source, &config, &meta) {
+                Ok(p) => p,
+                Err(e) => {
+                    results.push(ImportResult {
+                        success: false,
+                        original_path: source_str,
+                        new_path: None,
+                        error: Some(format!("Import failed: {}", e)),
+                    });
+                    continue;
+                }
+            };
 
-        // Determine file size from the destination
-        let size_bytes = std::fs::metadata(&dest)
-            .map(|m| m.len() as i64)
-            .unwrap_or(0);
+            let dest_str = dest.to_string_lossy().to_string();
+            let size_bytes = std::fs::metadata(&dest)
+                .map(|m| m.len() as i64)
+                .unwrap_or(0);
+            let file_format = dest
+                .extension()
+                .and_then(|ext: &std::ffi::OsStr| ext.to_str())
+                .unwrap_or("unknown")
+                .to_uppercase();
 
-        // File extension as format string
-        let file_format = dest
-            .extension()
-            .and_then(|ext: &std::ffi::OsStr| ext.to_str())
-            .unwrap_or("unknown")
-            .to_uppercase();
+            let persistent_id = format!("TD-{}", uuid_v4_simple());
 
-        // Generate a unique persistent_id for non-iTunes tracks
-        let persistent_id = format!("TD-{}", uuid_v4_simple());
+            let track = crate::models::Track {
+                id: 0,
+                persistent_id: persistent_id.clone(),
+                file_path: dest_str.clone(),
+                artist: meta.artist.clone(),
+                title: meta.title.clone(),
+                album: meta.album.clone(),
+                comment_raw: meta.comment.clone(),
+                grouping_raw: meta.grouping.clone(),
+                duration_secs: meta.duration_secs,
+                format: file_format,
+                size_bytes,
+                bit_rate: meta.bit_rate,
+                modified_date: 0,
+                rating: 0,
+                date_added: 0,
+                bpm: meta.bpm.unwrap_or(0),
+                missing: false,
+            };
 
-        // Build track model
-        let track = crate::models::Track {
-            id: 0,
-            persistent_id: persistent_id.clone(),
-            file_path: dest_str.clone(),
-            artist: meta.artist.clone(),
-            title: meta.title.clone(),
-            album: meta.album.clone(),
-            comment_raw: meta.comment.clone(),
-            grouping_raw: meta.grouping.clone(),
-            duration_secs: meta.duration_secs,
-            format: file_format,
-            size_bytes,
-            bit_rate: meta.bit_rate,
-            modified_date: 0,
-            rating: 0,
-            date_added: 0,
-            bpm: meta.bpm.unwrap_or(0),
-            missing: false,
-        };
+            let track_id = {
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                db.insert_imported_track(&track, Some(&source_str))
+                    .map_err(|e| e.to_string())?
+            };
 
-        // Insert into database
-        let track_id = {
-            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-            db.insert_imported_track(&track, Some(&source_str))
-                .map_err(|e| e.to_string())?
-        };
+            imported_track_ids.push(track_id);
 
-        imported_track_ids.push(track_id);
+            results.push(ImportResult {
+                success: true,
+                original_path: source_str.clone(),
+                new_path: Some(dest_str),
+                error: None,
+            });
 
-        results.push(ImportResult {
-            success: true,
-            original_path: source_str.clone(),
-            new_path: Some(dest_str),
-            error: None,
-        });
-
-        app.state::<crate::logging::LogState>().add_log(
-            "INFO",
-            &format!("Imported: {}", source_str),
-            &app,
-        );
+            app.state::<crate::logging::LogState>().add_log(
+                "INFO",
+                &format!("Imported (standalone): {}", source_str),
+                &app,
+            );
+        }
     }
 
     // Add to playlist if requested
@@ -1850,6 +1953,7 @@ pub async fn import_files(
         skipped,
         failed,
         results,
+        imported_track_ids: imported_track_ids.clone(),
     })
 }
 

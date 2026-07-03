@@ -12,6 +12,7 @@ interface SettingsPanelProps {
     currentAccent: string;
     onAccentChange: (color: string) => void;
     onRefresh: () => void;
+    appleMusicAvailable: boolean;
 }
 
 interface SyncInfo {
@@ -56,14 +57,15 @@ function formatBytes(bytes: number): string {
     return `${(bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-export function SettingsPanel({ 
-    isOpen, 
-    onClose, 
-    currentTheme, 
-    onThemeChange, 
-    currentAccent, 
+export function SettingsPanel({
+    isOpen,
+    onClose,
+    currentTheme,
+    onThemeChange,
+    currentAccent,
     onAccentChange,
-    onRefresh 
+    onRefresh,
+    appleMusicAvailable,
 }: SettingsPanelProps) {
     const panelRef = useRef<HTMLDivElement>(null);
     const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
@@ -266,58 +268,65 @@ export function SettingsPanel({
                             <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No sync history found.</span>
                         )}
                         
-                        <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Real-Time Sync</span>
-                            <button 
-                                onClick={handleRealTimeSyncToggle}
-                                style={{
-                                    width: '40px', height: '22px',
-                                    background: realTimeSyncEnabled ? 'var(--accent-color)' : 'var(--bg-secondary)',
-                                    borderRadius: '11px', position: 'relative',
-                                    border: '1px solid var(--border-color)', cursor: 'pointer',
-                                    transition: 'background 0.2s', padding: 0
-                                }}
-                            >
-                                <div style={{
-                                    width: '18px', height: '18px', background: 'white', borderRadius: '50%',
-                                    position: 'absolute', top: '1px',
-                                    left: realTimeSyncEnabled ? '19px' : '1px',
-                                    transition: 'left 0.2s', boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
-                                }} />
-                            </button>
-                        </div>
-
-                        <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <button 
-                                onClick={handleMusicAppImport} 
-                                disabled={importing} 
-                                className="btn btn-primary" 
-                                style={{ 
-                                    fontSize: '13px', padding: '6px 12px', 
-                                    background: 'var(--accent-hover)', border: '1px solid var(--accent-color)',
-                                    color: 'white', borderRadius: '6px',
-                                    cursor: importing ? 'not-allowed' : 'pointer',
-                                    display: 'flex', alignItems: 'center', gap: '6px'
-                                }}
-                            >
-                                {importing ? <Loader2 size={14} className="spin" /> : null}
-                                {importing ? 'Syncing...' : 'Sync iTunes'}
-                            </button>
-                            <button 
-                                onClick={handleXMLImport} 
-                                disabled={importing} 
-                                className="btn" 
-                                style={{ 
-                                    fontSize: '13px', padding: '6px 12px', 
-                                    background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
-                                    color: 'var(--text-primary)', borderRadius: '6px',
-                                    cursor: importing ? 'not-allowed' : 'pointer'
-                                }}
-                            >
-                                Import XML
-                            </button>
-                        </div>
-                        {status && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '8px' }}>{status}</div>}
+                        {appleMusicAvailable ? (
+                            <>
+                                <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Real-Time Sync</span>
+                                    <button
+                                        onClick={handleRealTimeSyncToggle}
+                                        style={{
+                                            width: '40px', height: '22px',
+                                            background: realTimeSyncEnabled ? 'var(--accent-color)' : 'var(--bg-secondary)',
+                                            borderRadius: '11px', position: 'relative',
+                                            border: '1px solid var(--border-color)', cursor: 'pointer',
+                                            transition: 'background 0.2s', padding: 0
+                                        }}
+                                    >
+                                        <div style={{
+                                            width: '18px', height: '18px', background: 'white', borderRadius: '50%',
+                                            position: 'absolute', top: '1px',
+                                            left: realTimeSyncEnabled ? '19px' : '1px',
+                                            transition: 'left 0.2s', boxShadow: '0 1px 2px rgba(0,0,0,0.2)'
+                                        }} />
+                                    </button>
+                                </div>
+                                <div style={{ marginTop: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                    <button
+                                        onClick={handleMusicAppImport}
+                                        disabled={importing}
+                                        className="btn btn-primary"
+                                        style={{
+                                            fontSize: '13px', padding: '6px 12px',
+                                            background: 'var(--accent-hover)', border: '1px solid var(--accent-color)',
+                                            color: 'white', borderRadius: '6px',
+                                            cursor: importing ? 'not-allowed' : 'pointer',
+                                            display: 'flex', alignItems: 'center', gap: '6px'
+                                        }}
+                                    >
+                                        {importing ? <Loader2 size={14} className="spin" /> : null}
+                                        {importing ? 'Syncing...' : 'Sync iTunes'}
+                                    </button>
+                                    <button
+                                        onClick={handleXMLImport}
+                                        disabled={importing}
+                                        className="btn"
+                                        style={{
+                                            fontSize: '13px', padding: '6px 12px',
+                                            background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+                                            color: 'var(--text-primary)', borderRadius: '6px',
+                                            cursor: importing ? 'not-allowed' : 'pointer'
+                                        }}
+                                    >
+                                        Import XML
+                                    </button>
+                                </div>
+                                {status && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '8px' }}>{status}</div>}
+                            </>
+                        ) : (
+                            <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                                Apple Music not found — running in standalone mode. Drag audio files onto the window to import them.
+                            </div>
+                        )}
                     </div>
 
                     {/* Playback */}
@@ -357,8 +366,8 @@ export function SettingsPanel({
                         </div>
                     </div>
 
-                    {/* Library Management */}
-                    <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                    {/* Library Management — standalone mode only */}
+                    {!appleMusicAvailable && <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
                         <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <HardDrive size={14} /> Library Management
                         </h4>
@@ -460,7 +469,7 @@ export function SettingsPanel({
                         <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', fontStyle: 'italic' }}>
                             Drag audio files onto the window to import them into your library.
                         </div>
-                    </div>
+                    </div>}
 
                 </div>{/* End Left Column */}
 

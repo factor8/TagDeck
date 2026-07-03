@@ -5,7 +5,7 @@ import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSe
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
-import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X, Info } from 'lucide-react';
+import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X, Info, FolderOpen } from 'lucide-react';
 import { SettingsPanel } from './components/SettingsPanel';
 import { SearchHelpPanel } from './components/SearchHelpPanel';
 import { AppLogo } from './components/AppLogo';
@@ -58,6 +58,7 @@ function App() {
   const [syncEnabledTrigger, setSyncEnabledTrigger] = useState(0);
   const [copyPlaylistsTarget, setCopyPlaylistsTarget] = useState<Track | null>(null);
   const [scrollToTrackId, setScrollToTrackId] = useState<number | null>(null);
+  const [appleMusicAvailable, setAppleMusicAvailable] = useState(true);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -74,6 +75,15 @@ function App() {
     };
     window.addEventListener('player-mode-changed', handlePlayerModeChange);
     return () => window.removeEventListener('player-mode-changed', handlePlayerModeChange);
+  }, []);
+
+  useEffect(() => {
+    invoke<boolean>('check_apple_music_available')
+      .then(available => {
+        setAppleMusicAvailable(available);
+        console.log('[App] Apple Music available:', available);
+      })
+      .catch(() => setAppleMusicAvailable(false));
   }, []);
 
   useEffect(() => {
@@ -116,7 +126,12 @@ function App() {
     let isMounted = true;
 
     const setupListener = async () => {
-      // Check setting first
+      // Check Apple Music availability and setting
+      if (!appleMusicAvailable) {
+          console.log("[App] Real-Time Sync skipped — Apple Music not available.");
+          return;
+      }
+
       const savedSetting = localStorage.getItem('app_real_time_sync_enabled');
       const isEnabled = savedSetting !== 'false'; // Default to true
 
@@ -216,12 +231,12 @@ function App() {
       isMounted = false;
       if (unlistenFn) unlistenFn();
     };
-  }, [syncEnabledTrigger]);
+  }, [syncEnabledTrigger, appleMusicAvailable]);
 
   const sensors = useSensors(
       useSensor(PointerSensor, {
           activationConstraint: {
-              distance: 8,
+              distance: 5,
           },
       })
   );
@@ -267,6 +282,12 @@ function App() {
           return;
       }
       
+      // Track -> Track reorder (within playlist)
+      if (activeId.startsWith('track-') && overId.startsWith('track-')) {
+          trackListRef.current?.handleReorderDragEnd(event);
+          return;
+      }
+
       // Column Reorder
       if (trackListRef.current) {
           if (!activeId.startsWith('track-') && !activeId.startsWith('playlist-')) {
@@ -364,6 +385,42 @@ function App() {
             }
         }
 
+        // Arrow keys: Up/Down move selection, Left/Right change playing track
+        if (!isInput && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                trackListRef.current?.selectNext();
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                trackListRef.current?.selectPrev();
+                return;
+            }
+            if (e.key === 'ArrowRight') {
+                if (playingTrack) {
+                    e.preventDefault();
+                    const next = trackListRef.current?.getNextTrack(playingTrack.id);
+                    if (next) {
+                        setPlayingTrack(next);
+                        setShouldAutoPlay(true);
+                    }
+                    return;
+                }
+            }
+            if (e.key === 'ArrowLeft') {
+                if (playingTrack) {
+                    e.preventDefault();
+                    const prev = trackListRef.current?.getPrevTrack(playingTrack.id);
+                    if (prev) {
+                        setPlayingTrack(prev);
+                        setShouldAutoPlay(true);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Undo / Redo
         // If focusing input, let browser handle native text undo
         if (!isInput && (e.metaKey || e.ctrlKey)) {
@@ -402,7 +459,7 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [showSuccess, showError]);
+  }, [showSuccess, showError, playingTrack]);
 
   useEffect(() => {
     const handleLogsSnapshot = (e: KeyboardEvent) => {
@@ -444,7 +501,87 @@ function App() {
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
   };
+
+  const handleImportFiles = useCallback(async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({
+        multiple: true,
+        filters: [{ name: 'Audio Files', extensions: ['mp3', 'm4a', 'aiff', 'aif', 'wav', 'flac', 'alac'] }],
+        title: 'Import Audio Files',
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
+
+      const result = await invoke<{ imported: number; skipped: number; failed: number }>(
+        'import_files',
+        { filePaths: paths, targetPlaylistId: selectedPlaylistId ?? null }
+      );
+      handleRefresh();
+      if (result.imported > 0) {
+        showSuccess(`Imported ${result.imported} track${result.imported !== 1 ? 's' : ''}`);
+      } else if (result.skipped > 0) {
+        showSuccess(`${result.skipped} track${result.skipped !== 1 ? 's' : ''} already in library`);
+      }
+      if (result.failed > 0) {
+        showError(`${result.failed} file${result.failed !== 1 ? 's' : ''} failed to import`);
+      }
+    } catch (err) {
+      showError(`Import failed: ${err}`);
+    }
+  }, [selectedPlaylistId, showSuccess, showError]);
   
+  // Called when files are dropped onto the ImportDropZone fallback (background area)
+  const handleImportComplete = useCallback((summary: import('./components/ImportDropZone').ImportSummary) => {
+    handleRefresh();
+    if (summary.imported > 0) {
+      showSuccess(`Imported ${summary.imported} track${summary.imported !== 1 ? 's' : ''}`);
+    } else if (summary.skipped > 0) {
+      showSuccess(`${summary.skipped} track${summary.skipped !== 1 ? 's' : ''} already in library`);
+    }
+    if (summary.failed > 0) {
+      showError(`${summary.failed} file${summary.failed !== 1 ? 's' : ''} failed to import`);
+    }
+  }, [showSuccess, showError]);
+
+  // Called when files are dropped onto a specific TrackList row
+  const handleTrackListFileDrop = useCallback(async (paths: string[], afterTrackId: number | null) => {
+    if (!selectedPlaylistId) return;
+    try {
+      const result = await invoke<import('./components/ImportDropZone').ImportSummary>(
+        'import_files',
+        { filePaths: paths, targetPlaylistId: selectedPlaylistId }
+      );
+      if (result.imported > 0 && afterTrackId !== null && result.imported_track_ids.length > 0) {
+        // Reorder: insert the new tracks after the drop target
+        const currentOrder = trackListRef.current?.getOrderedTrackIds() ?? [];
+        const insertAfterIdx = currentOrder.indexOf(afterTrackId);
+        const newOrder = [...currentOrder];
+        // Remove newly imported IDs from wherever they are (end), then splice at position
+        const importedSet = new Set(result.imported_track_ids);
+        const base = newOrder.filter(id => !importedSet.has(id));
+        const insertAt = insertAfterIdx === -1 ? base.length : base.indexOf(afterTrackId) + 1;
+        base.splice(insertAt, 0, ...result.imported_track_ids);
+        await invoke('reorder_playlist_tracks', {
+          playlistId: selectedPlaylistId,
+          orderedTrackIds: base,
+        });
+      }
+      handleRefresh();
+      if (result.imported > 0) {
+        showSuccess(`Imported ${result.imported} track${result.imported !== 1 ? 's' : ''}`);
+      } else if (result.skipped > 0) {
+        showSuccess(`${result.skipped} track${result.skipped !== 1 ? 's' : ''} already in library`);
+      }
+      if (result.failed > 0) {
+        showError(`${result.failed} file${result.failed !== 1 ? 's' : ''} failed to import`);
+      }
+    } catch (err) {
+      showError(`Import failed: ${err}`);
+    }
+  }, [selectedPlaylistId, showSuccess, showError]);
+
   const handleSelectionChange = useCallback((ids: Set<number>, lastId: number | null, primaryTrack: Track | null, commonTags: string[]) => {
     setSelectedTrackIds(ids);
     setLastSelectedTrackId(lastId);
@@ -647,7 +784,23 @@ function App() {
                 {isRightCollapsed ? <PanelRightOpen size={20} /> : <PanelRightClose size={20} />}
             </button>
             
-            <button 
+            <button
+                onClick={handleImportFiles}
+                style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    padding: '4px',
+                    display: 'flex',
+                    alignItems: 'center'
+                }}
+                title="Import Files…"
+            >
+                <FolderOpen size={20} />
+            </button>
+
+            <button
                 onClick={() => setIsSettingsOpen(!isSettingsOpen)}
                 onMouseDown={(e) => e.stopPropagation()}
                 style={{
@@ -663,14 +816,15 @@ function App() {
             >
                 <Settings size={20} />
             </button>
-            <SettingsPanel 
-                isOpen={isSettingsOpen} 
+            <SettingsPanel
+                isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
                 currentTheme={theme}
                 onThemeChange={setTheme}
                 currentAccent={accentColor}
                 onAccentChange={setAccentColor}
                 onRefresh={handleRefresh}
+                appleMusicAvailable={appleMusicAvailable}
             />
         </div>
       </header>
@@ -742,6 +896,7 @@ function App() {
               }}
               scrollToTrackId={scrollToTrackId}
               onScrollToTrackComplete={() => setScrollToTrackId(null)}
+              onFileDrop={selectedPlaylistId != null ? handleTrackListFileDrop : undefined}
             />
             </div>
         </Panel>
@@ -875,9 +1030,9 @@ function App() {
         />
       )}
 
-      {/* File import drop zone (full-window overlay) */}
+      {/* File import handler — no blocking overlay, per-component drop zones handle targeting */}
       <ImportDropZone
-        onImportComplete={handleRefresh}
+        onImportComplete={handleImportComplete}
         targetPlaylistId={selectedPlaylistId}
       />
     </>

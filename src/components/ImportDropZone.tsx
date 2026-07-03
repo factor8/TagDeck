@@ -1,271 +1,118 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-interface ImportResult {
-  success: boolean;
-  original_path: string;
-  new_path?: string;
-  error?: string;
-}
-
-interface ImportSummary {
+export interface ImportSummary {
   total: number;
   imported: number;
   skipped: number;
   failed: number;
-  results: ImportResult[];
+  imported_track_ids: number[];
+  results: { success: boolean; original_path: string; new_path?: string; error?: string }[];
 }
 
 interface ImportDropZoneProps {
-  /** Called after a successful import so the parent can refresh track lists. */
-  onImportComplete?: () => void;
-  /** If provided, files will also be added to this playlist. */
+  /** Called with the summary after every import attempt. */
+  onImportComplete?: (summary: ImportSummary) => void;
+  /** Notify parent when an external file drag enters/leaves the window. */
+  onDragChange?: (active: boolean) => void;
+  /** If provided, files dropped on the background fall back to this playlist. */
   targetPlaylistId?: number | null;
 }
 
 /**
- * Full-window drop zone overlay for importing audio files into the TagDeck
- * library. Shows a visual indicator when files are dragged over the window
- * and displays import progress / results when a drop occurs.
+ * Invisible import handler — no blocking overlay.
+ *
+ * Listens to Tauri native drag events to detect external file drags and
+ * fires tauri://drag-drop as a fallback when the drop isn't caught by a
+ * more specific component (e.g. a sidebar playlist row or a track-list row).
  */
-export function ImportDropZone({ onImportComplete, targetPlaylistId }: ImportDropZoneProps) {
-  const [isDragOver, setIsDragOver] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  const [summary, setSummary] = useState<ImportSummary | null>(null);
-  const dragCounter = useRef(0);
+export function ImportDropZone({ onImportComplete, onDragChange, targetPlaylistId }: ImportDropZoneProps) {
+  const tauriDropHandled = useRef(false);
+  // Track drag state so we can suppress the Tauri fallback when HTML5 already handled it.
+  const isDragActive = useRef(false);
 
-  // We use a counter rather than a simple boolean so nested elements don't
-  // cause flicker as the mouse moves between children.
-  const handleDragEnter = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current += 1;
-    if (dragCounter.current === 1) {
-      // Only show overlay if the drag payload contains files
-      if (e.dataTransfer?.types.includes('Files')) {
-        setIsDragOver(true);
-      }
-    }
-  }, []);
-
-  const handleDragOver = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = 'copy';
-    }
-  }, []);
-
-  const handleDragLeave = useCallback((e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current -= 1;
-    if (dragCounter.current <= 0) {
-      dragCounter.current = 0;
-      setIsDragOver(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback(async (e: DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    dragCounter.current = 0;
-    setIsDragOver(false);
-
-    if (!e.dataTransfer) return;
-
-    // Tauri injects a `path` property on each File object
-    const files = Array.from(e.dataTransfer.files);
-    const paths = files
-      .map((f) => (f as unknown as { path?: string }).path)
-      .filter((p): p is string => Boolean(p));
-
-    if (paths.length === 0) return;
-
-    setIsImporting(true);
-    setSummary(null);
-
+  const runImport = useCallback(async (paths: string[], playlistId?: number | null): Promise<ImportSummary | null> => {
+    if (paths.length === 0) return null;
     try {
       const result = await invoke<ImportSummary>('import_files', {
         filePaths: paths,
-        targetPlaylistId: targetPlaylistId ?? null,
+        targetPlaylistId: playlistId ?? targetPlaylistId ?? null,
       });
-
-      setSummary(result);
-      onImportComplete?.();
-
-      // Auto-dismiss after 4s if everything succeeded
-      if (result.failed === 0 && result.skipped === 0) {
-        setTimeout(() => {
-          setSummary(null);
-          setIsImporting(false);
-        }, 4000);
-      }
+      onImportComplete?.(result);
+      return result;
     } catch (err) {
-      console.error('Import failed:', err);
-      setSummary({
+      const errorSummary: ImportSummary = {
         total: paths.length,
         imported: 0,
         skipped: 0,
         failed: paths.length,
+        imported_track_ids: [],
         results: [{ success: false, original_path: paths[0], error: String(err) }],
-      });
+      };
+      onImportComplete?.(errorSummary);
+      return errorSummary;
     }
   }, [onImportComplete, targetPlaylistId]);
 
+  // ── Tauri native drag events ───────────────────────────────────────────────
   useEffect(() => {
-    document.addEventListener('dragenter', handleDragEnter);
-    document.addEventListener('dragover', handleDragOver);
-    document.addEventListener('dragleave', handleDragLeave);
-    document.addEventListener('drop', handleDrop);
+    const unlisteners: Array<() => void> = [];
 
-    return () => {
-      document.removeEventListener('dragenter', handleDragEnter);
-      document.removeEventListener('dragover', handleDragOver);
-      document.removeEventListener('dragleave', handleDragLeave);
-      document.removeEventListener('drop', handleDrop);
-    };
-  }, [handleDragEnter, handleDragOver, handleDragLeave, handleDrop]);
+    listen('tauri://drag-enter', () => {
+      isDragActive.current = true;
+      onDragChange?.(true);
+    }).then(fn => unlisteners.push(fn));
 
-  // Also listen for Tauri's native file-drop event (fallback)
-  useEffect(() => {
-    const unlisten = listen<{ paths: string[] }>('tauri://drag-drop', async (event) => {
-      const paths = event.payload.paths;
-      if (!paths || paths.length === 0) return;
+    listen('tauri://drag-leave', () => {
+      isDragActive.current = false;
+      onDragChange?.(false);
+    }).then(fn => unlisteners.push(fn));
 
-      setIsImporting(true);
-      setSummary(null);
+    listen<{ paths: string[]; position: { x: number; y: number } }>(
+      'tauri://drag-drop',
+      async (event) => {
+        isDragActive.current = false;
+        onDragChange?.(false);
 
-      try {
-        const result = await invoke<ImportSummary>('import_files', {
-          filePaths: paths,
-          targetPlaylistId: targetPlaylistId ?? null,
-        });
-
-        setSummary(result);
-        onImportComplete?.();
-
-        if (result.failed === 0 && result.skipped === 0) {
-          setTimeout(() => {
-            setSummary(null);
-            setIsImporting(false);
-          }, 4000);
+        // Give HTML5 drop handlers a tick to mark themselves first.
+        await new Promise(r => setTimeout(r, 0));
+        if (tauriDropHandled.current) {
+          tauriDropHandled.current = false;
+          return;
         }
-      } catch (err) {
-        console.error('Import (native drop) failed:', err);
+
+        const paths = event.payload?.paths ?? [];
+        await runImport(paths);
       }
-    });
+    ).then(fn => unlisteners.push(fn));
 
-    return () => { unlisten.then((fn) => fn()); };
-  }, [onImportComplete, targetPlaylistId]);
+    return () => unlisteners.forEach(fn => fn());
+  }, [runImport, onDragChange]);
 
-  // Nothing visible when idle
-  if (!isDragOver && !isImporting) return null;
+  // ── HTML5 events — mark handled so Tauri fallback is suppressed ───────────
+  useEffect(() => {
+    const handleDrop = () => {
+      // Any HTML5 drop (from sidebar rows or track-list rows) marks itself here.
+      tauriDropHandled.current = true;
+    };
 
-  return (
-    <div
-      className="import-drop-zone"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 10000,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: isDragOver
-          ? 'rgba(59, 130, 235, 0.15)'
-          : 'rgba(0, 0, 0, 0.85)',
-        backdropFilter: 'blur(8px)',
-        border: isDragOver ? '3px dashed var(--accent-color, #3b82f6)' : 'none',
-        transition: 'background 0.2s, border 0.2s',
-      }}
-      onDragOver={(e) => e.preventDefault()}
-    >
-      {/* Import in progress / results */}
-      {isImporting && summary ? (
-        <div
-          style={{
-            background: 'var(--bg-secondary, #1e293b)',
-            borderRadius: 12,
-            padding: 30,
-            maxWidth: 500,
-            width: '90%',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-            color: 'var(--text-primary, #fff)',
-            textAlign: 'center',
-          }}
-        >
-          <h2 style={{ margin: '0 0 16px', fontSize: 22 }}>Import Complete</h2>
+    document.addEventListener('drop', handleDrop, true); // capture phase
+    return () => document.removeEventListener('drop', handleDrop, true);
+  }, []);
 
-          <div style={{ display: 'flex', gap: 24, justifyContent: 'center', marginBottom: 20 }}>
-            <Stat label="imported" value={summary.imported} color="#10b981" />
-            {summary.skipped > 0 && <Stat label="skipped" value={summary.skipped} color="#f59e0b" />}
-            {summary.failed > 0 && <Stat label="failed" value={summary.failed} color="#ef4444" />}
-          </div>
-
-          {summary.failed > 0 && (
-            <div
-              style={{
-                background: 'rgba(239, 68, 68, 0.1)',
-                borderRadius: 8,
-                padding: 12,
-                maxHeight: 180,
-                overflowY: 'auto',
-                textAlign: 'left',
-                fontSize: 13,
-                marginBottom: 16,
-              }}
-            >
-              <strong style={{ color: '#ef4444' }}>Errors:</strong>
-              <ul style={{ margin: '8px 0 0', padding: '0 0 0 16px' }}>
-                {summary.results
-                  .filter((r) => !r.success && r.error && !r.error.includes('Already in library'))
-                  .map((r, i) => (
-                    <li key={i} style={{ color: '#ef4444', padding: '2px 0' }}>
-                      <strong>{r.original_path.split('/').pop()}</strong>: {r.error}
-                    </li>
-                  ))}
-              </ul>
-            </div>
-          )}
-
-          <button
-            onClick={() => { setSummary(null); setIsImporting(false); }}
-            style={{
-              padding: '8px 24px',
-              borderRadius: 6,
-              border: 'none',
-              background: 'var(--accent-color, #3b82f6)',
-              color: '#fff',
-              fontSize: 14,
-              cursor: 'pointer',
-            }}
-          >
-            Close
-          </button>
-        </div>
-      ) : (
-        /* Drag prompt overlay */
-        <div style={{ textAlign: 'center', userSelect: 'none', color: '#fff' }}>
-          <div style={{ fontSize: 72, marginBottom: 16, animation: 'importBounce 1s ease-in-out infinite' }}>
-            📁
-          </div>
-          <h2 style={{ fontSize: 28, margin: '0 0 8px' }}>Drop files to import</h2>
-          <p style={{ fontSize: 15, opacity: 0.7, margin: 0 }}>
-            Supported: MP3, M4A, AIFF, WAV, FLAC
-          </p>
-        </div>
-      )}
-    </div>
-  );
+  // This component renders nothing — visual feedback is handled by the
+  // individual drop targets (sidebar rows, track-list rows).
+  return null;
 }
 
-function Stat({ label, value, color }: { label: string; value: number; color: string }) {
-  return (
-    <div style={{ textAlign: 'center' }}>
-      <div style={{ fontSize: 32, fontWeight: 700, color }}>{value}</div>
-      <div style={{ fontSize: 13, opacity: 0.7 }}>{label}</div>
-    </div>
-  );
+// Convenience export so callers can invoke a file import directly.
+export async function importFiles(
+  paths: string[],
+  targetPlaylistId: number | null,
+): Promise<ImportSummary> {
+  return invoke<ImportSummary>('import_files', {
+    filePaths: paths,
+    targetPlaylistId,
+  });
 }

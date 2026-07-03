@@ -55,6 +55,8 @@ interface Props {
     onNavigateToPlaylist?: (playlistId: number, track: Track) => void;
     scrollToTrackId?: number | null;
     onScrollToTrackComplete?: () => void;
+    /** Called when files from the OS are dropped onto a specific row position. */
+    onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
 }
 
 interface ContextMenuState {
@@ -227,6 +229,9 @@ export interface TrackListHandle {
     getNextTrack: (fromId: number | null) => Track | null;
     getPrevTrack: (fromId: number | null) => Track | null;
     handleColumnReorder: (activeId: string, overId: string) => void;
+    handleReorderDragEnd: (event: DragEndEvent) => void;
+    /** Returns current visible track IDs in display order. Used for post-import reorder. */
+    getOrderedTrackIds: () => number[];
 }
 
 interface TrackRowProps {
@@ -240,19 +245,27 @@ interface TrackRowProps {
     handleRowClick: (track: Track, event: React.MouseEvent) => void;
     onTrackDoubleClick?: (track: Track) => void;
     onContextMenu: (e: React.MouseEvent) => void;
+    fileDropIndicator?: { trackId: number; isAbove: boolean } | null;
+    onFileDropIndicatorChange?: (indicator: { trackId: number; isAbove: boolean } | null) => void;
+    onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
+    prevTrackId?: number | null;
 }
 
-const TrackRow = ({ 
-    row, 
-    virtualRow, 
-    measureElement, 
-    isSelected, 
-    isPlaying, 
-    isMissing, 
+const TrackRow = ({
+    row,
+    virtualRow,
+    measureElement,
+    isSelected,
+    isPlaying,
+    isMissing,
     isReorderable,
-    handleRowClick, 
+    handleRowClick,
     onTrackDoubleClick,
-    onContextMenu 
+    onContextMenu,
+    fileDropIndicator,
+    onFileDropIndicatorChange,
+    onFileDrop,
+    prevTrackId,
 }: TrackRowProps) => {
     if (isReorderable) {
         return (
@@ -266,6 +279,10 @@ const TrackRow = ({
                 handleRowClick={handleRowClick}
                 onTrackDoubleClick={onTrackDoubleClick}
                 onContextMenu={onContextMenu}
+                fileDropIndicator={fileDropIndicator}
+                onFileDropIndicatorChange={onFileDropIndicatorChange}
+                onFileDrop={onFileDrop}
+                prevTrackId={prevTrackId}
             />
         );
     }
@@ -280,6 +297,10 @@ const TrackRow = ({
             handleRowClick={handleRowClick}
             onTrackDoubleClick={onTrackDoubleClick}
             onContextMenu={onContextMenu}
+            fileDropIndicator={fileDropIndicator}
+            onFileDropIndicatorChange={onFileDropIndicatorChange}
+            onFileDrop={onFileDrop}
+            prevTrackId={prevTrackId}
         />
     );
 };
@@ -294,11 +315,16 @@ interface TrackRowInnerProps {
     handleRowClick: (track: Track, event: React.MouseEvent) => void;
     onTrackDoubleClick?: (track: Track) => void;
     onContextMenu: (e: React.MouseEvent) => void;
+    fileDropIndicator?: { trackId: number; isAbove: boolean } | null;
+    onFileDropIndicatorChange?: (indicator: { trackId: number; isAbove: boolean } | null) => void;
+    onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
+    prevTrackId?: number | null;
 }
 
 const DraggableTrackRowInner = ({
     row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
-    handleRowClick, onTrackDoubleClick, onContextMenu
+    handleRowClick, onTrackDoubleClick, onContextMenu,
+    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId,
 }: TrackRowInnerProps) => {
     const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
         id: `track-${row.original.id}`,
@@ -313,6 +339,10 @@ const DraggableTrackRowInner = ({
             setNodeRef={setNodeRef} attributes={attributes} listeners={listeners}
             handleRowClick={handleRowClick} onTrackDoubleClick={onTrackDoubleClick}
             onContextMenu={onContextMenu}
+            fileDropIndicator={fileDropIndicator}
+            onFileDropIndicatorChange={onFileDropIndicatorChange}
+            onFileDrop={onFileDrop}
+            prevTrackId={prevTrackId}
         />
     );
 };
@@ -326,7 +356,8 @@ const skipDropAnimation: AnimateLayoutChanges = (args) => {
 
 const SortableTrackRowInner = ({
     row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
-    handleRowClick, onTrackDoubleClick, onContextMenu
+    handleRowClick, onTrackDoubleClick, onContextMenu,
+    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId,
 }: TrackRowInnerProps) => {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
         id: `track-${row.original.id}`,
@@ -342,6 +373,10 @@ const SortableTrackRowInner = ({
             transition={transition} setNodeRef={setNodeRef} attributes={attributes}
             listeners={listeners} handleRowClick={handleRowClick}
             onTrackDoubleClick={onTrackDoubleClick} onContextMenu={onContextMenu}
+            fileDropIndicator={fileDropIndicator}
+            onFileDropIndicatorChange={onFileDropIndicatorChange}
+            onFileDrop={onFileDrop}
+            prevTrackId={prevTrackId}
         />
     );
 };
@@ -362,24 +397,33 @@ interface TrackRowContentProps {
     handleRowClick: (track: Track, event: React.MouseEvent) => void;
     onTrackDoubleClick?: (track: Track) => void;
     onContextMenu: (e: React.MouseEvent) => void;
+    fileDropIndicator?: { trackId: number; isAbove: boolean } | null;
+    onFileDropIndicatorChange?: (indicator: { trackId: number; isAbove: boolean } | null) => void;
+    onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
+    prevTrackId?: number | null;
 }
 
 const TrackRowContent = ({
     row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
     isDragging, transform, transition, setNodeRef, attributes, listeners,
-    handleRowClick, onTrackDoubleClick, onContextMenu
+    handleRowClick, onTrackDoubleClick, onContextMenu,
+    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId,
 }: TrackRowContentProps) => {
+    const trackId = row.original.id;
+    const isDropAbove = fileDropIndicator?.trackId === trackId && fileDropIndicator.isAbove;
+    const isDropBelow = fileDropIndicator?.trackId === trackId && !fileDropIndicator.isAbove;
+
     const style: React.CSSProperties = {
         transform,
         transition,
         borderBottom: '1px solid var(--bg-secondary)',
-        background: isSelected 
-                ? 'rgba(59, 130, 246, 0.15)' 
-                : virtualRow.index % 2 === 1 
+        background: isSelected
+                ? 'rgba(59, 130, 246, 0.15)'
+                : virtualRow.index % 2 === 1
                     ? 'rgba(255, 255, 255, 0.02)'
                     : 'transparent',
-        color: isSelected 
-                ? 'var(--accent-color)' 
+        color: isSelected
+                ? 'var(--accent-color)'
                 : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
         fontWeight: isPlaying ? '600' : 'normal',
         opacity: isDragging ? 0.5 : (isMissing ? 0.5 : 1),
@@ -388,12 +432,55 @@ const TrackRowContent = ({
         WebkitUserSelect: 'none',
         position: 'relative',
         zIndex: isDragging ? 100 : 'auto',
+        boxShadow: isDropAbove
+            ? 'inset 0 2px 0 var(--accent-color, #3b82f6)'
+            : isDropBelow
+                ? 'inset 0 -2px 0 var(--accent-color, #3b82f6)'
+                : undefined,
+    };
+
+    const handleFileDragOver = (e: React.DragEvent<HTMLTableRowElement>) => {
+        if (!e.dataTransfer.types.includes('Files') || !onFileDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = 'copy';
+        const rect = e.currentTarget.getBoundingClientRect();
+        const isAbove = e.clientY < rect.top + rect.height / 2;
+        onFileDropIndicatorChange?.({ trackId, isAbove });
+    };
+
+    const handleFileDragLeave = (e: React.DragEvent<HTMLTableRowElement>) => {
+        if (!onFileDrop) return;
+        // Only clear if leaving to outside this element
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            onFileDropIndicatorChange?.(null);
+        }
+    };
+
+    const handleFileDrop = (e: React.DragEvent<HTMLTableRowElement>) => {
+        if (!e.dataTransfer.types.includes('Files') || !onFileDrop) return;
+        e.preventDefault();
+        e.stopPropagation();
+        e.nativeEvent.stopImmediatePropagation();
+        onFileDropIndicatorChange?.(null);
+
+        const files = Array.from(e.dataTransfer.files);
+        const paths = files
+            .map((f) => (f as unknown as { path?: string }).path)
+            .filter((p): p is string => Boolean(p));
+        if (paths.length === 0) return;
+
+        const rect = e.currentTarget.getBoundingClientRect();
+        const isAbove = e.clientY < rect.top + rect.height / 2;
+        // afterTrackId: if dropping above this row, insert after the previous track
+        const afterTrackId = isAbove ? (prevTrackId ?? null) : trackId;
+        onFileDrop(paths, afterTrackId);
     };
 
     return (
-        <tr 
+        <tr
             key={row.id}
-            data-index={virtualRow.index} 
+            data-index={virtualRow.index}
             ref={(node) => {
                 measureElement(node);
                 setNodeRef(node);
@@ -402,13 +489,16 @@ const TrackRowContent = ({
             onContextMenu={onContextMenu}
             onDoubleClick={() => !isMissing && onTrackDoubleClick?.(row.original)}
             style={style}
-             onMouseEnter={(e) => {
+            onMouseEnter={(e) => {
                 if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
             }}
             onMouseLeave={(e) => {
                 if (!isSelected) e.currentTarget.style.background = virtualRow.index % 2 === 1 ? 'rgba(255, 255, 255, 0.02)' : 'transparent';
             }}
-            {...attributes} 
+            onDragOver={onFileDrop ? handleFileDragOver : undefined}
+            onDragLeave={onFileDrop ? handleFileDragLeave : undefined}
+            onDrop={onFileDrop ? handleFileDrop : undefined}
+            {...attributes}
             {...listeners}
         >
             {row.getVisibleCells().map(cell => (
@@ -597,12 +687,14 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop }, ref) => {
     const { debugMode } = useDebug();
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
     const [loading, setLoading] = useState(false);
+    // Tracks which row has an active file-drag drop indicator and whether it's above/below
+    const [fileDropIndicator, setFileDropIndicator] = useState<{ trackId: number; isAbove: boolean } | null>(null);
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [contextMenuPlaylists, setContextMenuPlaylists] = useState<{id: number; name: string}[] | null>(null);
     const [showPlaylistsFlyout, setShowPlaylistsFlyout] = useState(false);
@@ -693,14 +785,6 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         })
     );
 
-    // Track reorder: distance-based for reliable, instant drag activation
-    const reorderSensors = useSensors(
-        useSensor(PointerSensor, {
-            activationConstraint: {
-                distance: 5,
-            },
-        })
-    );
 
     const handleMenuDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
@@ -1535,7 +1619,11 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 const newIndex = order.indexOf(overId);
                 return arrayMove(order, oldIndex, newIndex);
             });
-        }
+        },
+        handleReorderDragEnd: (event: DragEndEvent) => {
+            handleReorderDragEnd(event);
+        },
+        getOrderedTrackIds: () => rows.map(r => r.original.id),
     }));
 
     return (
@@ -1671,11 +1759,6 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             ))}
                         </thead>
                         {isReorderable ? (
-                        <DndContext
-                            sensors={reorderSensors}
-                            collisionDetection={closestCenter}
-                            onDragEnd={handleReorderDragEnd}
-                        >
                         <SortableContext
                             items={rowVirtualizer.getVirtualItems().map(vr => `track-${rows[vr.index].original.id}`)}
                             strategy={verticalListSortingStrategy}
@@ -1686,12 +1769,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
                                 </tr>
                             )}
-                            {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                            {rowVirtualizer.getVirtualItems().map((virtualRow, vIdx) => {
                                 const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackIds.has(row.original.id);
                                 const isPlaying = playingTrackId === row.original.id;
                                 const isMissing = row.original.missing;
-                                
+                                const prevRow = vIdx > 0 ? rows[rowVirtualizer.getVirtualItems()[vIdx - 1].index] : null;
+
                                 return (
                                     <TrackRow
                                         key={row.id}
@@ -1704,6 +1788,10 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         isReorderable={true}
                                         handleRowClick={handleRowClick}
                                         onTrackDoubleClick={onTrackDoubleClick}
+                                        fileDropIndicator={fileDropIndicator}
+                                        onFileDropIndicatorChange={setFileDropIndicator}
+                                        onFileDrop={onFileDrop}
+                                        prevTrackId={prevRow?.original.id ?? null}
                                         onContextMenu={(e) => {
                                             e.preventDefault();
                                             if (isMissing) {
@@ -1733,14 +1821,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                             {searchTerm ? 'No tracks found' : 'Library is empty'}
                                         </div>
                                         <div style={{ fontSize: '13px', opacity: 0.7 }}>
-                                            {searchTerm ? `No matches for "${searchTerm}"` : 'Import an iTunes XML file to get started'}
+                                            {searchTerm ? `No matches for "${searchTerm}"` : 'Sync with iTunes or drag audio files onto the window to get started'}
                                         </div>
                                     </td>
                                 </tr>
                             )}
                         </tbody>
                         </SortableContext>
-                        </DndContext>
                         ) : (
                         <tbody>
                             {rowVirtualizer.getVirtualItems().length > 0 && (
@@ -1748,12 +1835,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
                                 </tr>
                             )}
-                            {rowVirtualizer.getVirtualItems().map(virtualRow => {
+                            {rowVirtualizer.getVirtualItems().map((virtualRow, vIdx) => {
                                 const row = rows[virtualRow.index];
                                 const isSelected = selectedTrackIds.has(row.original.id);
                                 const isPlaying = playingTrackId === row.original.id;
                                 const isMissing = row.original.missing;
-                                
+                                const prevRow = vIdx > 0 ? rows[rowVirtualizer.getVirtualItems()[vIdx - 1].index] : null;
+
                                 return (
                                     <TrackRow
                                         key={row.id}
@@ -1766,6 +1854,10 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         isReorderable={false}
                                         handleRowClick={handleRowClick}
                                         onTrackDoubleClick={onTrackDoubleClick}
+                                        fileDropIndicator={fileDropIndicator}
+                                        onFileDropIndicatorChange={setFileDropIndicator}
+                                        onFileDrop={onFileDrop}
+                                        prevTrackId={prevRow?.original.id ?? null}
                                         onContextMenu={(e) => {
                                             e.preventDefault();
                                             if (isMissing) {
@@ -1795,7 +1887,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                             {searchTerm ? 'No tracks found' : 'Library is empty'}
                                         </div>
                                         <div style={{ fontSize: '13px', opacity: 0.7 }}>
-                                            {searchTerm ? `No matches for "${searchTerm}"` : 'Import an iTunes XML file to get started'}
+                                            {searchTerm ? `No matches for "${searchTerm}"` : 'Sync with iTunes or drag audio files onto the window to get started'}
                                         </div>
                                     </td>
                                 </tr>

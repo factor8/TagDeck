@@ -164,7 +164,8 @@ pub fn run() {
             commands::reorder_playlist_tracks,
             commands::get_library_config,
             commands::set_library_config,
-            commands::import_files
+            commands::import_files,
+            commands::check_apple_music_available
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

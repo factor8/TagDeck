@@ -43,6 +43,8 @@ pub struct ImportSummary {
     pub skipped: usize,
     pub failed: usize,
     pub results: Vec<ImportResult>,
+    /// DB IDs of successfully imported tracks (used by frontend for post-import reorder).
+    pub imported_track_ids: Vec<i64>,
 }
 
 // ---------------------------------------------------------------------------

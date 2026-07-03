@@ -384,24 +384,57 @@ impl Database {
             |row| row.get(0),
         )?;
 
-        self.conn.execute(
-            "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
-            params![playlist_db_id],
-        )?;
-
         if let Some(track_pids) = &playlist.track_ids {
-            // Prepared statement for performance
+            // Collect local-only track IDs (in DB but not in incoming iTunes list)
+            // so we can preserve manually-added tracks across syncs.
+            let itunes_pid_set: std::collections::HashSet<&str> =
+                track_pids.iter().map(|s| s.as_str()).collect();
+            let mut local_only_stmt = self.conn.prepare(
+                "SELECT pt.track_id FROM playlist_tracks pt
+                 JOIN tracks t ON t.id = pt.track_id
+                 WHERE pt.playlist_id = ?1"
+            )?;
+            let local_only_ids: Vec<i64> = local_only_stmt
+                .query_map(params![playlist_db_id], |row| row.get(0))?
+                .filter_map(|r| r.ok())
+                .filter(|tid: &i64| {
+                    // Keep if not in the incoming iTunes list
+                    self.conn.query_row(
+                        "SELECT persistent_id FROM tracks WHERE id = ?1",
+                        params![tid],
+                        |r| r.get::<_, String>(0),
+                    ).ok().map_or(false, |pid| !itunes_pid_set.contains(pid.as_str()))
+                })
+                .collect();
+
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                params![playlist_db_id],
+            )?;
+
             let mut stmt = self.conn.prepare(
-                "INSERT INTO playlist_tracks (playlist_id, track_id, position) 
+                "INSERT INTO playlist_tracks (playlist_id, track_id, position)
                  SELECT ?1, id, ?3 FROM tracks WHERE persistent_id = ?2"
             )?;
-            
             for (index, pid) in track_pids.iter().enumerate() {
-                // Ignore errors
                 let _ = stmt.execute(params![playlist_db_id, pid, index as i64]);
             }
+
+            // Re-append locally-added tracks after the iTunes tracks
+            let base_pos = track_pids.len() as i64;
+            for (i, tid) in local_only_ids.iter().enumerate() {
+                let _ = self.conn.execute(
+                    "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+                    params![playlist_db_id, tid, base_pos + i as i64],
+                );
+            }
+        } else {
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                params![playlist_db_id],
+            )?;
         }
-        
+
         Ok(())
     }
 
@@ -1035,6 +1068,20 @@ impl Database {
             .query_row(
                 "SELECT id FROM tracks WHERE file_path = ?1 OR original_path = ?1 LIMIT 1",
                 params![file_path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(id)
+    }
+
+    /// Returns the DB row id for a track by its persistent_id.
+    pub fn get_track_id_by_persistent_id(&self, persistent_id: &str) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM tracks WHERE persistent_id = ?1 LIMIT 1",
+                params![persistent_id],
                 |row| row.get(0),
             )
             .optional()?;

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
 import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight } from 'lucide-react';
+import { useToast } from './Toast';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
@@ -41,15 +42,16 @@ interface PlaylistRowProps {
     onStartRename: (node: PlaylistNode) => void;
     onContextMenu: (e: React.MouseEvent, node: PlaylistNode) => void;
     folders: PlaylistNode[];
+    onFileDrop: (playlistId: number, playlistName: string, paths: string[]) => Promise<void>;
 }
 
-const PlaylistRow = ({ 
-    node, 
-    level, 
-    expandedFolders, 
-    selectedPlaylistId, 
-    onSelectPlaylist, 
-    toggleFolder, 
+const PlaylistRow = ({
+    node,
+    level,
+    expandedFolders,
+    selectedPlaylistId,
+    onSelectPlaylist,
+    toggleFolder,
     scrollRef,
     highlightedPlaylistId,
     renamingId,
@@ -59,8 +61,11 @@ const PlaylistRow = ({
     onRenameCancel,
     onStartRename,
     onContextMenu,
+    onFileDrop,
 }: PlaylistRowProps) => {
     const renameInputRef = useRef<HTMLInputElement>(null);
+    const fileDragCounter = useRef(0);
+    const [isFileDragOver, setIsFileDragOver] = useState(false);
     const { isOver, setNodeRef } = useDroppable({
         id: `playlist-${node.id}`,
         data: {
@@ -104,25 +109,65 @@ const PlaylistRow = ({
                   }}
                   onContextMenu={(e) => onContextMenu(e, node)}
                   className={isHighlighted ? 'flash-highlight' : ''}
+                  onDragEnter={(e) => {
+                      if (node.is_folder || !e.dataTransfer.types.includes('Files')) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      fileDragCounter.current += 1;
+                      if (fileDragCounter.current === 1) setIsFileDragOver(true);
+                  }}
+                  onDragOver={(e) => {
+                      if (node.is_folder || !e.dataTransfer.types.includes('Files')) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      e.dataTransfer.dropEffect = 'copy';
+                  }}
+                  onDragLeave={(e) => {
+                      if (node.is_folder) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      fileDragCounter.current -= 1;
+                      if (fileDragCounter.current <= 0) {
+                          fileDragCounter.current = 0;
+                          setIsFileDragOver(false);
+                      }
+                  }}
+                  onDrop={(e) => {
+                      if (node.is_folder) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      // Stop the document-level drop listener in ImportDropZone from
+                      // also firing and causing a duplicate import.
+                      e.nativeEvent.stopImmediatePropagation();
+                      fileDragCounter.current = 0;
+                      setIsFileDragOver(false);
+                      const files = Array.from(e.dataTransfer.files);
+                      const paths = files
+                          .map((f) => (f as unknown as { path?: string }).path)
+                          .filter((p): p is string => Boolean(p));
+                      if (paths.length > 0) onFileDrop(node.id, node.name, paths);
+                  }}
                   style={{
                       padding: `6px 16px 6px ${paddingLeft}px`,
                       fontSize: '13px',
                       cursor: 'default',
-                      backgroundColor: isSelected 
-                        ? 'var(--accent-color)' 
-                        : (isOver ? 'rgba(59, 130, 246, 0.3)' : 'transparent'),
+                      backgroundColor: isSelected
+                        ? 'var(--accent-color)'
+                        : (isOver || isFileDragOver ? 'rgba(59, 130, 246, 0.3)' : 'transparent'),
                       color: isSelected ? '#fff' : 'var(--text-primary)',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
                       userSelect: 'none',
                       transition: 'background-color 0.2s ease',
+                      outline: isFileDragOver ? '2px dashed var(--accent-color)' : 'none',
+                      outlineOffset: '-2px',
                   }}
                   onMouseEnter={(e) => {
-                      if (!isSelected && !isOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
+                      if (!isSelected && !isOver && !isFileDragOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)';
                   }}
                   onMouseLeave={(e) => {
-                       if (!isSelected && !isOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'transparent';
+                       if (!isSelected && !isOver && !isFileDragOver && !isHighlighted) e.currentTarget.style.backgroundColor = 'transparent';
                   }}
               >
                   {node.is_folder ? (
@@ -207,9 +252,9 @@ const PlaylistRow = ({
               {node.is_folder && isExpanded && (
                   <div>
                       {node.children.map(child => (
-                        <PlaylistRow 
-                            key={child.persistent_id} 
-                            node={child} 
+                        <PlaylistRow
+                            key={child.persistent_id}
+                            node={child}
                             level={level + 1}
                             expandedFolders={expandedFolders}
                             selectedPlaylistId={selectedPlaylistId}
@@ -225,6 +270,7 @@ const PlaylistRow = ({
                             onStartRename={onStartRename}
                             onContextMenu={onContextMenu}
                             folders={[]}
+                            onFileDrop={onFileDrop}
                         />
                       ))}
                   </div>
@@ -492,6 +538,28 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       setMoveSubmenuOpen(false);
   }, []);
 
+  const { showSuccess, showError } = useToast();
+
+  const handleFileDrop = useCallback(async (playlistId: number, playlistName: string, paths: string[]) => {
+      try {
+          const summary = await invoke<{ imported: number; skipped: number; failed: number }>(
+              'import_files',
+              { filePaths: paths, targetPlaylistId: playlistId }
+          );
+          await refreshPlaylists();
+          if (summary.imported > 0) {
+              showSuccess(`Added ${summary.imported} track${summary.imported !== 1 ? 's' : ''} to "${playlistName}"`);
+          } else if (summary.skipped > 0) {
+              showSuccess(`${summary.skipped} track${summary.skipped !== 1 ? 's' : ''} already in library`);
+          }
+          if (summary.failed > 0) {
+              showError(`${summary.failed} file${summary.failed !== 1 ? 's' : ''} failed to import`);
+          }
+      } catch (err) {
+          showError(`Import failed: ${err}`);
+      }
+  }, [refreshPlaylists, showSuccess, showError]);
+
   const { tagdeckTree, itunesTree } = useMemo(() => {
       const map = new Map<string, PlaylistNode>();
       const tagdeckRoots: PlaylistNode[] = [];
@@ -652,7 +720,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
         {tagdeckTree.length > 0 ? (
           <>
             {tagdeckTree.map(node => (
-              <PlaylistRow 
+              <PlaylistRow
                   key={node.persistent_id}
                   node={node}
                   level={0}
@@ -670,6 +738,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   onStartRename={onStartRename}
                   onContextMenu={onContextMenu}
                   folders={allFolders}
+                  onFileDrop={handleFileDrop}
               />
             ))}
           </>
@@ -714,7 +783,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
             </div>
 
             {!itunesCollapsed && itunesTree.map(node => (
-              <PlaylistRow 
+              <PlaylistRow
                   key={node.persistent_id}
                   node={node}
                   level={0}
@@ -732,6 +801,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   onStartRename={onStartRename}
                   onContextMenu={onContextMenu}
                   folders={allFolders}
+                  onFileDrop={handleFileDrop}
               />
             ))}
           </>

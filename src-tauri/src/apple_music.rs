@@ -922,3 +922,99 @@ pub fn rename_playlist_in_music(persistent_id: &str, new_name: &str) -> Result<(
     }
     Ok(())
 }
+
+/// Searches Music.app library for a track whose file location matches the given path.
+/// Returns the persistent ID if found, or None if no match.
+/// Used to prevent duplicate imports when re-adding a file already in the library.
+pub fn find_track_in_music_by_path(file_path: &str) -> Result<Option<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = file_path.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            r#"
+            tell application "Music"
+                try
+                    set posixFile to POSIX file "{}"
+                    set matchedTracks to (every track whose location is posixFile)
+                    if (count of matchedTracks) > 0 then
+                        return persistent ID of item 1 of matchedTracks
+                    end if
+                end try
+            end tell
+            return ""
+            "#,
+            escaped
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if pid.is_empty() {
+            return Ok(None);
+        }
+        return Ok(Some(pid));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
+}
+
+/// Returns true if Music.app is installed on this machine.
+pub fn is_apple_music_available() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(r#"id of application "Music""#)
+            .output();
+        matches!(output, Ok(o) if o.status.success())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+/// Adds a file to the Music.app library and returns the Apple-assigned persistent ID.
+/// Music.app handles file organization based on its own "Copy files to library" setting.
+pub fn add_file_to_music_library(file_path: &str) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = file_path.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            r#"
+            tell application "Music"
+                set theTrack to add POSIX file "{}"
+                set pid to persistent ID of theTrack
+                return pid
+            end tell
+            "#,
+            escaped
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("AppleScript error (add_file_to_music_library): {}", err));
+        }
+
+        let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if pid.is_empty() {
+            return Err(anyhow::anyhow!("Music.app returned empty persistent ID for file: {}", file_path));
+        }
+        Ok(pid)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(anyhow::anyhow!("Apple Music is only available on macOS"))
+    }
+}
