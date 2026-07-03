@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(ls -la /Users/factor8/Documents/GitHub/TagDeck/src-tauri/src/*.rs)",
+      "Bash(cargo check:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx tauri *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'feat: route imports through Apple Music when available and add drop-to-position import *)",
+      "Bash(git commit -m 'chore: regenerate app icons from updated icon source *)",
+      "Bash(git commit -m 'docs: move repo summaries into Docs/, add CLAUDE.md project instructions *)",
+      "Bash(git commit -m 'docs: add library ownership and sync strategy plan *)"
+    ]
+  }
+}

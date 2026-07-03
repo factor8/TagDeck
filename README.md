@@ -2,7 +2,7 @@
 
 **TagDeck** is a high-performance local music library manager and tagging tool built for DJs, audiophiles, and power users. Designed for speed and efficiency, it helps you organize, search, and tag your music collection with a modern, keyboard-centric workflow.
 
-> 100% vibe coded by Gemini 3.
+100% vibe coded by Gemini 3.
 
 ## Features
 
