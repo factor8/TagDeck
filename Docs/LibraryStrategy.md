@@ -88,12 +88,12 @@ A trust feature: users commit more readily when leaving is safe.
 
 ## Build order
 
-1. **Identity decoupling** — `itunes_pid` column + migration; sync joins on it; Phase 0 unlinks instead of deletes; "unlinked" badge; `dirty_since_sync` flag groundwork.
-2. **Sync mode setting** — Off/Import-only/Two-way in `library_config` + Settings UI; replace availability gates; import-only comment guard; first-run default logic; iTunes-deletion behavior setting.
-3. **Sync Review** — review UI over the existing diff phases; conflict detection via dirty flags; deletion confirms route here.
-4. **Per-playlist sync** — wire `itunes_sync_enabled`; context-menu link/unlink actions; update Phase 3 + write-back gates.
-5. **File management hardening** — always-visible settings, `file_hash` dedup, TagDeck-root watcher, Consolidate Library.
-6. **Exit path** — Export to Music.app, M3U8 export.
+1. **Identity decoupling** ✅ — `itunes_pid` column + migration; sync joins on it; Phase 0 unlinks instead of deletes; "unlinked" badge; `dirty_since_sync` flag groundwork.
+2. **Sync mode setting** ✅ — Off/Import-only/Two-way in `library_config` + Settings UI; replace availability gates; import-only comment guard; first-run default logic; iTunes-deletion behavior setting.
+3. **Sync Review** ✅ — review UI over the existing diff phases; conflict detection via dirty flags; deletion confirms route here.
+4. **Per-playlist sync** ✅ — wire `itunes_sync_enabled`; context-menu link/unlink actions; update Phase 3 + write-back gates.
+5. **File management hardening** ✅ — always-visible settings, `file_hash` dedup, TagDeck-root watcher, Consolidate Library.
+6. **Exit path** ✅ — "Add TagDeck-only tracks to Music.app" in Settings → iTunes Sync; per-playlist "Export as M3U8…" context-menu action. (Playlist recreation in Music.app is covered by Phase 4's per-playlist "Sync to iTunes".)
 7. **Rekordbox export** — rekordbox.xml writer + export UI.
 
 Each phase ships independently; 1–2 are the foundation and should land before anything else builds on the mode setting.

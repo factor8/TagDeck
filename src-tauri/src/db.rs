@@ -1381,6 +1381,49 @@ impl Database {
         Ok(id)
     }
 
+    /// Tracks with no Music.app link (TagDeck-native or unlinked), for the
+    /// exit-path export: (id, file_path, missing).
+    pub fn get_unlinked_tracks(&self) -> Result<Vec<(i64, String, bool)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_path, COALESCE(missing, 0) FROM tracks WHERE itunes_pid IS NULL",
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(rows)
+    }
+
+    /// Links a track to its Music.app copy. Fails on the unique itunes_pid
+    /// index if another track already holds this link (duplicate content).
+    pub fn link_track_itunes_pid(&self, id: i64, itunes_pid: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET itunes_pid = ?1, unlinked_at = NULL WHERE id = ?2",
+            params![itunes_pid, id],
+        )?;
+        Ok(())
+    }
+
+    /// Ordered playlist rows for M3U8 export:
+    /// (file_path, duration_secs, artist, title, missing).
+    pub fn get_playlist_tracks_for_export(
+        &self,
+        playlist_id: i64,
+    ) -> Result<Vec<(String, f64, Option<String>, Option<String>, bool)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.file_path, COALESCE(t.duration_secs, 0), t.artist, t.title, COALESCE(t.missing, 0)
+             FROM playlist_tracks pt
+             JOIN tracks t ON t.id = pt.track_id
+             WHERE pt.playlist_id = ?1
+             ORDER BY pt.position ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![playlist_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(rows)
+    }
+
     /// Returns the DB row id for a track by its persistent_id.
     pub fn get_track_id_by_persistent_id(&self, persistent_id: &str) -> Result<Option<i64>> {
         use rusqlite::OptionalExtension;

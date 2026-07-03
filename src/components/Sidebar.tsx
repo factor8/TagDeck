@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown } from 'lucide-react';
 import { useToast } from './Toast';
 
 interface SidebarProps {
@@ -577,6 +577,33 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       }
   }, [syncTogglingId, refreshPlaylists, showError]);
 
+  const handleExportM3u8 = useCallback(async (node: PlaylistNode) => {
+      try {
+          const { save } = await import('@tauri-apps/plugin-dialog');
+          const dest = await save({
+              defaultPath: `${node.name}.m3u8`,
+              filters: [{ name: 'M3U8 Playlist', extensions: ['m3u8'] }],
+          });
+          if (!dest) return;
+          const report = await invoke<{ written: number; skipped_missing: number }>(
+              'export_playlist_m3u8',
+              { playlistId: node.id, destPath: dest }
+          );
+          if (report.written === 0) {
+              showSuccess('Playlist is empty — wrote an empty M3U8');
+          } else {
+              const filename = dest.split(/[\\/]/).pop() ?? dest;
+              let msg = `Exported ${report.written} track${report.written !== 1 ? 's' : ''} to ${filename}`;
+              if (report.skipped_missing > 0) {
+                  msg += `, ${report.skipped_missing} missing skipped`;
+              }
+              showSuccess(msg);
+          }
+      } catch (err) {
+          showError(typeof err === 'string' ? err : `Export failed: ${err}`);
+      }
+  }, [showSuccess, showError]);
+
   const { tagdeckTree, itunesTree } = useMemo(() => {
       const map = new Map<string, PlaylistNode>();
       const tagdeckRoots: PlaylistNode[] = [];
@@ -880,6 +907,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                                   <Music size={14} /> Sync to iTunes
                               </button>
                           )
+                      )}
+
+                      {!contextMenu.node.is_folder && (
+                          <button className="ctx-item" onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleExportM3u8(n); }}>
+                              <FileDown size={14} /> Export as M3U8…
+                          </button>
                       )}
 
                       {/* Move to submenu */}

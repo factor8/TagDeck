@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2, FolderOpen, FolderSync, Bug, AudioWaveform, HardDrive, RefreshCw, ClipboardList } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, FolderSync, Bug, AudioWaveform, HardDrive, RefreshCw, ClipboardList, Music } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useDebug } from './DebugContext';
@@ -88,6 +88,8 @@ export function SettingsPanel({
     const [libraryConfig, setLibraryConfig] = useState<LibraryConfig | null>(null);
     const [consolidating, setConsolidating] = useState(false);
     const [showConsolidateConfirm, setShowConsolidateConfirm] = useState(false);
+    const [exportingToMusic, setExportingToMusic] = useState(false);
+    const [showExportToMusicConfirm, setShowExportToMusicConfirm] = useState(false);
     const { showSuccess, showError } = useToast();
 
     const handleRealTimeSyncToggle = () => {
@@ -254,6 +256,50 @@ export function SettingsPanel({
         }
     };
 
+    const handleExportToMusic = async () => {
+        setShowExportToMusicConfirm(false);
+        setExportingToMusic(true);
+        try {
+            interface MusicExportResult {
+                total_candidates: number;
+                exported: number;
+                relinked: number;
+                failed: number;
+                errors: string[];
+            }
+            const result = await invoke<MusicExportResult>('export_tracks_to_music');
+
+            if (result.total_candidates === 0) {
+                showSuccess('All tracks are already in Music.app.');
+                return;
+            }
+
+            let msg = `Added ${result.exported} track${result.exported !== 1 ? 's' : ''} to Music.app`;
+            if (result.relinked > 0) {
+                msg += `, ${result.relinked} already there were linked`;
+            }
+            if (result.failed > 0) {
+                msg += ` — ${result.failed} failed`;
+                if (result.errors.length > 0) msg += `: ${result.errors[0]}`;
+            }
+
+            if (result.failed > 0) {
+                showError(msg);
+            } else {
+                showSuccess(msg);
+            }
+
+            if (result.exported + result.relinked > 0) {
+                onRefresh();
+            }
+        } catch (err: any) {
+            console.error(err);
+            showError(`Export to Music.app failed: ${err}`);
+        } finally {
+            setExportingToMusic(false);
+        }
+    };
+
     if (!isOpen) return null;
 
     const isCustomAccent = !ACCENTS.some(a => a.color === currentAccent);
@@ -399,6 +445,65 @@ export function SettingsPanel({
                                 {syncReviewLoading ? 'Loading Preview…' : 'Review iTunes Changes…'}
                             </button>
                         </div>
+
+                        {appleMusicAvailable && (
+                            <div style={{ marginBottom: libraryConfig && libraryConfig.sync_mode !== 'Off' ? '14px' : 0 }}>
+                                {!showExportToMusicConfirm ? (
+                                    <button
+                                        onClick={() => setShowExportToMusicConfirm(true)}
+                                        disabled={exportingToMusic}
+                                        className="btn"
+                                        style={{
+                                            fontSize: '13px', padding: '6px 12px',
+                                            background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                            color: 'var(--text-primary)', borderRadius: '6px',
+                                            cursor: exportingToMusic ? 'not-allowed' : 'pointer',
+                                            display: 'flex', alignItems: 'center', gap: '6px'
+                                        }}
+                                        title="Add every TagDeck-only track's file into your Music.app library"
+                                    >
+                                        {exportingToMusic ? <Loader2 size={14} className="spin" /> : <Music size={14} />}
+                                        {exportingToMusic ? 'Adding…' : 'Add TagDeck-only tracks to Music.app…'}
+                                    </button>
+                                ) : (
+                                    <div style={{
+                                        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                        borderRadius: '8px', padding: '12px',
+                                    }}>
+                                        <p style={{ margin: '0 0 10px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                                            Add every track that isn't linked to Music.app into your Music library? Files stay where they are — Music.app applies its own copy/organize settings. Already-present files are linked instead of duplicated.
+                                        </p>
+                                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                            <button
+                                                className="btn"
+                                                onClick={() => setShowExportToMusicConfirm(false)}
+                                                style={{
+                                                    fontSize: '12px', padding: '5px 10px',
+                                                    background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+                                                    color: 'var(--text-primary)', borderRadius: '6px', cursor: 'pointer'
+                                                }}
+                                            >
+                                                Cancel
+                                            </button>
+                                            <button
+                                                className="btn btn-primary"
+                                                onClick={handleExportToMusic}
+                                                style={{
+                                                    fontSize: '12px', padding: '5px 10px',
+                                                    background: 'var(--accent-hover)', border: '1px solid var(--accent-color)',
+                                                    color: 'white', borderRadius: '6px', cursor: 'pointer'
+                                                }}
+                                            >
+                                                Add
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '6px', fontStyle: 'italic' }}>
+                                    Exports your TagDeck-only tracks so your Music library stays complete.
+                                </div>
+                            </div>
+                        )}
 
                         {libraryConfig && libraryConfig.sync_mode !== 'Off' && (
                             <>

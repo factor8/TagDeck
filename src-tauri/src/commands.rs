@@ -2520,6 +2520,153 @@ pub async fn consolidate_library(
     Ok(report)
 }
 
+#[derive(serde::Serialize, Default)]
+pub struct MusicExportReport {
+    pub total_candidates: usize,
+    pub exported: usize,
+    pub relinked: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+}
+
+/// Exit path: adds every TagDeck-only (unlinked) track's file to Music.app
+/// and stores the returned persistent ID as the link. Files Music.app
+/// already has are linked without re-adding. Files are never moved by
+/// TagDeck — Music.app applies its own copy/organize settings on add.
+#[tauri::command]
+pub async fn export_tracks_to_music(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<MusicExportReport, String> {
+    if !crate::apple_music::is_apple_music_available() {
+        return Err("Music.app not detected on this Mac.".to_string());
+    }
+
+    let candidates: Vec<(i64, String)> = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.get_unlinked_tracks().map_err(|e| e.to_string())?
+    }
+    .into_iter()
+    .filter(|(_, _, missing)| !missing)
+    .map(|(id, path, _)| (id, path))
+    .collect();
+
+    let mut report = MusicExportReport { total_candidates: candidates.len(), ..Default::default() };
+    const ERROR_CAP: usize = 10;
+    let fail = |report: &mut MusicExportReport, msg: String| {
+        report.failed += 1;
+        if report.errors.len() < ERROR_CAP {
+            report.errors.push(msg);
+        }
+    };
+
+    for (id, path) in &candidates {
+        if !std::path::Path::new(path).is_file() {
+            fail(&mut report, format!("File not found: {}", path));
+            continue;
+        }
+
+        // Reuse an existing Music.app copy of this exact file rather than
+        // adding a duplicate.
+        let (pid, newly_added) = match crate::apple_music::find_track_in_music_by_path(path) {
+            Ok(Some(existing_pid)) => (existing_pid, false),
+            Ok(None) => match crate::apple_music::add_file_to_music_library(path) {
+                Ok(new_pid) => (new_pid, true),
+                Err(e) => {
+                    fail(&mut report, format!("Music.app add failed for {}: {}", path, e));
+                    continue;
+                }
+            },
+            Err(e) => {
+                fail(&mut report, format!("Music.app lookup failed for {}: {}", path, e));
+                continue;
+            }
+        };
+
+        let link_result = {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            db.link_track_itunes_pid(*id, &pid)
+        };
+        match link_result {
+            Ok(()) => {
+                if newly_added {
+                    report.exported += 1;
+                } else {
+                    report.relinked += 1;
+                }
+            }
+            Err(e) => fail(
+                &mut report,
+                format!("Link failed for {} (Music PID may belong to another track): {}", path, e),
+            ),
+        }
+    }
+
+    let msg = format!(
+        "Export to Music.app: {} added, {} relinked, {} failed of {} candidate(s)",
+        report.exported, report.relinked, report.failed, report.total_candidates
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+
+    Ok(report)
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct M3u8ExportReport {
+    pub written: usize,
+    pub skipped_missing: usize,
+}
+
+/// Writes an extended M3U8 (UTF-8, absolute paths) for a playlist.
+#[tauri::command]
+pub async fn export_playlist_m3u8(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    dest_path: String,
+) -> Result<M3u8ExportReport, String> {
+    let (name, rows) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let (_pid, name, is_folder) = db.get_playlist_basic(playlist_id).map_err(|e| e.to_string())?;
+        if is_folder {
+            return Err("Folders can't be exported as a playlist file.".to_string());
+        }
+        let rows = db.get_playlist_tracks_for_export(playlist_id).map_err(|e| e.to_string())?;
+        (name, rows)
+    };
+
+    let mut report = M3u8ExportReport::default();
+    let mut out = String::from("#EXTM3U\n");
+    for (path, duration, artist, title, missing) in rows {
+        if missing {
+            report.skipped_missing += 1;
+            continue;
+        }
+        let display = match (artist, title) {
+            (Some(a), Some(t)) => format!("{} - {}", a, t),
+            (_, Some(t)) => t,
+            _ => std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&path)
+                .to_string(),
+        };
+        out.push_str(&format!("#EXTINF:{},{}\n{}\n", duration.round() as i64, display, path));
+        report.written += 1;
+    }
+
+    std::fs::write(&dest_path, out)
+        .map_err(|e| format!("Failed to write {}: {}", dest_path, e))?;
+
+    let msg = format!(
+        "Exported playlist '{}' to {} ({} track(s), {} missing skipped)",
+        name, dest_path, report.written, report.skipped_missing
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+
+    Ok(report)
+}
+
 /// Simple pseudo-UUID v4 generator (no external crate needed).
 fn uuid_v4_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

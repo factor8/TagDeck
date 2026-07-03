@@ -185,6 +185,8 @@ pub fn run() {
             commands::import_files,
             commands::verify_library_files,
             commands::consolidate_library,
+            commands::export_tracks_to_music,
+            commands::export_playlist_m3u8,
             commands::check_apple_music_available,
             sync_review::preview_sync,
             sync_review::apply_sync_changes

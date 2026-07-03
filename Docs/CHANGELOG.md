@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- **Export as M3U8**: right-click any playlist for "Export as M3U8…" — writes a standard extended M3U8 file (with artist/title and durations) usable by other players and DJ software. Missing tracks are skipped and counted.
+- **Add TagDeck-only tracks to Music.app** (Settings → iTunes Sync): the exit path back to iTunes. Adds every track that isn't linked to Music.app into your Music library and links it; files already present in Music.app are linked instead of duplicated. Files stay where they are — Music.app applies its own copy/organize settings.
 - **Consolidate Library** (Settings → Library Management): copies every TagDeck-managed track stored outside your library folder into it (organized by artist/album), then updates the library to point at the new copies. Originals are never deleted, and tracks managed by Music.app are skipped.
 - **Library folder watching**: TagDeck now watches its own library folder. Files deleted outside the app are marked *missing*, files moved within the folder are automatically relocated, and missing tracks whose files reappear are restored — with a toast summarizing what changed.
 - **Smarter duplicate detection on import**: imports now compare file contents (SHA-256), not just paths, so re-importing the same audio from a moved or copied file is skipped instead of duplicated.
