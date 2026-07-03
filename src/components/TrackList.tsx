@@ -1256,17 +1256,39 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             header: 'Title',
             cell: info => {
                 const trackId = info.row.original.id;
+                const isUnlinked = Boolean(info.row.original.unlinked_at);
                 return (
-                    <EditableCell
-                        value={info.getValue() || ''}
-                        trackId={trackId}
-                        field="title"
-                        isSelected={selectedTrackIds.has(trackId)}
-                        editingCell={editingCell}
-                        onStartEdit={handleStartEdit}
-                        onCommitEdit={handleCommitEdit}
-                        onCancelEdit={handleCancelEdit}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <EditableCell
+                                value={info.getValue() || ''}
+                                trackId={trackId}
+                                field="title"
+                                isSelected={selectedTrackIds.has(trackId)}
+                                editingCell={editingCell}
+                                onStartEdit={handleStartEdit}
+                                onCommitEdit={handleCommitEdit}
+                                onCancelEdit={handleCancelEdit}
+                            />
+                        </div>
+                        {isUnlinked && (
+                            <span
+                                title="Removed from iTunes — kept in TagDeck. Tags and playlists are unaffected."
+                                style={{
+                                    flexShrink: 0,
+                                    fontSize: '10px',
+                                    lineHeight: '14px',
+                                    padding: '0 5px',
+                                    borderRadius: '7px',
+                                    border: '1px solid var(--text-secondary)',
+                                    color: 'var(--text-secondary)',
+                                    opacity: 0.8,
+                                }}
+                            >
+                                unlinked
+                            </span>
+                        )}
+                    </div>
                 );
             },
             size: 200,

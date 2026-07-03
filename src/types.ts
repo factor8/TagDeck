@@ -16,6 +16,10 @@ export interface Track {
     date_added: number;
     bpm: number;
     missing?: boolean;
+    /** Link to the Music.app track; null = TagDeck-native or unlinked. */
+    itunes_pid?: string | null;
+    /** Set when a previously linked track disappeared from Music.app. */
+    unlinked_at?: number | null;
 }
 
 export interface Playlist {

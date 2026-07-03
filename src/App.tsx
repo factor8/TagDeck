@@ -165,7 +165,7 @@ function App() {
           interface SyncResult {
               tracks_updated: number;
               tracks_added: number;
-              tracks_deleted: number;
+              tracks_unlinked: number;
               playlists_updated: number;
           }
 
@@ -178,7 +178,7 @@ function App() {
           // Handle potential legacy return (number) if backend didn't update/recompile yet
           let tracksVal = 0;
           let addedVal = 0;
-          let deletedVal = 0;
+          let unlinkedVal = 0;
           let playlistsVal = 0;
 
           if (typeof result === 'number') {
@@ -186,20 +186,20 @@ function App() {
           } else if (result && typeof result === 'object') {
               tracksVal = result.tracks_updated || 0;
               addedVal = result.tracks_added || 0;
-              deletedVal = result.tracks_deleted || 0;
+              unlinkedVal = result.tracks_unlinked || 0;
               playlistsVal = result.playlists_updated || 0;
           }
 
           const totalUpdated = tracksVal + playlistsVal;
-          
-          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Added=${addedVal}, Deleted=${deletedVal}, Playlists=${playlistsVal}, Total=${totalUpdated}`);
+
+          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Added=${addedVal}, Unlinked=${unlinkedVal}, Playlists=${playlistsVal}, Total=${totalUpdated}`);
 
           if (totalUpdated > 0) {
             const parts: string[] = [];
-            // Show added/deleted separately for clarity, group the rest as "updated"
-            const pureUpdated = tracksVal - addedVal - deletedVal;
+            // Show added/unlinked separately for clarity, group the rest as "updated"
+            const pureUpdated = tracksVal - addedVal - unlinkedVal;
             if (addedVal > 0) parts.push(`${addedVal} track${addedVal > 1 ? 's' : ''} imported`);
-            if (deletedVal > 0) parts.push(`${deletedVal} track${deletedVal > 1 ? 's' : ''} removed`);
+            if (unlinkedVal > 0) parts.push(`${unlinkedVal} track${unlinkedVal > 1 ? 's' : ''} unlinked from iTunes (kept in TagDeck)`);
             if (pureUpdated > 0) parts.push(`${pureUpdated} track${pureUpdated > 1 ? 's' : ''} updated`);
             if (playlistsVal > 0) parts.push(`${playlistsVal} playlist${playlistsVal > 1 ? 's' : ''}`);
             

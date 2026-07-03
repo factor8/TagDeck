@@ -125,6 +125,7 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
 
         let track = Track {
             id: 0, // DB auto-increments
+            itunes_pid: Some(persistent_id.clone()),
             persistent_id,
             file_path: location,
             artist,
@@ -141,6 +142,7 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             date_added: date_added_timestamp,
             bpm: bpm as i64,
             missing: false,
+            unlinked_at: None,
         };
 
         tracks.push(track);

@@ -136,7 +136,8 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
             let path = jt.location.unwrap_or_default();
             
             Track {
-                id: 0, 
+                id: 0,
+                itunes_pid: Some(jt.id.clone()),
                 persistent_id: jt.id,
                 file_path: path,
                 artist: Some(jt.artist),
@@ -153,6 +154,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                 date_added: 0,
                 bpm: jt.bpm,
                 missing: false,
+                unlinked_at: None,
             }
         }).collect();
 
@@ -806,6 +808,7 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
                 let path = jt.location.unwrap_or_default();
                 all_tracks.push(Track {
                     id: 0,
+                    itunes_pid: Some(jt.id.clone()),
                     persistent_id: jt.id,
                     file_path: path,
                     artist: Some(jt.artist),
@@ -822,6 +825,7 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
                     date_added: 0,
                     bpm: jt.bpm,
                     missing: false,
+                    unlinked_at: None,
                 });
             }
         }

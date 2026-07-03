@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **Tracks removed from iTunes are no longer deleted from TagDeck.** They are now "unlinked": the track, its tags, and its playlist memberships stay in TagDeck, marked with an *unlinked* badge in the track list. Re-adding the track to Music.app relinks it automatically. (Previously, deleting a track in Music.app silently deleted it from TagDeck on the next sync.)
+
 ### Added
 - **Persistent Logging**: All application logs now write to `~/Library/Logs/TagDeck/` following macOS conventions. Log files auto-rotate at 5 MB with up to 5 rotated files kept.
 - **Debug Mode**: New toggle in Settings → Developer section. When enabled:

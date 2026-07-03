@@ -10,7 +10,15 @@
       "Bash(git commit -m 'feat: route imports through Apple Music when available and add drop-to-position import *)",
       "Bash(git commit -m 'chore: regenerate app icons from updated icon source *)",
       "Bash(git commit -m 'docs: move repo summaries into Docs/, add CLAUDE.md project instructions *)",
-      "Bash(git commit -m 'docs: add library ownership and sync strategy plan *)"
+      "Bash(git commit -m 'docs: add library ownership and sync strategy plan *)",
+      "Bash(git commit -m 'docs: amend library strategy with parity-first framing, Sync Review, and exit path *)",
+      "Bash(cargo check *)",
+      "Bash(npx tsc *)",
+      "Bash(cargo test *)",
+      "Bash(cp '/Users/factor8/Library/Application Support/com.factor8.tagdeck/tagdeck.db' /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db)",
+      "Bash(sqlite3 /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db ' *)",
+      "Bash(sqlite3 /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db 'SELECT MIN\\(id\\) FROM tracks')",
+      "Bash(git commit -m 'feat: decouple track identity from iTunes — unlink instead of delete on sync *)"
     ]
   }
 }

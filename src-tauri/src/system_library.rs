@@ -44,6 +44,7 @@ impl ExternalTrack {
     fn into_track(self) -> Track {
         Track {
             id: 0, // Auto-increment ID, set to 0 for new non-DB instances
+            itunes_pid: Some(self.persistent_id.clone()),
             persistent_id: self.persistent_id,
             file_path: self.file_path,
             artist: self.artist,
@@ -60,6 +61,7 @@ impl ExternalTrack {
             date_added: self.date_added,
             bpm: self.bpm,
             missing: false,
+            unlinked_at: None,
         }
     }
 }

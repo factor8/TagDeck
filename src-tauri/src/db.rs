@@ -102,13 +102,27 @@ impl Database {
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN sort_position INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN created_at INTEGER DEFAULT 0", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN updated_at INTEGER DEFAULT 0", []);
-        
+
+        // Identity decoupling: persistent_id is TagDeck's internal ID; itunes_pid is
+        // the optional link to Music.app. Backfill assumes existing non-TD tracks
+        // came from iTunes; the unlinked_at guard keeps unlinked tracks unlinked.
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN itunes_pid TEXT", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN unlinked_at INTEGER", []);
+        let _ = conn.execute(
+            "UPDATE tracks SET itunes_pid = persistent_id
+             WHERE itunes_pid IS NULL AND unlinked_at IS NULL AND persistent_id NOT LIKE 'TD-%'",
+            [],
+        );
+        let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_itunes_pid ON tracks(itunes_pid)", []);
+
         Ok(Self { conn })
     }
 
-    /// Returns a HashSet of all track persistent_ids in the DB.
-    pub fn get_all_track_pids(&self) -> Result<std::collections::HashSet<String>> {
-        let mut stmt = self.conn.prepare("SELECT persistent_id FROM tracks")?;
+    /// Returns a HashSet of all linked iTunes persistent IDs in the DB.
+    /// Tracks that are TagDeck-native or unlinked are excluded — sync only
+    /// concerns itself with tracks that have a Music.app counterpart.
+    pub fn get_all_itunes_pids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare("SELECT itunes_pid FROM tracks WHERE itunes_pid IS NOT NULL")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut set = std::collections::HashSet::new();
         for row in rows {
@@ -117,10 +131,10 @@ impl Database {
         Ok(set)
     }
 
-    /// Returns a HashMap of persistent_id -> (rating, bpm) for all tracks in the DB.
+    /// Returns a HashMap of itunes_pid -> (rating, bpm) for all linked tracks.
     /// Used for efficient snapshot-based diffing against Music.app.
     pub fn get_rating_bpm_snapshot(&self) -> Result<std::collections::HashMap<String, (i64, i64)>> {
-        let mut stmt = self.conn.prepare("SELECT persistent_id, rating, bpm FROM tracks")?;
+        let mut stmt = self.conn.prepare("SELECT itunes_pid, rating, bpm FROM tracks WHERE itunes_pid IS NOT NULL")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -136,11 +150,11 @@ impl Database {
         Ok(map)
     }
 
-    /// Updates only the rating and BPM for a track identified by persistent_id.
-    pub fn update_rating_bpm(&self, persistent_id: &str, rating: i64, bpm: i64) -> Result<()> {
+    /// Updates only the rating and BPM for a track identified by its iTunes link.
+    pub fn update_rating_bpm(&self, itunes_pid: &str, rating: i64, bpm: i64) -> Result<()> {
         self.conn.execute(
-            "UPDATE tracks SET rating = ?1, bpm = ?2 WHERE persistent_id = ?3",
-            params![rating, bpm, persistent_id],
+            "UPDATE tracks SET rating = ?1, bpm = ?2 WHERE itunes_pid = ?3",
+            params![rating, bpm, itunes_pid],
         )?;
         Ok(())
     }
@@ -148,10 +162,10 @@ impl Database {
     pub fn insert_track(&self, track: &crate::models::Track) -> Result<()> {
         self.conn.execute(
             "INSERT INTO tracks (
-                persistent_id, file_path, artist, title, album, 
-                comment_raw, grouping_raw, duration_secs, format, 
-                size_bytes, bit_rate, modified_date, rating, date_added, bpm
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                persistent_id, file_path, artist, title, album,
+                comment_raw, grouping_raw, duration_secs, format,
+                size_bytes, bit_rate, modified_date, rating, date_added, bpm, itunes_pid
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(persistent_id) DO UPDATE SET
                 file_path=CASE WHEN excluded.file_path = '' THEN tracks.file_path ELSE excluded.file_path END,
                 artist=excluded.artist,
@@ -166,7 +180,9 @@ impl Database {
                 modified_date=CASE WHEN excluded.modified_date = 0 THEN tracks.modified_date ELSE excluded.modified_date END,
                 rating=excluded.rating,
                 date_added=CASE WHEN excluded.date_added = 0 THEN tracks.date_added ELSE excluded.date_added END,
-                bpm=excluded.bpm
+                bpm=excluded.bpm,
+                itunes_pid=excluded.itunes_pid,
+                unlinked_at=NULL
             ",
             params![
                 track.persistent_id,
@@ -183,14 +199,19 @@ impl Database {
                 track.modified_date,
                 track.rating,
                 track.date_added,
-                track.bpm
+                track.bpm,
+                track.itunes_pid
             ],
         )?;
         Ok(())
     }
 
     pub fn get_track(&self, id: i64) -> Result<Option<Track>> {
-        let mut stmt = self.conn.prepare("SELECT * FROM tracks WHERE id = ?1")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, persistent_id, file_path, artist, title, album,
+             comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at
+             FROM tracks WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
 
         if let Some(row) = rows.next()? {
@@ -212,6 +233,8 @@ impl Database {
                 date_added: row.get(14)?,
                 bpm: row.get(15)?,
                 missing: row.get(16).unwrap_or(false),
+                itunes_pid: row.get(17).unwrap_or(None),
+                unlinked_at: row.get(18).unwrap_or(None),
             }))
         } else {
             Ok(None)
@@ -263,11 +286,13 @@ impl Database {
         })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
         for (db_id, pid, parent_pid, name, is_folder, origin) in &rows {
-            // Get track persistent IDs for this playlist
+            // Get iTunes track IDs for this playlist. Only linked tracks are
+            // compared against Music.app — TagDeck-native and unlinked tracks
+            // are local-only members and must not produce phantom diffs.
             let mut track_stmt = self.conn.prepare(
-                "SELECT t.persistent_id FROM playlist_tracks pt 
-                 JOIN tracks t ON t.id = pt.track_id 
-                 WHERE pt.playlist_id = ?1 
+                "SELECT t.itunes_pid FROM playlist_tracks pt
+                 JOIN tracks t ON t.id = pt.track_id
+                 WHERE pt.playlist_id = ?1 AND t.itunes_pid IS NOT NULL
                  ORDER BY pt.position ASC"
             )?;
             let track_pids = track_stmt.query_map(params![db_id], |row| row.get::<_, String>(0))?
@@ -398,9 +423,10 @@ impl Database {
                 .query_map(params![playlist_db_id], |row| row.get(0))?
                 .filter_map(|r| r.ok())
                 .filter(|tid: &i64| {
-                    // Keep if not in the incoming iTunes list
+                    // Keep if not in the incoming iTunes list (unlinked/native
+                    // tracks match by their TagDeck ID, which never appears there)
                     self.conn.query_row(
-                        "SELECT persistent_id FROM tracks WHERE id = ?1",
+                        "SELECT COALESCE(itunes_pid, persistent_id) FROM tracks WHERE id = ?1",
                         params![tid],
                         |r| r.get::<_, String>(0),
                     ).ok().map_or(false, |pid| !itunes_pid_set.contains(pid.as_str()))
@@ -414,7 +440,7 @@ impl Database {
 
             let mut stmt = self.conn.prepare(
                 "INSERT INTO playlist_tracks (playlist_id, track_id, position)
-                 SELECT ?1, id, ?3 FROM tracks WHERE persistent_id = ?2"
+                 SELECT ?1, id, ?3 FROM tracks WHERE COALESCE(itunes_pid, persistent_id) = ?2"
             )?;
             for (index, pid) in track_pids.iter().enumerate() {
                 let _ = stmt.execute(params![playlist_db_id, pid, index as i64]);
@@ -650,6 +676,17 @@ impl Database {
         Ok(pid)
     }
 
+    /// Returns the track's Music.app link, or None for TagDeck-native /
+    /// unlinked tracks (callers must skip AppleScript write-back for those).
+    pub fn get_track_itunes_pid(&self, id: i64) -> Result<Option<String>> {
+        let pid: Option<String> = self.conn.query_row(
+            "SELECT itunes_pid FROM tracks WHERE id = ?1",
+            params![id],
+            |row| row.get(0)
+        )?;
+        Ok(pid)
+    }
+
     pub fn get_playlist_persistent_id(&self, id: i64) -> Result<String> {
         let pid: String = self.conn.query_row(
             "SELECT persistent_id FROM playlists WHERE id = ?1",
@@ -731,10 +768,10 @@ impl Database {
 
     pub fn get_all_tracks(&self) -> Result<Vec<crate::models::Track>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, persistent_id, file_path, artist, title, album, 
+            "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing
-             FROM tracks", 
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at
+             FROM tracks",
         )?;
 
         let track_iter = stmt.query_map([], |row| {
@@ -756,6 +793,8 @@ impl Database {
                 date_added: row.get(14)?,
                 bpm: row.get(15)?,
                 missing: row.get(16).unwrap_or(false),
+                itunes_pid: row.get(17).unwrap_or(None),
+                unlinked_at: row.get(18).unwrap_or(None),
             })
         })?;
 
@@ -848,33 +887,22 @@ impl Database {
         Ok(())
     }
 
-    /// Removes tracks from the DB that are no longer present in Music.app.
-    /// Also removes associated playlist_tracks entries.
-    /// Returns the count of deleted tracks.
-    pub fn remove_tracks_by_persistent_ids(&self, pids: &[String]) -> Result<usize> {
-        let mut deleted = 0;
+    /// Marks tracks that disappeared from Music.app as unlinked instead of
+    /// deleting them. All TagDeck data (playlist membership, tags via the file)
+    /// stays intact; deletion is only ever user-initiated.
+    /// Returns the count of unlinked tracks.
+    pub fn unlink_tracks_by_itunes_pids(&self, pids: &[String]) -> Result<usize> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        let mut unlinked = 0;
         for pid in pids {
-            // Remove from playlist_tracks first (foreign key)
-            let db_id: Option<i64> = self.conn.query_row(
-                "SELECT id FROM tracks WHERE persistent_id = ?1",
-                params![pid],
-                |row| row.get(0),
-            ).ok();
-
-            if let Some(id) = db_id {
-                self.conn.execute(
-                    "DELETE FROM playlist_tracks WHERE track_id = ?1",
-                    params![id],
-                )?;
-            }
-
-            let rows = self.conn.execute(
-                "DELETE FROM tracks WHERE persistent_id = ?1",
-                params![pid],
+            unlinked += self.conn.execute(
+                "UPDATE tracks SET itunes_pid = NULL, unlinked_at = ?1 WHERE itunes_pid = ?2",
+                params![now, pid],
             )?;
-            deleted += rows;
         }
-        Ok(deleted)
+        Ok(unlinked)
     }
 
     // TAG GROUP METHODS

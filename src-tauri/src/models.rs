@@ -20,6 +20,13 @@ pub struct Track {
     pub bpm: i64,
     #[serde(default)]
     pub missing: bool,
+    /// Link to the Music.app track, when one exists. NULL means the track is
+    /// TagDeck-native or was removed from Music.app (see `unlinked_at`).
+    #[serde(default)]
+    pub itunes_pid: Option<String>,
+    /// Set when a previously linked track disappeared from Music.app.
+    #[serde(default)]
+    pub unlinked_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
