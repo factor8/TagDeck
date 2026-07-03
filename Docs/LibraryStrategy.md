@@ -3,6 +3,8 @@
 **Status:** Approved direction — July 2026
 **Decisions:** TagDeck owns the library (iTunes is an optional link) · global + per-playlist sync control · Off / Import-only / Two-way modes · Rekordbox via rekordbox.xml export bridge.
 
+**Framing: parity first.** Nearly every user arrives with a library iTunes built. Full parity with that library is the default experience — first-run leads with "Import your iTunes library" (catalog only: no files are copied or moved; TagDeck references the files where iTunes keeps them) and Two-way sync stays on. "TagDeck owns the library" changes only the *divergence* path: disagreements between the two sides get surfaced instead of silently resolved in iTunes' favor.
+
 ## Where we are today
 
 The library is a derived mirror of iTunes:
@@ -31,7 +33,7 @@ rekordbox.xml → Rekordbox → CDJs
 - Keep `persistent_id` as TagDeck's internal stable ID (it's already the join key everywhere — no rekeying migration).
 - Add nullable `tracks.itunes_pid`. Migration: for existing tracks, `itunes_pid = persistent_id` unless it starts with `TD-`. All sync joins move from `persistent_id` to `itunes_pid`.
 - New imports always mint `TD-<hex>` persistent IDs. If the file is also added to Music.app, the returned Music PID goes in `itunes_pid`.
-- A track vanishing from Music.app is **unlinked** (`itunes_pid = NULL`, badged in UI), never auto-deleted. Deletion is only ever user-initiated in TagDeck.
+- A track vanishing from Music.app is **unlinked** (`itunes_pid = NULL`, `unlinked_at` stamped, badged in UI), never auto-deleted silently. A setting governs what happens next — **"When a track is removed from iTunes: ask me (default, via Sync Review) / remove from TagDeck too / keep as unlinked"** — so strict-mirror users can opt into today's behavior deliberately.
 
 ### iTunes relationship modes (global setting, stored in `library_config`)
 
@@ -44,6 +46,14 @@ rekordbox.xml → Rekordbox → CDJs
 - Replace every `is_apple_music_available()` *behavior* gate (import routing, settings visibility, write-back calls) with a mode check. Availability detection remains only to gray out modes that can't work.
 - Migration/default: existing users with Music.app → **Two-way** (no behavior change); fresh installs get a first-run choice.
 - **Import-only tag-clobber guard:** file comments are the golden source. In Import-only mode we never push comments to Music.app, so Music's comment goes stale; Phase 1 pulls must therefore **exclude the comment field** (or re-read it from the file) or a sync would overwrite fresh tags in the DB with iTunes' stale copy. Same guard applies in Two-way if a push fails.
+
+### Sync Review (reconciliation helper)
+
+The existing sync engine already computes every diff we need (Phase 0 adds/removes, Phase 1 metadata, Phase 2 rating/BPM snapshot, Phase 3 playlists). Sync Review reuses those diffs but **presents them for approval instead of auto-applying** — "while sync was off: 43 tracks added in iTunes, 3 removed, 12 comments changed…" with apply-all or per-item choices.
+
+- **Dirty flags for conflict detection:** a per-track `dirty_since_sync` flag set on any TagDeck-side edit while sync is off/import-only. On reconcile, iTunes-only changes apply automatically; both-sides-changed items go to the review UI to pick a side. No three-way merge needed — file tags are never at risk (file is golden source); only the DB/iTunes view reconciles.
+- One feature, three uses: reconciliation after a sync-off period, the "ask me" deletion confirm above, and an on-demand drift audit.
+- Direction is symmetric: the same diff run with pushes enabled is the "export my TagDeck changes back to iTunes" path (see Exit path).
 
 ### Per-playlist sync
 
@@ -67,13 +77,24 @@ rekordbox.xml → Rekordbox → CDJs
 - Manual "Export to Rekordbox" button first; later an auto-export-on-change toggle. Optional per-playlist include flag (reuse the sort of pattern as `itunes_sync_enabled`).
 - One-way by design. No master.db writing (unsupported/dangerous). Keep the existing `touch_file` behavior so re-analyzed files refresh in Rekordbox.
 
+### Exit path (back to iTunes)
+
+A trust feature: users commit more readily when leaving is safe.
+
+- **Tags survive by design** — they live in file comments, and Two-way mode already pushes them into Music.app. Files are never relocated from iTunes' folders by import, so quitting TagDeck leaves the iTunes library exactly as it was.
+- **"Export to Music.app"** — for TagDeck-only tracks/playlists (standalone imports, tagdeck-origin playlists): add files via the existing `add_file_to_music_library` AppleScript and recreate playlists via existing write-back functions.
+- **M3U8 playlist export** — universal escape hatch (also useful beyond iTunes).
+- A user who ran sync-off for months runs Sync Review once with pushes enabled to land their TagDeck-side changes in iTunes before leaving.
+
 ## Build order
 
-1. **Identity decoupling** — `itunes_pid` column + migration; sync joins on it; Phase 0 unlinks instead of deletes; "unlinked" badge.
-2. **Sync mode setting** — Off/Import-only/Two-way in `library_config` + Settings UI; replace availability gates; import-only comment guard; first-run default logic.
-3. **Per-playlist sync** — wire `itunes_sync_enabled`; context-menu link/unlink actions; update Phase 3 + write-back gates.
-4. **File management hardening** — always-visible settings, `file_hash` dedup, TagDeck-root watcher, Consolidate Library.
-5. **Rekordbox export** — rekordbox.xml writer + export UI.
+1. **Identity decoupling** — `itunes_pid` column + migration; sync joins on it; Phase 0 unlinks instead of deletes; "unlinked" badge; `dirty_since_sync` flag groundwork.
+2. **Sync mode setting** — Off/Import-only/Two-way in `library_config` + Settings UI; replace availability gates; import-only comment guard; first-run default logic; iTunes-deletion behavior setting.
+3. **Sync Review** — review UI over the existing diff phases; conflict detection via dirty flags; deletion confirms route here.
+4. **Per-playlist sync** — wire `itunes_sync_enabled`; context-menu link/unlink actions; update Phase 3 + write-back gates.
+5. **File management hardening** — always-visible settings, `file_hash` dedup, TagDeck-root watcher, Consolidate Library.
+6. **Exit path** — Export to Music.app, M3U8 export.
+7. **Rekordbox export** — rekordbox.xml writer + export UI.
 
 Each phase ships independently; 1–2 are the foundation and should land before anything else builds on the mode setting.
 
