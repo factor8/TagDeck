@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- **iTunes Sync mode setting** (Settings → iTunes Sync): choose the relationship between TagDeck and Music.app — **Off** (no connection), **Import only** (pull changes from iTunes, never write back), or **Two-way** (full sync, the previous always-on behavior). Existing users with Music.app default to Two-way; installs without Music.app default to Off. In Off/Import-only modes, imports are handled by TagDeck's own file manager and the Library Management settings become visible.
+- **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
+
+### Fixed
+- In Import-only mode, syncing no longer overwrites tags with iTunes' stale copy of the comment field (TagDeck stops pushing comments in that mode, so the file/TagDeck copy is authoritative).
+
 ### Changed
 - **Tracks removed from iTunes are no longer deleted from TagDeck.** They are now "unlinked": the track, its tags, and its playlist memberships stay in TagDeck, marked with an *unlinked* badge in the track list. Re-adding the track to Music.app relinks it automatically. (Previously, deleting a track in Music.app silently deleted it from TagDeck on the next sync.)
 

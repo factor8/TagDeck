@@ -1,7 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash",
+      "Bash(*)",
       "Bash(ls -la /Users/factor8/Documents/GitHub/TagDeck/src-tauri/src/*.rs)",
       "Bash(cargo check:*)",
       "Bash(npx tsc:*)",
@@ -18,7 +18,9 @@
       "Bash(cp '/Users/factor8/Library/Application Support/com.factor8.tagdeck/tagdeck.db' /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db)",
       "Bash(sqlite3 /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db ' *)",
       "Bash(sqlite3 /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db 'SELECT MIN\\(id\\) FROM tracks')",
-      "Bash(git commit -m 'feat: decouple track identity from iTunes — unlink instead of delete on sync *)"
+      "Bash(git commit -m 'feat: decouple track identity from iTunes — unlink instead of delete on sync *)",
+      "Bash(touch src/commands.rs)",
+      "Bash(git status *)"
     ]
   }
 }

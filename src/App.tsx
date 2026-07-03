@@ -59,6 +59,7 @@ function App() {
   const [copyPlaylistsTarget, setCopyPlaylistsTarget] = useState<Track | null>(null);
   const [scrollToTrackId, setScrollToTrackId] = useState<number | null>(null);
   const [appleMusicAvailable, setAppleMusicAvailable] = useState(true);
+  const [syncMode, setSyncMode] = useState<'Off' | 'ImportOnly' | 'TwoWay'>('TwoWay');
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -87,12 +88,31 @@ function App() {
   }, []);
 
   useEffect(() => {
+    interface LibraryConfig {
+      sync_mode: 'Off' | 'ImportOnly' | 'TwoWay';
+    }
+    invoke<LibraryConfig>('get_library_config')
+      .then(config => setSyncMode(config.sync_mode))
+      .catch(console.error);
+  }, []);
+
+  useEffect(() => {
     const handleToggle = () => {
         console.log("[App] Sync toggle detected, reloading listener...");
         setSyncEnabledTrigger(p => p + 1);
     };
     window.addEventListener('real-time-sync-toggled', handleToggle);
     return () => window.removeEventListener('real-time-sync-toggled', handleToggle);
+  }, []);
+
+  useEffect(() => {
+    const handleSyncModeChange = (e: Event) => {
+        const detail = (e as CustomEvent<'Off' | 'ImportOnly' | 'TwoWay'>).detail;
+        console.log("[App] Sync mode changed to:", detail);
+        setSyncMode(detail);
+    };
+    window.addEventListener('sync-mode-changed', handleSyncModeChange);
+    return () => window.removeEventListener('sync-mode-changed', handleSyncModeChange);
   }, []);
 
   useEffect(() => {
@@ -129,6 +149,12 @@ function App() {
       // Check Apple Music availability and setting
       if (!appleMusicAvailable) {
           console.log("[App] Real-Time Sync skipped — Apple Music not available.");
+          return;
+      }
+
+      // Pulls from iTunes are only meaningful in ImportOnly/TwoWay modes
+      if (syncMode !== 'ImportOnly' && syncMode !== 'TwoWay') {
+          console.log("[App] Real-Time Sync skipped — sync mode is", syncMode);
           return;
       }
 
@@ -231,7 +257,7 @@ function App() {
       isMounted = false;
       if (unlistenFn) unlistenFn();
     };
-  }, [syncEnabledTrigger, appleMusicAvailable]);
+  }, [syncEnabledTrigger, appleMusicAvailable, syncMode]);
 
   const sensors = useSensors(
       useSensor(PointerSensor, {

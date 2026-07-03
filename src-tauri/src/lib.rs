@@ -100,7 +100,23 @@ pub fn run() {
 
             let db = Database::new(db_path).expect("failed to initialize database");
 
-            app.manage(AppState { 
+            // First run (or pre-sync-mode upgrade): default to TwoWay when
+            // Music.app is present — existing users keep today's behavior —
+            // otherwise Off for a standalone library.
+            if db.get_config("sync_mode").ok().flatten().is_none() {
+                let default_mode = if apple_music::is_apple_music_available() {
+                    "two_way"
+                } else {
+                    "off"
+                };
+                if let Err(e) = db.set_config("sync_mode", default_mode) {
+                    eprintln!("Failed to persist default sync_mode: {}", e);
+                } else {
+                    println!("Initialized sync_mode to '{}'", default_mode);
+                }
+            }
+
+            app.manage(AppState {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()),
                 is_syncing: AtomicBool::new(false), 

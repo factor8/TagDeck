@@ -160,7 +160,28 @@ impl Database {
     }
 
     pub fn insert_track(&self, track: &crate::models::Track) -> Result<()> {
-        self.conn.execute(
+        self.insert_track_impl(track, false)
+    }
+
+    /// Identical to `insert_track`, except on conflict the existing row's
+    /// `comment_raw`/`grouping_raw` are kept instead of overwritten with
+    /// Music.app's copy. Used when sync mode doesn't push comments back to
+    /// Music.app — in that case Music's copy is stale and must not clobber
+    /// fresher tag edits made in TagDeck (file is the golden source).
+    pub fn insert_track_preserving_comment(&self, track: &crate::models::Track) -> Result<i64> {
+        self.insert_track_impl(track, true)?;
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM tracks WHERE persistent_id = ?1",
+            params![track.persistent_id],
+            |row| row.get(0),
+        )?;
+        Ok(id)
+    }
+
+    fn insert_track_impl(&self, track: &crate::models::Track, preserve_comment: bool) -> Result<()> {
+        let comment_set = if preserve_comment { "comment_raw" } else { "excluded.comment_raw" };
+        let grouping_set = if preserve_comment { "grouping_raw" } else { "excluded.grouping_raw" };
+        let sql = format!(
             "INSERT INTO tracks (
                 persistent_id, file_path, artist, title, album,
                 comment_raw, grouping_raw, duration_secs, format,
@@ -171,8 +192,8 @@ impl Database {
                 artist=excluded.artist,
                 title=excluded.title,
                 album=excluded.album,
-                comment_raw=excluded.comment_raw,
-                grouping_raw=excluded.grouping_raw,
+                comment_raw={comment_set},
+                grouping_raw={grouping_set},
                 duration_secs=excluded.duration_secs,
                 format=excluded.format,
                 size_bytes=excluded.size_bytes,
@@ -184,6 +205,11 @@ impl Database {
                 itunes_pid=excluded.itunes_pid,
                 unlinked_at=NULL
             ",
+            comment_set = comment_set,
+            grouping_set = grouping_set,
+        );
+        self.conn.execute(
+            &sql,
             params![
                 track.persistent_id,
                 track.file_path,
@@ -903,6 +929,35 @@ impl Database {
             )?;
         }
         Ok(unlinked)
+    }
+
+    /// Deletes tracks (and their playlist memberships) whose `itunes_pid` matches
+    /// one of the given values. Used when `itunes_deletion_behavior` is `Remove`,
+    /// mirroring a Music.app deletion into TagDeck instead of just unlinking.
+    /// Returns the count of deleted tracks.
+    pub fn delete_tracks_by_itunes_pids(&self, pids: &[String]) -> Result<usize> {
+        let mut deleted = 0;
+        for pid in pids {
+            let db_id: Option<i64> = self.conn.query_row(
+                "SELECT id FROM tracks WHERE itunes_pid = ?1",
+                params![pid],
+                |row| row.get(0),
+            ).ok();
+
+            if let Some(id) = db_id {
+                self.conn.execute(
+                    "DELETE FROM playlist_tracks WHERE track_id = ?1",
+                    params![id],
+                )?;
+            }
+
+            let rows = self.conn.execute(
+                "DELETE FROM tracks WHERE itunes_pid = ?1",
+                params![pid],
+            )?;
+            deleted += rows;
+        }
+        Ok(deleted)
     }
 
     // TAG GROUP METHODS

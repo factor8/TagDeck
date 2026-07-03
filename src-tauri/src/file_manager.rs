@@ -18,12 +18,46 @@ pub enum ImportMode {
     InPlace,
 }
 
+/// Relationship with Apple Music / iTunes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SyncMode {
+    /// No communication with Music.app in either direction.
+    Off,
+    /// Pull changes from Music.app; never push TagDeck edits back.
+    ImportOnly,
+    /// Full bidirectional sync (original TagDeck behavior).
+    TwoWay,
+}
+
+impl SyncMode {
+    /// May we read changes from Music.app (real-time sync, manual sync)?
+    pub fn pull_enabled(self) -> bool {
+        matches!(self, SyncMode::ImportOnly | SyncMode::TwoWay)
+    }
+
+    /// May we write TagDeck edits (tags, ratings, playlists) to Music.app?
+    pub fn push_enabled(self) -> bool {
+        matches!(self, SyncMode::TwoWay)
+    }
+}
+
+/// What sync does when a linked track has been removed from Music.app.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DeletionBehavior {
+    /// Unlink the track but keep it (and its tags/playlists) in TagDeck.
+    Keep,
+    /// Mirror the deletion: remove the track from TagDeck too.
+    Remove,
+}
+
 /// Persistent library configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LibraryConfig {
     pub root_path: String,
     pub import_mode: ImportMode,
     pub organize_files: bool,
+    pub sync_mode: SyncMode,
+    pub itunes_deletion_behavior: DeletionBehavior,
 }
 
 /// Result of importing a single file.
@@ -77,10 +111,25 @@ impl LibraryConfig {
             .map(|v| v == "true")
             .unwrap_or(true);
 
+        // Absent key means the startup migration hasn't run; TwoWay matches the
+        // app's original always-sync behavior so existing users see no change.
+        let sync_mode = match db.get_config("sync_mode")?.as_deref() {
+            Some("off") => SyncMode::Off,
+            Some("import_only") => SyncMode::ImportOnly,
+            _ => SyncMode::TwoWay,
+        };
+
+        let itunes_deletion_behavior = match db.get_config("itunes_deletion_behavior")?.as_deref() {
+            Some("remove") => DeletionBehavior::Remove,
+            _ => DeletionBehavior::Keep,
+        };
+
         Ok(Self {
             root_path,
             import_mode,
             organize_files,
+            sync_mode,
+            itunes_deletion_behavior,
         })
     }
 
@@ -99,7 +148,36 @@ impl LibraryConfig {
             "organize_files",
             if self.organize_files { "true" } else { "false" },
         )?;
+        db.set_config(
+            "sync_mode",
+            match self.sync_mode {
+                SyncMode::Off => "off",
+                SyncMode::ImportOnly => "import_only",
+                SyncMode::TwoWay => "two_way",
+            },
+        )?;
+        db.set_config(
+            "itunes_deletion_behavior",
+            match self.itunes_deletion_behavior {
+                DeletionBehavior::Keep => "keep",
+                DeletionBehavior::Remove => "remove",
+            },
+        )?;
         Ok(())
+    }
+
+    /// The effective sync mode, read directly from config. Falls back to TwoWay
+    /// (original behavior) if config can't be read.
+    pub fn sync_mode(db: &crate::db::Database) -> SyncMode {
+        db.get_config("sync_mode")
+            .ok()
+            .flatten()
+            .map(|v| match v.as_str() {
+                "off" => SyncMode::Off,
+                "import_only" => SyncMode::ImportOnly,
+                _ => SyncMode::TwoWay,
+            })
+            .unwrap_or(SyncMode::TwoWay)
     }
 }
 

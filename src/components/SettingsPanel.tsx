@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform, HardDrive } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform, HardDrive, RefreshCw } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useDebug } from './DebugContext';
@@ -33,6 +33,8 @@ interface LibraryConfig {
     root_path: string;
     import_mode: 'Copy' | 'Move' | 'InPlace';
     organize_files: boolean;
+    sync_mode: 'Off' | 'ImportOnly' | 'TwoWay';
+    itunes_deletion_behavior: 'Keep' | 'Remove';
 }
 
 const THEMES = [
@@ -86,6 +88,17 @@ export function SettingsPanel({
         setRealTimeSyncEnabled(newValue);
         localStorage.setItem('app_real_time_sync_enabled', String(newValue));
         window.dispatchEvent(new Event('real-time-sync-toggled'));
+    };
+
+    const updateLibraryConfig = (updates: Partial<LibraryConfig>) => {
+        if (!libraryConfig) return;
+        const updated = { ...libraryConfig, ...updates };
+        invoke('set_library_config', { config: updated }).then(() => {
+            setLibraryConfig(updated);
+            if (updates.sync_mode && updates.sync_mode !== libraryConfig.sync_mode) {
+                window.dispatchEvent(new CustomEvent('sync-mode-changed', { detail: updated.sync_mode }));
+            }
+        }).catch(console.error);
     };
 
     const loadSyncInfo = () => {
@@ -268,9 +281,60 @@ export function SettingsPanel({
                             <span style={{ fontSize: '14px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>No sync history found.</span>
                         )}
                         
-                        {appleMusicAvailable ? (
+                        {!appleMusicAvailable && (
+                            <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                                Apple Music not found — running in standalone mode. Drag audio files onto the window to import them.
+                            </div>
+                        )}
+                    </div>
+
+                    {/* iTunes Sync */}
+                    <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                        <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <RefreshCw size={14} /> iTunes Sync
+                        </h4>
+
+                        {/* Sync mode — headline control */}
+                        <div style={{ marginBottom: '14px' }}>
+                            {(['Off', 'ImportOnly', 'TwoWay'] as const).map((mode) => {
+                                const labels: Record<string, string> = {
+                                    Off: 'Off',
+                                    ImportOnly: 'Import only',
+                                    TwoWay: 'Two-way',
+                                };
+                                const descriptions: Record<string, string> = {
+                                    Off: 'No connection to iTunes',
+                                    ImportOnly: 'Pull changes from iTunes; never write back',
+                                    TwoWay: 'Keep TagDeck and iTunes fully in sync',
+                                };
+                                const disabled = mode !== 'Off' && !appleMusicAvailable;
+                                return (
+                                    <label key={mode} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.5 : 1 }}>
+                                        <input
+                                            type="radio"
+                                            name="sync-mode"
+                                            checked={libraryConfig?.sync_mode === mode}
+                                            disabled={disabled}
+                                            onChange={() => updateLibraryConfig({ sync_mode: mode })}
+                                            style={{ accentColor: 'var(--accent-color)', marginTop: '2px' }}
+                                        />
+                                        <div>
+                                            <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{labels[mode]}</div>
+                                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{descriptions[mode]}</div>
+                                        </div>
+                                    </label>
+                                );
+                            })}
+                            {!appleMusicAvailable && (
+                                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
+                                    Music.app not detected
+                                </div>
+                            )}
+                        </div>
+
+                        {libraryConfig && libraryConfig.sync_mode !== 'Off' && (
                             <>
-                                <div style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px' }}>
                                     <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Real-Time Sync</span>
                                     <button
                                         onClick={handleRealTimeSyncToggle}
@@ -321,11 +385,30 @@ export function SettingsPanel({
                                     </button>
                                 </div>
                                 {status && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '8px' }}>{status}</div>}
+
+                                {/* Deletion behavior */}
+                                <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border-color)' }}>
+                                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>When a track is removed from iTunes</span>
+                                    {(['Keep', 'Remove'] as const).map((behavior) => {
+                                        const labels: Record<string, string> = {
+                                            Keep: 'Keep in TagDeck (marked unlinked)',
+                                            Remove: 'Also remove from TagDeck',
+                                        };
+                                        return (
+                                            <label key={behavior} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', marginBottom: '4px', cursor: 'pointer' }}>
+                                                <input
+                                                    type="radio"
+                                                    name="itunes-deletion-behavior"
+                                                    checked={libraryConfig?.itunes_deletion_behavior === behavior}
+                                                    onChange={() => updateLibraryConfig({ itunes_deletion_behavior: behavior })}
+                                                    style={{ accentColor: 'var(--accent-color)' }}
+                                                />
+                                                {labels[behavior]}
+                                            </label>
+                                        );
+                                    })}
+                                </div>
                             </>
-                        ) : (
-                            <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--text-secondary)', fontStyle: 'italic' }}>
-                                Apple Music not found — running in standalone mode. Drag audio files onto the window to import them.
-                            </div>
                         )}
                     </div>
 
@@ -366,8 +449,8 @@ export function SettingsPanel({
                         </div>
                     </div>
 
-                    {/* Library Management — standalone mode only */}
-                    {!appleMusicAvailable && <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                    {/* Library Management — shown whenever TagDeck's own file manager (not Music.app) handles imports */}
+                    {(!appleMusicAvailable || (libraryConfig ? libraryConfig.sync_mode !== 'TwoWay' : false)) && <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
                         <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <HardDrive size={14} /> Library Management
                         </h4>

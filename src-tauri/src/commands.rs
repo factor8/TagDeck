@@ -3,7 +3,7 @@ use crate::library_parser::parse_library;
 use crate::system_library::fetch_system_library;
 use crate::metadata::{write_metadata as write_tags_to_file, get_artwork, write_track_info};
 use crate::file_manager::{
-    LibraryConfig, ImportResult, ImportSummary,
+    LibraryConfig, ImportResult, ImportSummary, SyncMode, DeletionBehavior,
     import_file, is_supported_audio_file, collect_audio_files,
 };
 use crate::apple_music::{
@@ -359,10 +359,13 @@ pub async fn write_tags(
         println!("Warning: Failed to touch file: {}", e);
     }
     
-    // 2b. Update in Music.app (via AppleScript) - only for linked tracks
-    if let Some(itunes_pid) = &track.itunes_pid {
-        if let Err(e) = update_track_comment(itunes_pid, &new_tags) {
-             println!("Warning: Failed to update track in Music: {}", e);
+    // 2b. Update in Music.app (via AppleScript) - only for linked tracks, and only
+    // when the sync mode allows pushing TagDeck edits back to Music.app.
+    if LibraryConfig::sync_mode(&db).push_enabled() {
+        if let Some(itunes_pid) = &track.itunes_pid {
+            if let Err(e) = update_track_comment(itunes_pid, &new_tags) {
+                 println!("Warning: Failed to update track in Music: {}", e);
+            }
         }
     }
 
@@ -387,7 +390,8 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
     }
 
     let db_mutex = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    
+    let mode = LibraryConfig::sync_mode(&db_mutex);
+
     // Collect tracks to avoid holding lock too long if we needed to, but here we need lock for update anyway
     // Or we iterate one by one. For safety/simplicity let's get all tracks first.
     let mut tracks_to_update = Vec::new();
@@ -398,7 +402,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
         }
     }
     // Drop lock to perform file IO
-    drop(db_mutex); 
+    drop(db_mutex);
 
     let mut apple_music_updates = Vec::new();
     let mut undo_track_states = Vec::new();
@@ -460,9 +464,13 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                 }
             }
 
-            // 3. Queue Music.app Update
-             if let Some(itunes_pid) = &track.itunes_pid {
-                 apple_music_updates.push((itunes_pid.clone(), new_full_comment));
+            // 3. Queue Music.app Update (only when the sync mode allows pushing)
+             if mode.push_enabled() {
+                 if let Some(itunes_pid) = &track.itunes_pid {
+                     apple_music_updates.push((itunes_pid.clone(), new_full_comment));
+                 } else {
+                     let _ = touch_file(&track.file_path);
+                 }
              } else {
                  let _ = touch_file(&track.file_path);
              }
@@ -495,14 +503,15 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
     
     // Lock briefly to get tracks
     let mut tracks_to_update = Vec::new();
-    {
+    let mode = {
         let db_mutex = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         for id in &ids {
             if let Ok(Some(track)) = db_mutex.get_track(*id) {
                 tracks_to_update.push(track);
             }
         }
-    } // Drop lock
+        LibraryConfig::sync_mode(&db_mutex)
+    }; // Drop lock
 
     let mut apple_music_updates = Vec::new();
     let mut undo_track_states = Vec::new();
@@ -565,9 +574,13 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                 }
             }
 
-            // Music.app Queue
-             if let Some(itunes_pid) = &track.itunes_pid {
-                 apple_music_updates.push((itunes_pid.clone(), new_full_comment));
+            // Music.app Queue (only when the sync mode allows pushing)
+             if mode.push_enabled() {
+                 if let Some(itunes_pid) = &track.itunes_pid {
+                     apple_music_updates.push((itunes_pid.clone(), new_full_comment));
+                 } else {
+                     let _ = touch_file(&track.file_path);
+                 }
              } else {
                  let _ = touch_file(&track.file_path);
              }
@@ -593,11 +606,19 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
 
 #[tauri::command]
 pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    let mode = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        LibraryConfig::sync_mode(&db)
+    };
+    if mode == SyncMode::Off {
+        return Err("iTunes sync is turned off in Settings".to_string());
+    }
+
     // Acquire sync lock
     if state.is_syncing.swap(true, Ordering::SeqCst) {
         return Err("Sync already in progress".to_string());
     }
-    
+
     // Ensure lock is released even on error
     struct SyncGuard<'a>(&'a AtomicBool);
     impl<'a> Drop for SyncGuard<'a> {
@@ -628,13 +649,21 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
         .map_err(|_| "Failed to lock DB".to_string())?;
 
     for track in tracks {
-        if let Err(e) = db.insert_track(&track) {
+        // In modes that don't push comments back to Music.app, its copy is stale
+        // relative to the file (golden source) — preserve any existing DB row's
+        // comment/grouping instead of overwriting with Music.app's copy.
+        let insert_result = if mode.push_enabled() {
+            db.insert_track(&track).map(|_| ())
+        } else {
+            db.insert_track_preserving_comment(&track).map(|_| ())
+        };
+        if let Err(e) = insert_result {
             let msg = format!("DB Error (insert track): {}", e);
             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
             return Err(msg);
         }
     }
-    
+
     for playlist in playlists {
         if let Err(e) = db.insert_playlist(&playlist) {
              let msg = format!("DB Error (insert playlist): {}", e);
@@ -661,6 +690,19 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     // Check if full sync is running, but don't error out hard—just skip
     if state.is_syncing.load(Ordering::SeqCst) {
         println!("Sync skipped: Full sync in progress");
+        return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_unlinked: 0, playlists_updated: 0 });
+    }
+
+    // Sync mode may disallow pulling from Music.app entirely (Off). Check before
+    // taking the sync lock so we never need to release it on this early return.
+    let mode = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        LibraryConfig::sync_mode(&db)
+    };
+    if !mode.pull_enabled() {
+        let msg = "Sync skipped: iTunes pull is disabled by the current sync mode";
+        println!("{}", msg);
+        app.state::<crate::logging::LogState>().add_log("INFO", msg, &app);
         return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_unlinked: 0, playlists_updated: 0 });
     }
     // We do NOT set the lock for real-time sync (unless we want to block full sync?)
@@ -725,7 +767,14 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                         let count = new_tracks.len();
                         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
                         for track in &new_tracks {
-                            if let Err(e) = db.insert_track(track) {
+                            // See insert_track_preserving_comment: avoid clobbering DB
+                            // comments with Music.app's stale copy when not pushing.
+                            let insert_result = if mode.push_enabled() {
+                                db.insert_track(track).map(|_| ())
+                            } else {
+                                db.insert_track_preserving_comment(track).map(|_| ())
+                            };
+                            if let Err(e) = insert_result {
                                 let msg = format!("DB Error importing new track {}: {}", track.persistent_id, e);
                                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
                             }
@@ -755,25 +804,53 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 }
             }
 
-            // Handle removed tracks: unlink them, keeping the track and all its
-            // TagDeck data. Deletion is only ever user-initiated.
+            // Handle removed tracks per the `itunes_deletion_behavior` setting:
+            // Keep (default) unlinks — the track and all its TagDeck data stay;
+            // Remove mirrors the deletion into TagDeck too.
             if !deleted_pids.is_empty() {
-                let delete_msg = format!("Found {} track(s) removed from Music.app. Unlinking...", deleted_pids.len());
-                println!("{}", delete_msg);
-                app.state::<crate::logging::LogState>().add_log("INFO", &delete_msg, &app);
-
                 let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-                match db.unlink_tracks_by_itunes_pids(&deleted_pids) {
-                    Ok(count) => {
-                        let msg = format!("Unlinked {} track(s) removed from Music.app (kept in TagDeck)", count);
-                        println!("{}", msg);
-                        app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
-                        tracks_unlinked += count;
-                        total_updated += count;
+                let deletion_behavior = LibraryConfig::load(&db)
+                    .map(|c| c.itunes_deletion_behavior)
+                    .unwrap_or(DeletionBehavior::Keep);
+
+                match deletion_behavior {
+                    DeletionBehavior::Keep => {
+                        let delete_msg = format!("Found {} track(s) removed from Music.app. Unlinking (deletion behavior: keep)...", deleted_pids.len());
+                        println!("{}", delete_msg);
+                        app.state::<crate::logging::LogState>().add_log("INFO", &delete_msg, &app);
+
+                        match db.unlink_tracks_by_itunes_pids(&deleted_pids) {
+                            Ok(count) => {
+                                let msg = format!("Unlinked {} track(s) removed from Music.app (kept in TagDeck)", count);
+                                println!("{}", msg);
+                                app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+                                tracks_unlinked += count;
+                                total_updated += count;
+                            }
+                            Err(e) => {
+                                let msg = format!("DB Error unlinking removed tracks: {}", e);
+                                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        let msg = format!("DB Error unlinking removed tracks: {}", e);
-                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    DeletionBehavior::Remove => {
+                        let delete_msg = format!("Found {} track(s) removed from Music.app. Deleting from TagDeck (deletion behavior: remove)...", deleted_pids.len());
+                        println!("{}", delete_msg);
+                        app.state::<crate::logging::LogState>().add_log("INFO", &delete_msg, &app);
+
+                        match db.delete_tracks_by_itunes_pids(&deleted_pids) {
+                            Ok(count) => {
+                                let msg = format!("Deleted {} track(s) removed from Music.app", count);
+                                println!("{}", msg);
+                                app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+                                tracks_unlinked += count;
+                                total_updated += count;
+                            }
+                            Err(e) => {
+                                let msg = format!("DB Error deleting removed tracks: {}", e);
+                                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                            }
+                        }
                     }
                 }
                 drop(db);
@@ -815,7 +892,14 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
             }
         }
         for track in tracks {
-            if let Err(e) = db.insert_track(&track) {
+            // See insert_track_preserving_comment: avoid clobbering DB comments
+            // with Music.app's stale copy when not pushing edits back to it.
+            let insert_result = if mode.push_enabled() {
+                db.insert_track(&track).map(|_| ())
+            } else {
+                db.insert_track_preserving_comment(&track).map(|_| ())
+            };
+            if let Err(e) = insert_result {
                 let msg = format!("DB Error (update track {}): {}", track.persistent_id, e);
                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
             }
@@ -1057,9 +1141,11 @@ pub async fn rename_playlist(
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
 
-    // If this is an iTunes-origin playlist, also rename in Music.app
+    // If this is an iTunes-origin playlist, also rename in Music.app — only when
+    // the sync mode allows pushing TagDeck edits back to Music.app
     let origin = db.get_playlist_origin(id).unwrap_or_default();
-    if origin == "itunes" {
+    let mode = LibraryConfig::sync_mode(&db);
+    if origin == "itunes" && mode.push_enabled() {
         let pid = db.get_playlist_persistent_id(id).map_err(|e| e.to_string())?;
         drop(db); // Release lock before AppleScript call
         if let Err(e) = crate::apple_music::rename_playlist_in_music(&pid, &name) {
@@ -1141,7 +1227,7 @@ pub async fn add_to_playlist(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // 1. Get IDs
-    let (playlist_pid, track_data, origin) = {
+    let (playlist_pid, track_data, origin, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
@@ -1153,13 +1239,15 @@ pub async fn add_to_playlist(
                 data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None)));
             }
         }
-        (pid, data, origin)
+        let mode = LibraryConfig::sync_mode(&db);
+        (pid, data, origin, mode)
     };
 
     let valid_track_ids: Vec<i64> = track_data.iter().map(|(t, _)| *t).collect();
 
-    // 2. Apple Music Sync (only for iTunes-origin playlists and linked tracks)
-    if origin == "itunes" {
+    // 2. Apple Music Sync (only for iTunes-origin playlists, linked tracks, and
+    // when the sync mode allows pushing TagDeck edits back to Music.app)
+    if origin == "itunes" && mode.push_enabled() {
         for (_, itunes_pid) in &track_data {
             if let Some(pid) = itunes_pid {
                 if let Err(e) = add_track_to_playlist(pid, &playlist_pid) {
@@ -1208,7 +1296,7 @@ pub async fn remove_from_playlist(
     playlist_id: i64,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let (playlist_pid, track_data, origin) = {
+    let (playlist_pid, track_data, origin, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
@@ -1219,11 +1307,13 @@ pub async fn remove_from_playlist(
                 data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None)));
             }
         }
-        (pid, data, origin)
+        let mode = LibraryConfig::sync_mode(&db);
+        (pid, data, origin, mode)
     };
 
-    // Remove from Apple Music (only for iTunes-origin playlists and linked tracks)
-    if origin == "itunes" {
+    // Remove from Apple Music (only for iTunes-origin playlists, linked tracks,
+    // and when the sync mode allows pushing TagDeck edits back to Music.app)
+    if origin == "itunes" && mode.push_enabled() {
         for (_, itunes_pid) in &track_data {
             if let Some(tpid) = itunes_pid {
                 if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
@@ -1254,7 +1344,7 @@ pub async fn reorder_playlist_tracks(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // 1. Get persistent IDs for the playlist and all tracks in order
-    let (playlist_pid, track_pids) = {
+    let (playlist_pid, track_pids, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let ppid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
@@ -1265,7 +1355,7 @@ pub async fn reorder_playlist_tracks(
                 pids.push(tpid);
             }
         }
-        (ppid, pids)
+        (ppid, pids, LibraryConfig::sync_mode(&db))
     };
 
     // 2. Update local DB
@@ -1275,15 +1365,18 @@ pub async fn reorder_playlist_tracks(
             .map_err(|e| e.to_string())?;
     }
 
-    // 3. Sync to Apple Music (in background — don't block the UI)
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = crate::apple_music::reorder_playlist(&playlist_pid, &track_pids) {
-            let msg = format!("Failed to reorder playlist in Music.app: {}", e);
-            eprintln!("{}", msg);
-            app_handle.state::<crate::logging::LogState>().add_log("WARN", &msg, &app_handle);
-        }
-    });
+    // 3. Sync to Apple Music (in background — don't block the UI), only when the
+    // sync mode allows pushing TagDeck edits back to Music.app
+    if mode.push_enabled() {
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::apple_music::reorder_playlist(&playlist_pid, &track_pids) {
+                let msg = format!("Failed to reorder playlist in Music.app: {}", e);
+                eprintln!("{}", msg);
+                app_handle.state::<crate::logging::LogState>().add_log("WARN", &msg, &app_handle);
+            }
+        });
+    }
 
     Ok(())
 }
@@ -1301,12 +1394,15 @@ pub async fn update_rating(
     // 1. Get iTunes link
     let itunes_pid = db.get_track_itunes_pid(track_id).map_err(|e| e.to_string())?;
 
-    // 2. Update Music.app (linked tracks only)
-    if let Some(pid) = &itunes_pid {
-        if let Err(e) = update_track_rating(pid, rating) {
-            let msg = format!("Failed to update Apple Music rating: {}", e);
-            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
-            return Err(msg);
+    // 2. Update Music.app (linked tracks only, and only when the sync mode
+    // allows pushing TagDeck edits back to Music.app)
+    if LibraryConfig::sync_mode(&db).push_enabled() {
+        if let Some(pid) = &itunes_pid {
+            if let Err(e) = update_track_rating(pid, rating) {
+                let msg = format!("Failed to update Apple Music rating: {}", e);
+                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                return Err(msg);
+            }
         }
     }
 
@@ -1444,6 +1540,7 @@ pub async fn update_track_info(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let mode = LibraryConfig::sync_mode(&db);
 
     // 1. Get track for persistent_id, file_path, and old values
     let track = db.get_track(track_id).map_err(|e| e.to_string())?
@@ -1530,28 +1627,31 @@ pub async fn update_track_info(
         eprintln!("Warning: Failed to touch file: {}", e);
     }
 
-    // 7. Update Apple Music (linked tracks only)
-    if let Some(itunes_pid) = &track.itunes_pid {
-        if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
-            if let Err(e) = apple_update_track_info(
-                itunes_pid,
-                title.as_deref(),
-                artist.as_deref(),
-                album.as_deref(),
-                bpm,
-            ) {
-                let msg = format!("Warning: Failed to update Apple Music: {}", e);
-                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
-                eprintln!("{}", msg);
+    // 7. Update Apple Music (linked tracks only, and only when the sync mode
+    // allows pushing TagDeck edits back to Music.app)
+    if mode.push_enabled() {
+        if let Some(itunes_pid) = &track.itunes_pid {
+            if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+                if let Err(e) = apple_update_track_info(
+                    itunes_pid,
+                    title.as_deref(),
+                    artist.as_deref(),
+                    album.as_deref(),
+                    bpm,
+                ) {
+                    let msg = format!("Warning: Failed to update Apple Music: {}", e);
+                    app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                    eprintln!("{}", msg);
+                }
             }
-        }
 
-        // 7b. Update comment in Apple Music if changed
-        if let Some(ref new_cr) = new_comment_raw {
-            if let Err(e) = update_track_comment(itunes_pid, new_cr) {
-                let msg = format!("Warning: Failed to update Apple Music comment: {}", e);
-                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
-                eprintln!("{}", msg);
+            // 7b. Update comment in Apple Music if changed
+            if let Some(ref new_cr) = new_comment_raw {
+                if let Err(e) = update_track_comment(itunes_pid, new_cr) {
+                    let msg = format!("Warning: Failed to update Apple Music comment: {}", e);
+                    app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                    eprintln!("{}", msg);
+                }
             }
         }
     }
@@ -1588,7 +1688,7 @@ pub async fn copy_playlist_memberships(
     remove_source: bool,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let (target_pid, source_pid, playlist_data) = {
+    let (target_pid, source_pid, playlist_data, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         db.get_track_persistent_id(target_track_id).map_err(|e| format!("Target track not found: {}", e))?;
         db.get_track_persistent_id(source_track_id).map_err(|e| format!("Source track not found: {}", e))?;
@@ -1602,18 +1702,20 @@ pub async fn copy_playlist_memberships(
                 pdata.push((*pid, ppid));
             }
         }
-        (t_pid, s_pid, pdata)
+        (t_pid, s_pid, pdata, LibraryConfig::sync_mode(&db))
     };
 
     let mut added_count = 0;
 
     // 1. Add target track to each selected playlist (Apple Music + DB)
     for (db_id, ppid) in &playlist_data {
-        // Apple Music
-        if let Some(tpid) = &target_pid {
-            if let Err(e) = add_track_to_playlist(tpid, ppid) {
-                let msg = format!("Failed to add track to playlist in Music.app: {}", e);
-                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        // Apple Music (only when the sync mode allows pushing TagDeck edits back)
+        if mode.push_enabled() {
+            if let Some(tpid) = &target_pid {
+                if let Err(e) = add_track_to_playlist(tpid, ppid) {
+                    let msg = format!("Failed to add track to playlist in Music.app: {}", e);
+                    app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                }
             }
         }
 
@@ -1628,8 +1730,9 @@ pub async fn copy_playlist_memberships(
         added_count += 1;
     }
 
-    // 2. Combine play counts if requested (needs both tracks linked to Music.app)
-    if combine_play_counts {
+    // 2. Combine play counts if requested (needs both tracks linked to Music.app,
+    // and the sync mode to allow pushing the combined count back to Music.app)
+    if combine_play_counts && mode.push_enabled() {
         if let (Some(source_pid), Some(target_pid)) = (&source_pid, &target_pid) {
         match get_play_count(source_pid) {
             Ok(source_count) => {
@@ -1663,11 +1766,14 @@ pub async fn copy_playlist_memberships(
     // 3. Remove source track from selected playlists if requested
     if remove_source {
         for (db_id, ppid) in &playlist_data {
-            // Apple Music (linked tracks only)
-            if let Some(spid) = &source_pid {
-                if let Err(e) = apple_remove_from_playlist(spid, ppid) {
-                    let msg = format!("Failed to remove source from playlist in Music.app: {}", e);
-                    app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            // Apple Music (linked tracks only, and only when the sync mode allows
+            // pushing TagDeck edits back to Music.app)
+            if mode.push_enabled() {
+                if let Some(spid) = &source_pid {
+                    if let Err(e) = apple_remove_from_playlist(spid, ppid) {
+                        let msg = format!("Failed to remove source from playlist in Music.app: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    }
                 }
             }
 
@@ -1722,8 +1828,11 @@ pub async fn import_files(
         LibraryConfig::load(&db).map_err(|e| e.to_string())?
     };
 
-    // Detect Apple Music availability once before the loop
-    let apple_music_available = crate::apple_music::is_apple_music_available();
+    // Only route through Apple Music when Two-way sync is on — in Off/Import-only
+    // modes the standalone file_manager path handles imports even if Music.app
+    // is installed, since we must not push newly imported files to it.
+    let apple_music_available = config.sync_mode == SyncMode::TwoWay
+        && crate::apple_music::is_apple_music_available();
 
     // Resolve target playlist info once (origin + persistent ID) so we can sync to Apple Music after each import
     let target_playlist_info: Option<(String, String)> = if let Some(pid) = target_playlist_id {

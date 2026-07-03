@@ -77,23 +77,24 @@ impl UndoStack {
         if let Some(action) = self.undo_stack.pop() {
             let message = match &action {
                 Action::UpdateTrackComments { tracks } => {
+                    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
                     let mut updates = Vec::new();
                     for track in tracks {
                         // Revert to old comment
-                        
+
                         // 1. File
                         if let Err(e) = write_tags_to_file(&track.file_path, &track.old_comment) {
                             eprintln!("Undo Write File Error: {}", e);
                             continue;
                         }
-                        
+
                         // 2. DB
                         if let Err(e) = db.update_track_metadata(track.id, &track.old_comment) {
                             eprintln!("Undo DB Error: {}", e);
                         }
 
-                        // 3. Queue AM Update
-                        if !track.persistent_id.is_empty() {
+                        // 3. Queue AM Update (only when the sync mode allows pushing)
+                        if push_enabled && !track.persistent_id.is_empty() {
                             updates.push((track.persistent_id.clone(), track.old_comment.clone()));
                         }
                     }
@@ -102,7 +103,7 @@ impl UndoStack {
                     if !updates.is_empty() {
                          let _ = batch_update_track_comments(updates);
                     }
-                    
+
                     if tracks.len() == 1 {
                         "Undo Tag Change".to_string()
                     } else {
@@ -111,12 +112,15 @@ impl UndoStack {
                 },
                 Action::AddToPlaylist { playlist_id, playlist_persistent_id, tracks } => {
                      // Reverse: Remove tracks from playlist
-                     
-                     // 1. Apple Music
+
+                     // 1. Apple Music (only when the sync mode allows pushing)
                      #[cfg(target_os = "macos")]
-                     {
+                     if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() {
                         // Generate AppleScript to remove these tracks from this playlist
                          for track in tracks {
+                             if track.persistent_id.is_empty() {
+                                 continue; // unlinked track — nothing to remove in Music.app
+                             }
                              let script = format!(
                                 r#"
                                 tell application "Music"
@@ -159,18 +163,19 @@ impl UndoStack {
         if let Some(action) = self.redo_stack.pop() {
              let message = match &action {
                 Action::UpdateTrackComments { tracks } => {
+                    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
                     let mut updates = Vec::new();
                     for track in tracks {
                         // Re-apply new comment
-                        
+
                         // 1. File
                         let _ = write_tags_to_file(&track.file_path, &track.new_comment);
-                        
+
                         // 2. DB
                         let _ = db.update_track_metadata(track.id, &track.new_comment);
 
-                        // 3. Queue AM Update
-                        if !track.persistent_id.is_empty() {
+                        // 3. Queue AM Update (only when the sync mode allows pushing)
+                        if push_enabled && !track.persistent_id.is_empty() {
                             updates.push((track.persistent_id.clone(), track.new_comment.clone()));
                         }
                     }
@@ -186,14 +191,14 @@ impl UndoStack {
                 Action::AddToPlaylist { playlist_id, playlist_persistent_id, tracks } => {
                      // Re-apply Add
 
-                     // 1. Apple Music
+                     // 1. Apple Music (only when the sync mode allows pushing)
                      #[cfg(target_os = "macos")]
-                     {
+                     if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() {
                          for track in tracks {
                             let _ = crate::apple_music::add_track_to_playlist(&track.persistent_id, playlist_persistent_id);
                          }
                      }
-                     
+
                      // 2. DB
                      for track in tracks {
                          let _ = db.add_track_to_playlist_db(*playlist_id, track.id);
@@ -257,8 +262,9 @@ fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
     // 4. Touch file
     let _ = touch_file(&track.file_path);
 
-    // 5. Apple Music sync
-    if !track.persistent_id.is_empty() {
+    // 5. Apple Music sync (only when the sync mode allows pushing TagDeck edits
+    // back to Music.app)
+    if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() && !track.persistent_id.is_empty() {
         // Sync title/artist/album/bpm
         if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
             let _ = apple_update_track_info(&track.persistent_id, title, artist, album, bpm);
