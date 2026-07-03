@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform, HardDrive, RefreshCw } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform, HardDrive, RefreshCw, ClipboardList } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useDebug } from './DebugContext';
@@ -13,6 +13,8 @@ interface SettingsPanelProps {
     onAccentChange: (color: string) => void;
     onRefresh: () => void;
     appleMusicAvailable: boolean;
+    /** True while a Sync Review preview is being fetched (disables the review button). */
+    syncReviewLoading?: boolean;
 }
 
 interface SyncInfo {
@@ -34,7 +36,7 @@ interface LibraryConfig {
     import_mode: 'Copy' | 'Move' | 'InPlace';
     organize_files: boolean;
     sync_mode: 'Off' | 'ImportOnly' | 'TwoWay';
-    itunes_deletion_behavior: 'Keep' | 'Remove';
+    itunes_deletion_behavior: 'Ask' | 'Keep' | 'Remove';
 }
 
 const THEMES = [
@@ -68,6 +70,7 @@ export function SettingsPanel({
     onAccentChange,
     onRefresh,
     appleMusicAvailable,
+    syncReviewLoading = false,
 }: SettingsPanelProps) {
     const panelRef = useRef<HTMLDivElement>(null);
     const [syncInfo, setSyncInfo] = useState<SyncInfo | null>(null);
@@ -332,6 +335,27 @@ export function SettingsPanel({
                             )}
                         </div>
 
+                        {/* Review iTunes Changes — available in every mode, including Off, as an audit tool */}
+                        <div style={{ marginBottom: libraryConfig && libraryConfig.sync_mode !== 'Off' ? '14px' : 0 }}>
+                            <button
+                                onClick={() => window.dispatchEvent(new CustomEvent('open-sync-review'))}
+                                disabled={!appleMusicAvailable || syncReviewLoading}
+                                className="btn"
+                                style={{
+                                    fontSize: '13px', padding: '6px 12px',
+                                    background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                    color: 'var(--text-primary)', borderRadius: '6px',
+                                    cursor: (!appleMusicAvailable || syncReviewLoading) ? 'not-allowed' : 'pointer',
+                                    opacity: !appleMusicAvailable ? 0.5 : 1,
+                                    display: 'flex', alignItems: 'center', gap: '6px'
+                                }}
+                                title={!appleMusicAvailable ? 'Music.app not detected' : 'Preview and approve pending iTunes changes'}
+                            >
+                                {syncReviewLoading ? <Loader2 size={14} className="spin" /> : <ClipboardList size={14} />}
+                                {syncReviewLoading ? 'Loading Preview…' : 'Review iTunes Changes…'}
+                            </button>
+                        </div>
+
                         {libraryConfig && libraryConfig.sync_mode !== 'Off' && (
                             <>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px' }}>
@@ -389,21 +413,30 @@ export function SettingsPanel({
                                 {/* Deletion behavior */}
                                 <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border-color)' }}>
                                     <span style={{ fontSize: '13px', color: 'var(--text-secondary)', display: 'block', marginBottom: '6px' }}>When a track is removed from iTunes</span>
-                                    {(['Keep', 'Remove'] as const).map((behavior) => {
+                                    {(['Ask', 'Keep', 'Remove'] as const).map((behavior) => {
                                         const labels: Record<string, string> = {
+                                            Ask: 'Ask me first',
                                             Keep: 'Keep in TagDeck (marked unlinked)',
                                             Remove: 'Also remove from TagDeck',
                                         };
+                                        const descriptions: Record<string, string> = {
+                                            Ask: 'Show removed tracks in Sync Review so you decide each time',
+                                            Keep: 'Track disappears from iTunes but stays in TagDeck',
+                                            Remove: 'Track is deleted from TagDeck automatically',
+                                        };
                                         return (
-                                            <label key={behavior} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', marginBottom: '4px', cursor: 'pointer' }}>
+                                            <label key={behavior} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px', cursor: 'pointer' }}>
                                                 <input
                                                     type="radio"
                                                     name="itunes-deletion-behavior"
                                                     checked={libraryConfig?.itunes_deletion_behavior === behavior}
                                                     onChange={() => updateLibraryConfig({ itunes_deletion_behavior: behavior })}
-                                                    style={{ accentColor: 'var(--accent-color)' }}
+                                                    style={{ accentColor: 'var(--accent-color)', marginTop: '2px' }}
                                                 />
-                                                {labels[behavior]}
+                                                <div>
+                                                    <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>{labels[behavior]}</div>
+                                                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{descriptions[behavior]}</div>
+                                                </div>
                                             </label>
                                         );
                                     })}

@@ -115,7 +115,87 @@ impl Database {
         );
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_itunes_pid ON tracks(itunes_pid)", []);
 
+        // Sync Review: set on any TagDeck-side edit made while pushes to
+        // Music.app are disabled. An incoming iTunes change on a dirty track is
+        // a conflict that must be resolved in Sync Review rather than auto-applied.
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN dirty_since_sync INTEGER NOT NULL DEFAULT 0", []);
+
         Ok(Self { conn })
+    }
+
+    /// Marks tracks as edited in TagDeck while pushes to Music.app were
+    /// disabled. Used for conflict detection in Sync Review.
+    pub fn mark_tracks_dirty(&self, track_ids: &[i64]) -> Result<()> {
+        for id in track_ids {
+            self.conn.execute(
+                "UPDATE tracks SET dirty_since_sync = 1 WHERE id = ?1",
+                params![id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Clears the dirty flag once a track has been reconciled (either side won).
+    pub fn clear_dirty_by_itunes_pids(&self, pids: &[String]) -> Result<()> {
+        for pid in pids {
+            self.conn.execute(
+                "UPDATE tracks SET dirty_since_sync = 0 WHERE itunes_pid = ?1",
+                params![pid],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Fetches full track rows for a set of iTunes PIDs. PIDs with no matching
+    /// row are silently skipped.
+    pub fn get_tracks_by_itunes_pids(&self, pids: &[String]) -> Result<Vec<Track>> {
+        let mut tracks = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, persistent_id, file_path, artist, title, album,
+             comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at
+             FROM tracks WHERE itunes_pid = ?1")?;
+        for pid in pids {
+            let mut rows = stmt.query(params![pid])?;
+            if let Some(row) = rows.next()? {
+                tracks.push(Track {
+                    id: row.get(0)?,
+                    persistent_id: row.get(1)?,
+                    file_path: row.get(2)?,
+                    artist: row.get(3)?,
+                    title: row.get(4)?,
+                    album: row.get(5)?,
+                    comment_raw: row.get(6)?,
+                    grouping_raw: row.get(7)?,
+                    duration_secs: row.get(8)?,
+                    format: row.get(9)?,
+                    size_bytes: row.get(10)?,
+                    bit_rate: row.get(11)?,
+                    modified_date: row.get(12)?,
+                    rating: row.get(13)?,
+                    date_added: row.get(14)?,
+                    bpm: row.get(15)?,
+                    missing: row.get(16).unwrap_or(false),
+                    itunes_pid: row.get(17).unwrap_or(None),
+                    unlinked_at: row.get(18).unwrap_or(None),
+                });
+            }
+        }
+        Ok(tracks)
+    }
+
+    /// Returns the iTunes PIDs of all linked tracks edited in TagDeck while
+    /// pushes were disabled.
+    pub fn get_dirty_itunes_pids(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT itunes_pid FROM tracks WHERE dirty_since_sync = 1 AND itunes_pid IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut set = std::collections::HashSet::new();
+        for row in rows {
+            set.insert(row?);
+        }
+        Ok(set)
     }
 
     /// Returns a HashSet of all linked iTunes persistent IDs in the DB.
@@ -181,6 +261,10 @@ impl Database {
     fn insert_track_impl(&self, track: &crate::models::Track, preserve_comment: bool) -> Result<()> {
         let comment_set = if preserve_comment { "comment_raw" } else { "excluded.comment_raw" };
         let grouping_set = if preserve_comment { "grouping_raw" } else { "excluded.grouping_raw" };
+        // A full overwrite means the row now matches Music.app, so any pending
+        // TagDeck-side edit has been superseded; a comment-preserving update
+        // keeps the local edit, so the dirty flag must survive.
+        let dirty_set = if preserve_comment { "dirty_since_sync" } else { "0" };
         let sql = format!(
             "INSERT INTO tracks (
                 persistent_id, file_path, artist, title, album,
@@ -203,10 +287,12 @@ impl Database {
                 date_added=CASE WHEN excluded.date_added = 0 THEN tracks.date_added ELSE excluded.date_added END,
                 bpm=excluded.bpm,
                 itunes_pid=excluded.itunes_pid,
-                unlinked_at=NULL
+                unlinked_at=NULL,
+                dirty_since_sync={dirty_set}
             ",
             comment_set = comment_set,
             grouping_set = grouping_set,
+            dirty_set = dirty_set,
         );
         self.conn.execute(
             &sql,

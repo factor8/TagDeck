@@ -17,6 +17,7 @@ import { TagDeck } from './components/TagDeck';
 import { BpmCounter } from './components/BpmCounter';
 import { CopyPlaylistsModal } from './components/CopyPlaylistsModal';
 import { ImportDropZone } from './components/ImportDropZone';
+import { SyncReviewModal, SyncPreview, RemovedTrack, AppliedSummary } from './components/SyncReviewModal';
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 import { useDebug } from './components/DebugContext';
@@ -60,6 +61,11 @@ function App() {
   const [scrollToTrackId, setScrollToTrackId] = useState<number | null>(null);
   const [appleMusicAvailable, setAppleMusicAvailable] = useState(true);
   const [syncMode, setSyncMode] = useState<'Off' | 'ImportOnly' | 'TwoWay'>('TwoWay');
+  const [syncReview, setSyncReview] = useState<{ preview: SyncPreview; removalsOnly: boolean } | null>(null);
+  const [syncReviewLoading, setSyncReviewLoading] = useState(false);
+  const prevSyncModeRef = useRef<'Off' | 'ImportOnly' | 'TwoWay'>('TwoWay');
+  // Anti-nag: tracks the last set of pending-removal pids we've already shown/dismissed this session.
+  const lastRemovalKeyRef = useRef<string | null>(null);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -92,9 +98,27 @@ function App() {
       sync_mode: 'Off' | 'ImportOnly' | 'TwoWay';
     }
     invoke<LibraryConfig>('get_library_config')
-      .then(config => setSyncMode(config.sync_mode))
+      .then(config => {
+        setSyncMode(config.sync_mode);
+        prevSyncModeRef.current = config.sync_mode;
+      })
       .catch(console.error);
   }, []);
+
+  // Reused by the manual "Review iTunes Changes" action and the auto-review-on-enable flow.
+  const getSyncReviewSinceTimestamp = useCallback((): number => {
+    const lastSync = localStorage.getItem('app_last_sync_time');
+    if (lastSync && !isNaN(parseInt(lastSync))) return parseInt(lastSync);
+    // No recorded sync yet — default to 30 days ago.
+    return Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
+  }, []);
+
+  const hasAnySyncChanges = (preview: SyncPreview) =>
+    preview.added.length > 0 ||
+    preview.removed.length > 0 ||
+    preview.metadata.length > 0 ||
+    preview.rating_bpm.length > 0 ||
+    preview.playlists.length > 0;
 
   useEffect(() => {
     const handleToggle = () => {
@@ -109,11 +133,45 @@ function App() {
     const handleSyncModeChange = (e: Event) => {
         const detail = (e as CustomEvent<'Off' | 'ImportOnly' | 'TwoWay'>).detail;
         console.log("[App] Sync mode changed to:", detail);
+        const previousMode = prevSyncModeRef.current;
         setSyncMode(detail);
+        prevSyncModeRef.current = detail;
+
+        // Turning sync on for the first time (from Off) — offer a review of what would change.
+        if (previousMode === 'Off' && (detail === 'ImportOnly' || detail === 'TwoWay')) {
+            setSyncReviewLoading(true);
+            invoke<SyncPreview>('preview_sync', { sinceTimestamp: getSyncReviewSinceTimestamp() })
+                .then(preview => {
+                    if (hasAnySyncChanges(preview)) {
+                        setSyncReview({ preview, removalsOnly: false });
+                    }
+                })
+                .catch(err => {
+                    console.error('Failed to preview sync after enabling sync:', err);
+                    showError(`Failed to load sync preview: ${err}`);
+                })
+                .finally(() => setSyncReviewLoading(false));
+        }
     };
     window.addEventListener('sync-mode-changed', handleSyncModeChange);
     return () => window.removeEventListener('sync-mode-changed', handleSyncModeChange);
-  }, []);
+  }, [getSyncReviewSinceTimestamp, showError]);
+
+  // Manual "Review iTunes Changes…" trigger (dispatched from SettingsPanel).
+  useEffect(() => {
+    const handleOpenSyncReview = () => {
+        setSyncReviewLoading(true);
+        invoke<SyncPreview>('preview_sync', { sinceTimestamp: getSyncReviewSinceTimestamp() })
+            .then(preview => setSyncReview({ preview, removalsOnly: false }))
+            .catch(err => {
+                console.error('Failed to preview sync:', err);
+                showError(`Failed to load sync preview: ${err}`);
+            })
+            .finally(() => setSyncReviewLoading(false));
+    };
+    window.addEventListener('open-sync-review', handleOpenSyncReview);
+    return () => window.removeEventListener('open-sync-review', handleOpenSyncReview);
+  }, [getSyncReviewSinceTimestamp, showError]);
 
   useEffect(() => {
     if (playingTrack) {
@@ -193,10 +251,14 @@ function App() {
               tracks_added: number;
               tracks_unlinked: number;
               playlists_updated: number;
+              /** Tracks removed in iTunes awaiting a keep/remove decision (deletion behavior = 'Ask'). */
+              pending_removals?: RemovedTrack[];
+              /** iTunes changes NOT applied because the track was edited in TagDeck while sync was off. */
+              conflicts_skipped?: number;
           }
 
-          const result = await invoke<SyncResult | number>('sync_recent_changes', { 
-            sinceTimestamp: bufferTimestamp 
+          const result = await invoke<SyncResult | number>('sync_recent_changes', {
+            sinceTimestamp: bufferTimestamp
           });
 
           console.log('[App] Raw sync result:', result);
@@ -206,6 +268,8 @@ function App() {
           let addedVal = 0;
           let unlinkedVal = 0;
           let playlistsVal = 0;
+          let pendingRemovals: RemovedTrack[] = [];
+          let conflictsSkipped = 0;
 
           if (typeof result === 'number') {
               tracksVal = result;
@@ -214,11 +278,13 @@ function App() {
               addedVal = result.tracks_added || 0;
               unlinkedVal = result.tracks_unlinked || 0;
               playlistsVal = result.playlists_updated || 0;
+              pendingRemovals = result.pending_removals || [];
+              conflictsSkipped = result.conflicts_skipped || 0;
           }
 
           const totalUpdated = tracksVal + playlistsVal;
 
-          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Added=${addedVal}, Unlinked=${unlinkedVal}, Playlists=${playlistsVal}, Total=${totalUpdated}`);
+          console.log(`[App] Sync parsed: Tracks=${tracksVal}, Added=${addedVal}, Unlinked=${unlinkedVal}, Playlists=${playlistsVal}, Total=${totalUpdated}, PendingRemovals=${pendingRemovals.length}, ConflictsSkipped=${conflictsSkipped}`);
 
           if (totalUpdated > 0) {
             const parts: string[] = [];
@@ -228,14 +294,30 @@ function App() {
             if (unlinkedVal > 0) parts.push(`${unlinkedVal} track${unlinkedVal > 1 ? 's' : ''} unlinked from iTunes (kept in TagDeck)`);
             if (pureUpdated > 0) parts.push(`${pureUpdated} track${pureUpdated > 1 ? 's' : ''} updated`);
             if (playlistsVal > 0) parts.push(`${playlistsVal} playlist${playlistsVal > 1 ? 's' : ''}`);
-            
+            if (conflictsSkipped > 0) parts.push(`${conflictsSkipped} skipped (edited in TagDeck — review needed)`);
+
             showSuccess(`Synced: ${parts.join(', ')}`);
             setRefreshTrigger(p => p + 1);
             localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
           } else {
              // If nothing found, show feedback so user knows it finished
-             showSuccess("Sync complete. No changes detected.");
+             showSuccess(conflictsSkipped > 0
+                ? `Sync complete. ${conflictsSkipped} change${conflictsSkipped > 1 ? 's' : ''} skipped (edited in TagDeck — review needed).`
+                : "Sync complete. No changes detected.");
              localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
+          }
+
+          // Anti-nag: only (re)open the removals review if this is a new/different set of pids
+          // than the one we last showed or the user already dismissed this session.
+          if (pendingRemovals.length > 0) {
+            const key = pendingRemovals.map(r => r.itunes_pid).sort().join('|');
+            if (key !== lastRemovalKeyRef.current) {
+                lastRemovalKeyRef.current = key;
+                setSyncReview({
+                    preview: { added: [], added_total: 0, removed: pendingRemovals, metadata: [], rating_bpm: [], playlists: [] },
+                    removalsOnly: true,
+                });
+            }
           }
         } catch (e) {
           console.error("Auto-sync failed:", e);
@@ -527,6 +609,22 @@ function App() {
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
   };
+
+  const handleSyncReviewApplied = useCallback((summary: AppliedSummary) => {
+    // Same post-sync refresh behavior as a completed sync_recent_changes call.
+    handleRefresh();
+    localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
+
+    const parts: string[] = [];
+    if (summary.imported > 0) parts.push(`${summary.imported} imported`);
+    if (summary.unlinked > 0) parts.push(`${summary.unlinked} unlinked`);
+    if (summary.deleted > 0) parts.push(`${summary.deleted} deleted`);
+    if (summary.tracks_applied > 0) parts.push(`${summary.tracks_applied} track${summary.tracks_applied > 1 ? 's' : ''} updated`);
+    if (summary.tracks_kept > 0) parts.push(`${summary.tracks_kept} kept as-is`);
+    if (summary.playlists_applied > 0) parts.push(`${summary.playlists_applied} playlist${summary.playlists_applied > 1 ? 's' : ''}`);
+
+    showSuccess(parts.length > 0 ? `Sync review applied: ${parts.join(', ')}` : 'Sync review applied.');
+  }, [showSuccess]);
 
   const handleImportFiles = useCallback(async () => {
     try {
@@ -851,6 +949,7 @@ function App() {
                 onAccentChange={setAccentColor}
                 onRefresh={handleRefresh}
                 appleMusicAvailable={appleMusicAvailable}
+                syncReviewLoading={syncReviewLoading}
             />
         </div>
       </header>
@@ -1053,6 +1152,16 @@ function App() {
           }}
           onError={showError}
           onRefresh={handleRefresh}
+        />
+      )}
+
+      {/* Sync Review Modal */}
+      {syncReview && (
+        <SyncReviewModal
+          preview={syncReview.preview}
+          removalsOnly={syncReview.removalsOnly}
+          onClose={() => setSyncReview(null)}
+          onApplied={handleSyncReviewApplied}
         />
       )}
 

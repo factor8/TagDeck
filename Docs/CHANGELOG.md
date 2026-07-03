@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- **Sync Review**: preview what changed in iTunes and approve it instead of having it auto-applied. Opens automatically the first time sync is turned back on after being off, from the new "Review iTunes Changes" button in Settings → iTunes Sync (works in any mode, as a drift audit), and when tracks were removed in iTunes with deletion behavior set to "Ask me first". Shows added, removed, and changed tracks (metadata, rating, BPM) plus playlist changes, with per-item choices and apply-all.
+- **Conflict protection**: tracks edited in TagDeck while sync was off or import-only are no longer silently overwritten by incoming iTunes changes — they're flagged as conflicts ("Edited in both") in Sync Review, where you pick which side wins. Choosing the TagDeck side in two-way mode pushes your version back to iTunes.
+- **"Ask me first" deletion behavior** (new default): when a track is removed in iTunes, TagDeck now asks what to do via Sync Review instead of deciding automatically. Keep/Remove remain available as automatic settings.
 - **iTunes Sync mode setting** (Settings → iTunes Sync): choose the relationship between TagDeck and Music.app — **Off** (no connection), **Import only** (pull changes from iTunes, never write back), or **Two-way** (full sync, the previous always-on behavior). Existing users with Music.app default to Two-way; installs without Music.app default to Off. In Off/Import-only modes, imports are handled by TagDeck's own file manager and the Library Management settings become visible.
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
 

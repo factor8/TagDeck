@@ -361,11 +361,17 @@ pub async fn write_tags(
     
     // 2b. Update in Music.app (via AppleScript) - only for linked tracks, and only
     // when the sync mode allows pushing TagDeck edits back to Music.app.
-    if LibraryConfig::sync_mode(&db).push_enabled() {
+    let push_enabled = LibraryConfig::sync_mode(&db).push_enabled();
+    if push_enabled {
         if let Some(itunes_pid) = &track.itunes_pid {
             if let Err(e) = update_track_comment(itunes_pid, &new_tags) {
                  println!("Warning: Failed to update track in Music: {}", e);
             }
+        }
+    } else {
+        // Push is disabled, so this edit diverges from Music.app - flag for later reconciliation.
+        if let Err(e) = db.mark_tracks_dirty(&[track.id]) {
+            println!("Warning: Failed to mark track dirty: {}", e);
         }
     }
 
@@ -406,6 +412,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
 
     let mut apple_music_updates = Vec::new();
     let mut undo_track_states = Vec::new();
+    let mut dirty_ids: Vec<i64> = Vec::new();
 
     for mut track in tracks_to_update {
         let current_comment = track.comment_raw.clone().unwrap_or_default();
@@ -473,6 +480,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                  }
              } else {
                  let _ = touch_file(&track.file_path);
+                 dirty_ids.push(track.id);
              }
         }
     }
@@ -481,6 +489,15 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
     if !apple_music_updates.is_empty() {
         if let Err(e) = batch_update_track_comments(apple_music_updates) {
             println!("Batch update to Music app failed: {}", e);
+        }
+    }
+
+    // Push is disabled for these edits, so they diverge from Music.app - flag for later reconciliation.
+    if !dirty_ids.is_empty() {
+        if let Ok(db) = state.db.lock() {
+            if let Err(e) = db.mark_tracks_dirty(&dirty_ids) {
+                println!("Warning: Failed to mark tracks dirty: {}", e);
+            }
         }
     }
 
@@ -515,6 +532,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
 
     let mut apple_music_updates = Vec::new();
     let mut undo_track_states = Vec::new();
+    let mut dirty_ids: Vec<i64> = Vec::new();
 
     for mut track in tracks_to_update {
         // Parse Comments
@@ -583,6 +601,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                  }
              } else {
                  let _ = touch_file(&track.file_path);
+                 dirty_ids.push(track.id);
              }
         }
     }
@@ -591,6 +610,15 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
     if !apple_music_updates.is_empty() {
         if let Err(e) = batch_update_track_comments(apple_music_updates) {
              println!("Batch update to Music app failed: {}", e);
+        }
+    }
+
+    // Push is disabled for these edits, so they diverge from Music.app - flag for later reconciliation.
+    if !dirty_ids.is_empty() {
+        if let Ok(db) = state.db.lock() {
+            if let Err(e) = db.mark_tracks_dirty(&dirty_ids) {
+                println!("Warning: Failed to mark tracks dirty: {}", e);
+            }
         }
     }
 
@@ -675,13 +703,19 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
     Ok(count)
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Default)]
 pub struct SyncResult {
     pub tracks_updated: usize,
     pub tracks_added: usize,
     /// Tracks that disappeared from Music.app. They are unlinked, not deleted.
     pub tracks_unlinked: usize,
     pub playlists_updated: usize,
+    /// Tracks removed in Music.app awaiting a keep/remove decision
+    /// (deletion behavior = Ask). Resolved via `apply_sync_changes`.
+    pub pending_removals: Vec<crate::sync_review::RemovedTrack>,
+    /// Incoming iTunes changes NOT applied because the track was edited in
+    /// TagDeck while pushes were off (conflict — resolve in Sync Review).
+    pub conflicts_skipped: usize,
 }
 
 #[tauri::command]
@@ -690,7 +724,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     // Check if full sync is running, but don't error out hard—just skip
     if state.is_syncing.load(Ordering::SeqCst) {
         println!("Sync skipped: Full sync in progress");
-        return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_unlinked: 0, playlists_updated: 0 });
+        return Ok(SyncResult::default());
     }
 
     // Sync mode may disallow pulling from Music.app entirely (Off). Check before
@@ -703,7 +737,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         let msg = "Sync skipped: iTunes pull is disabled by the current sync mode";
         println!("{}", msg);
         app.state::<crate::logging::LogState>().add_log("INFO", msg, &app);
-        return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_unlinked: 0, playlists_updated: 0 });
+        return Ok(SyncResult::default());
     }
     // We do NOT set the lock for real-time sync (unless we want to block full sync?)
     // Actually, we should probably lock it too to prevent concurrent real-time syncs?
@@ -712,7 +746,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     
     if state.is_syncing.swap(true, Ordering::SeqCst) {
         // Race condition caught
-        return Ok(SyncResult { tracks_updated: 0, tracks_added: 0, tracks_unlinked: 0, playlists_updated: 0 });
+        return Ok(SyncResult::default());
     }
 
     struct SyncGuard<'a>(&'a AtomicBool);
@@ -730,6 +764,16 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     let mut total_updated = 0;
     let mut tracks_added = 0;
     let mut tracks_unlinked = 0;
+    let mut pending_removals: Vec<crate::sync_review::RemovedTrack> = Vec::new();
+    let mut conflicts_skipped = 0;
+
+    // Tracks edited in TagDeck while pushes were off must not be silently
+    // overwritten by an incoming iTunes change — they are conflicts for Sync
+    // Review to resolve, whatever the current mode.
+    let dirty_pids = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.get_dirty_itunes_pids().unwrap_or_default()
+    };
 
     // --- Phase 0: Detect newly imported and removed tracks ---
     // Compare the set of persistent IDs in Music.app vs our linked tracks to find
@@ -814,6 +858,29 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                     .unwrap_or(DeletionBehavior::Keep);
 
                 match deletion_behavior {
+                    DeletionBehavior::Ask => {
+                        // Don't decide — report the removals so the frontend can
+                        // open Sync Review. Until the user resolves them (via
+                        // apply_sync_changes) each sync re-reports the same set.
+                        let ask_msg = format!("Found {} track(s) removed from Music.app. Awaiting user decision (deletion behavior: ask).", deleted_pids.len());
+                        println!("{}", ask_msg);
+                        app.state::<crate::logging::LogState>().add_log("INFO", &ask_msg, &app);
+
+                        match db.get_tracks_by_itunes_pids(&deleted_pids) {
+                            Ok(tracks) => {
+                                pending_removals.extend(tracks.iter().map(|t| crate::sync_review::RemovedTrack {
+                                    track_id: t.id,
+                                    itunes_pid: t.itunes_pid.clone().unwrap_or_default(),
+                                    title: t.title.clone(),
+                                    artist: t.artist.clone(),
+                                }));
+                            }
+                            Err(e) => {
+                                let msg = format!("DB Error loading removed tracks for review: {}", e);
+                                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                            }
+                        }
+                    }
                     DeletionBehavior::Keep => {
                         let delete_msg = format!("Found {} track(s) removed from Music.app. Unlinking (deletion behavior: keep)...", deleted_pids.len());
                         println!("{}", delete_msg);
@@ -891,7 +958,15 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 app.state::<crate::logging::LogState>().add_log("INFO", &format!("Syncing metadata: {} - {}", artist, title), &app);
             }
         }
+        let mut applied = 0;
         for track in tracks {
+            if dirty_pids.contains(&track.persistent_id) {
+                let msg = format!("Conflict: skipping iTunes change for {} (edited in TagDeck since last sync)", track.persistent_id);
+                println!("{}", msg);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                conflicts_skipped += 1;
+                continue;
+            }
             // See insert_track_preserving_comment: avoid clobbering DB comments
             // with Music.app's stale copy when not pushing edits back to it.
             let insert_result = if mode.push_enabled() {
@@ -902,9 +977,11 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
             if let Err(e) = insert_result {
                 let msg = format!("DB Error (update track {}): {}", track.persistent_id, e);
                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            } else {
+                applied += 1;
             }
         }
-        total_updated += meta_count;
+        total_updated += applied;
         drop(db);
     }
 
@@ -925,6 +1002,10 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
             for entry in &snapshot {
                 if let Some(&(db_rating, db_bpm)) = db_snapshot.get(&entry.persistent_id) {
                     if db_rating != entry.rating || db_bpm != entry.bpm {
+                        if dirty_pids.contains(&entry.persistent_id) {
+                            conflicts_skipped += 1;
+                            continue;
+                        }
                         if let Err(e) = db.update_rating_bpm(&entry.persistent_id, entry.rating, entry.bpm) {
                             let msg = format!("DB Error (snapshot update {}): {}", entry.persistent_id, e);
                             app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
@@ -1089,13 +1170,13 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         }
     }
 
-    let complete_msg = format!("Sync complete. {} tracks updated, {} added, {} unlinked, {} playlist events.",
-        total_updated - tracks_added - tracks_unlinked, tracks_added, tracks_unlinked, playlist_changes);
+    let complete_msg = format!("Sync complete. {} tracks updated, {} added, {} unlinked, {} playlist events, {} pending removal(s), {} conflict(s) skipped.",
+        total_updated - tracks_added - tracks_unlinked, tracks_added, tracks_unlinked, playlist_changes, pending_removals.len(), conflicts_skipped);
     println!("{}", complete_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", &complete_msg, &app);
 
     // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
-    Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_unlinked, playlists_updated: playlist_changes })
+    Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_unlinked, playlists_updated: playlist_changes, pending_removals, conflicts_skipped })
 }
 
 #[tauri::command]
@@ -1396,7 +1477,8 @@ pub async fn update_rating(
 
     // 2. Update Music.app (linked tracks only, and only when the sync mode
     // allows pushing TagDeck edits back to Music.app)
-    if LibraryConfig::sync_mode(&db).push_enabled() {
+    let push_enabled = LibraryConfig::sync_mode(&db).push_enabled();
+    if push_enabled {
         if let Some(pid) = &itunes_pid {
             if let Err(e) = update_track_rating(pid, rating) {
                 let msg = format!("Failed to update Apple Music rating: {}", e);
@@ -1408,6 +1490,14 @@ pub async fn update_rating(
 
     // 3. Update Local DB
     db.update_track_rating(track_id, rating).map_err(|e| e.to_string())?;
+
+    // Push is disabled for this edit, so it diverges from Music.app - flag for later reconciliation.
+    if !push_enabled {
+        if let Err(e) = db.mark_tracks_dirty(&[track_id]) {
+            let msg = format!("Failed to mark track dirty: {}", e);
+            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        }
+    }
 
     Ok(())
 }
@@ -1652,6 +1742,15 @@ pub async fn update_track_info(
                     app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
                     eprintln!("{}", msg);
                 }
+            }
+        }
+    } else {
+        // Push is disabled, so this edit diverges from Music.app - flag for later reconciliation.
+        if let Ok(db) = state.db.lock() {
+            if let Err(e) = db.mark_tracks_dirty(&[track_id]) {
+                let msg = format!("Warning: Failed to mark track dirty: {}", e);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                eprintln!("{}", msg);
             }
         }
     }

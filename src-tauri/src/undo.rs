@@ -79,6 +79,7 @@ impl UndoStack {
                 Action::UpdateTrackComments { tracks } => {
                     let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
                     let mut updates = Vec::new();
+                    let mut dirty_ids: Vec<i64> = Vec::new();
                     for track in tracks {
                         // Revert to old comment
 
@@ -96,12 +97,21 @@ impl UndoStack {
                         // 3. Queue AM Update (only when the sync mode allows pushing)
                         if push_enabled && !track.persistent_id.is_empty() {
                             updates.push((track.persistent_id.clone(), track.old_comment.clone()));
+                        } else if !push_enabled {
+                            dirty_ids.push(track.id);
                         }
                     }
 
                     // Flush AM
                     if !updates.is_empty() {
                          let _ = batch_update_track_comments(updates);
+                    }
+
+                    // Push is disabled for these edits, so they diverge from Music.app - flag for later reconciliation.
+                    if !dirty_ids.is_empty() {
+                        if let Err(e) = db.mark_tracks_dirty(&dirty_ids) {
+                            eprintln!("Undo: Failed to mark tracks dirty: {}", e);
+                        }
                     }
 
                     if tracks.len() == 1 {
@@ -165,6 +175,7 @@ impl UndoStack {
                 Action::UpdateTrackComments { tracks } => {
                     let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
                     let mut updates = Vec::new();
+                    let mut dirty_ids: Vec<i64> = Vec::new();
                     for track in tracks {
                         // Re-apply new comment
 
@@ -177,11 +188,21 @@ impl UndoStack {
                         // 3. Queue AM Update (only when the sync mode allows pushing)
                         if push_enabled && !track.persistent_id.is_empty() {
                             updates.push((track.persistent_id.clone(), track.new_comment.clone()));
+                        } else if !push_enabled {
+                            dirty_ids.push(track.id);
                         }
                     }
                     if !updates.is_empty() {
                          let _ = batch_update_track_comments(updates);
                     }
+
+                    // Push is disabled for these edits, so they diverge from Music.app - flag for later reconciliation.
+                    if !dirty_ids.is_empty() {
+                        if let Err(e) = db.mark_tracks_dirty(&dirty_ids) {
+                            eprintln!("Redo: Failed to mark tracks dirty: {}", e);
+                        }
+                    }
+
                     if tracks.len() == 1 {
                         "Redo Tag Change".to_string()
                     } else {
@@ -264,7 +285,8 @@ fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
 
     // 5. Apple Music sync (only when the sync mode allows pushing TagDeck edits
     // back to Music.app)
-    if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() && !track.persistent_id.is_empty() {
+    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
+    if push_enabled && !track.persistent_id.is_empty() {
         // Sync title/artist/album/bpm
         if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
             let _ = apple_update_track_info(&track.persistent_id, title, artist, album, bpm);
@@ -272,6 +294,11 @@ fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
         // Sync comment
         if let Some(c) = comment_raw {
             let _ = update_track_comment(&track.persistent_id, c);
+        }
+    } else if !push_enabled {
+        // Push is disabled, so this edit diverges from Music.app - flag for later reconciliation.
+        if let Err(e) = db.mark_tracks_dirty(&[track.id]) {
+            eprintln!("Undo/Redo: Failed to mark track dirty: {}", e);
         }
     }
 }

@@ -44,6 +44,8 @@ impl SyncMode {
 /// What sync does when a linked track has been removed from Music.app.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum DeletionBehavior {
+    /// Don't decide automatically — surface the removals in Sync Review.
+    Ask,
     /// Unlink the track but keep it (and its tags/playlists) in TagDeck.
     Keep,
     /// Mirror the deletion: remove the track from TagDeck too.
@@ -121,7 +123,8 @@ impl LibraryConfig {
 
         let itunes_deletion_behavior = match db.get_config("itunes_deletion_behavior")?.as_deref() {
             Some("remove") => DeletionBehavior::Remove,
-            _ => DeletionBehavior::Keep,
+            Some("keep") => DeletionBehavior::Keep,
+            _ => DeletionBehavior::Ask,
         };
 
         Ok(Self {
@@ -159,6 +162,7 @@ impl LibraryConfig {
         db.set_config(
             "itunes_deletion_behavior",
             match self.itunes_deletion_behavior {
+                DeletionBehavior::Ask => "ask",
                 DeletionBehavior::Keep => "keep",
                 DeletionBehavior::Remove => "remove",
             },

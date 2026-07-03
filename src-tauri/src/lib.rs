@@ -10,6 +10,7 @@ pub mod toggle_logs;
 pub mod undo;
 pub mod library_watcher;
 pub mod file_manager;
+pub mod sync_review;
 
 use commands::AppState;
 use db::Database;
@@ -181,7 +182,9 @@ pub fn run() {
             commands::get_library_config,
             commands::set_library_config,
             commands::import_files,
-            commands::check_apple_music_available
+            commands::check_apple_music_available,
+            sync_review::preview_sync,
+            sync_review::apply_sync_changes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
