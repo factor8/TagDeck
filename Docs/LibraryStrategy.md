@@ -103,4 +103,4 @@ Each phase ships independently; 1–2 are the foundation and should land before 
 - **Stale-comment clobber** (Import-only) is the one real data-loss hazard — handled by excluding comments from pulls in that mode.
 - Unlinked-track accumulation: users who prune in Music.app will accrue unlinked tracks; the badge plus a "Show unlinked" filter (and easy multi-delete) keeps this manageable.
 - Rekordbox XML import is manual on Rekordbox 6+ (no live sync possible); set expectations in UI copy.
-- Docs/FileManagementPlan.md checkboxes are stale (Phases 1–4 are actually implemented) — update when Phase 4 work starts.
+- Docs/FileManagementPlan.md checkboxes updated with Phase 5 (file management hardening); remaining gaps there: folder-as-playlist import, batch import optimization.

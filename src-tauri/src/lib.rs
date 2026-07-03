@@ -183,6 +183,8 @@ pub fn run() {
             commands::get_library_config,
             commands::set_library_config,
             commands::import_files,
+            commands::verify_library_files,
+            commands::consolidate_library,
             commands::check_apple_music_available,
             sync_review::preview_sync,
             sync_review::apply_sync_changes

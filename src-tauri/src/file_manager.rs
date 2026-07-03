@@ -402,6 +402,26 @@ pub fn import_file(
     Ok(destination)
 }
 
+/// SHA-256 of a file's contents, streamed in 1 MB chunks. Used for duplicate
+/// detection at import time (same audio re-imported from a different path).
+pub fn hash_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let mut file = fs::File::open(path)
+        .with_context(|| format!("Failed to open file for hashing: {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf).context("Failed to read file for hashing")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 /// Recursively collect all supported audio files from a list of paths.
 ///
 /// If a path is a directory it will be walked; regular files are checked

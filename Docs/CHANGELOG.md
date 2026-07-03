@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- **Consolidate Library** (Settings → Library Management): copies every TagDeck-managed track stored outside your library folder into it (organized by artist/album), then updates the library to point at the new copies. Originals are never deleted, and tracks managed by Music.app are skipped.
+- **Library folder watching**: TagDeck now watches its own library folder. Files deleted outside the app are marked *missing*, files moved within the folder are automatically relocated, and missing tracks whose files reappear are restored — with a toast summarizing what changed.
+- **Smarter duplicate detection on import**: imports now compare file contents (SHA-256), not just paths, so re-importing the same audio from a moved or copied file is skipped instead of duplicated.
 - **Per-playlist iTunes sync**: each playlist now has its own sync switch. Right-click a playlist for **"Stop Syncing with iTunes"** (TagDeck keeps its copy and stops reading from/writing to Music.app — the Music.app copy is left alone, and even deleting it there no longer removes the playlist from TagDeck) or **"Sync to iTunes"** (re-links it; if it doesn't exist in Music.app yet, TagDeck creates it there and pushes the linked tracks — requires Two-way sync). Playlists that came from iTunes default to syncing on; TagDeck-created playlists default to off. The sidebar's TagDeck/iTunes sections and the Music badge now reflect actual sync state rather than where a playlist originally came from.
 - **Sync Review**: preview what changed in iTunes and approve it instead of having it auto-applied. Opens automatically the first time sync is turned back on after being off, from the new "Review iTunes Changes" button in Settings → iTunes Sync (works in any mode, as a drift audit), and when tracks were removed in iTunes with deletion behavior set to "Ask me first". Shows added, removed, and changed tracks (metadata, rating, BPM) plus playlist changes, with per-item choices and apply-all.
 - **Conflict protection**: tracks edited in TagDeck while sync was off or import-only are no longer silently overwritten by incoming iTunes changes — they're flagged as conflicts ("Edited in both") in Sync Review, where you pick which side wins. Choosing the TagDeck side in two-way mode pushes your version back to iTunes.
@@ -14,6 +17,7 @@
 - In Import-only mode, syncing no longer overwrites tags with iTunes' stale copy of the comment field (TagDeck stops pushing comments in that mode, so the file/TagDeck copy is authoritative).
 
 ### Changed
+- **Library Management settings are always visible** in Settings, including under Two-way sync (with a note that Music.app currently handles imports in that mode).
 - **Tracks removed from iTunes are no longer deleted from TagDeck.** They are now "unlinked": the track, its tags, and its playlist memberships stay in TagDeck, marked with an *unlinked* badge in the track list. Re-adding the track to Music.app relinks it automatically. (Previously, deleting a track in Music.app silently deleted it from TagDeck on the next sync.)
 
 ### Added

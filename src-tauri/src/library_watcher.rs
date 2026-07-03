@@ -73,11 +73,43 @@ pub fn start_library_watcher(app: AppHandle) {
             }
         }
 
+        // Also watch the TagDeck library root so files moved/deleted outside
+        // the app get reconciled (frontend responds by running
+        // verify_library_files). Root changes require an app restart to be
+        // picked up here.
+        let library_root: Option<PathBuf> = app_handle
+            .try_state::<crate::commands::AppState>()
+            .and_then(|s| {
+                s.db.lock().ok().and_then(|db| {
+                    crate::file_manager::LibraryConfig::load(&db)
+                        .ok()
+                        .map(|c| PathBuf::from(c.root_path))
+                })
+            });
+        let library_root = match library_root {
+            Some(root) if root.exists() => {
+                match watcher.watch(&root, RecursiveMode::Recursive) {
+                    Ok(()) => {
+                        println!("[WATCHER] Watching TagDeck library root: {:?}", root);
+                        Some(root)
+                    }
+                    Err(e) => {
+                        eprintln!("[WATCHER] Failed to watch TagDeck root {:?}: {}", root, e);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         // Trailing Debounce Implementation
         // We wait for an event. Once received, we wait for silence for 'debounce_duration'.
         let debounce_duration = Duration::from_secs(2);
         let mut last_activity: Option<Instant> = None;
         let mut coalesced_count: u32 = 0;
+        // Which watched source(s) produced events in the current burst
+        let mut burst_music = false;
+        let mut burst_root = false;
 
         loop {
             // Determine behavior based on whether we have a pending change
@@ -106,6 +138,16 @@ pub fn start_library_watcher(app: AppHandle) {
                                 }
                                 last_activity = Some(Instant::now());
                                 coalesced_count += 1;
+                                // Classify by source so each burst triggers only
+                                // the reconciliation it needs
+                                let from_root = library_root.as_ref().map_or(false, |root| {
+                                    event.paths.iter().any(|p| p.starts_with(root))
+                                });
+                                if from_root {
+                                    burst_root = true;
+                                } else {
+                                    burst_music = true;
+                                }
                             }
                         }
                         Err(e) => eprintln!("[WATCHER] Watch error: {:?}", e),
@@ -115,14 +157,22 @@ pub fn start_library_watcher(app: AppHandle) {
                     // Timeout hit! This means 'debounce_duration' passed without new events.
                     if let Some(_) = last_activity {
                         println!("[WATCHER] Settled after {} events. Emitting sync.", coalesced_count);
-                        let _ = app_handle.emit("music-library-changed", ());
-                        
-                        let msg = format!("Library changes stabilized ({} events coalesced). Triggering sync.", coalesced_count);
-                        app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
-                        
+                        if burst_music {
+                            let _ = app_handle.emit("music-library-changed", ());
+                            let msg = format!("Library changes stabilized ({} events coalesced). Triggering sync.", coalesced_count);
+                            app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
+                        }
+                        if burst_root {
+                            let _ = app_handle.emit("tagdeck-library-changed", ());
+                            let msg = format!("TagDeck library folder changed ({} events coalesced). Triggering file verification.", coalesced_count);
+                            app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
+                        }
+
                         // Reset
                         last_activity = None;
                         coalesced_count = 0;
+                        burst_music = false;
+                        burst_root = false;
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {

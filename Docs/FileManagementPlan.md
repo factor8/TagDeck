@@ -257,28 +257,34 @@ ALTER TABLE tracks ADD COLUMN file_hash TEXT;
 ---
 
 ## Phase 1 (MVP)
-- [ ] Basic drag & drop into window
-- [ ] Copy files to library root (flat structure)
-- [ ] Read metadata and create track records
-- [ ] Simple progress indicator
-- [ ] Error handling and reporting
+- [x] Basic drag & drop into window
+- [x] Copy files to library root (flat structure)
+- [x] Read metadata and create track records
+- [x] Simple progress indicator
+- [x] Error handling and reporting
 
 ## Phase 2 (Organized)
-- [ ] Implement iTunes-style folder organization
-- [ ] Artist/Album/Track hierarchy
-- [ ] Filename sanitization
-- [ ] Settings for library location
+- [x] Implement iTunes-style folder organization
+- [x] Artist/Album/Track hierarchy
+- [x] Filename sanitization
+- [x] Settings for library location
 
 ## Phase 3 (Playlists)
-- [ ] Drag onto playlist to import + add
-- [ ] Import folder as playlist
-- [ ] Duplicate detection
+- [x] Drag onto playlist to import + add
+- [ ] Import folder as playlist (right-click → "Import as Playlist" — not yet)
+- [x] Duplicate detection (by path and by SHA-256 content hash)
 
 ## Phase 4 (Polish)
-- [ ] Copy vs. Move vs. In-place options
-- [ ] Consolidate library feature
-- [ ] Advanced duplicate handling
+- [x] Copy vs. Move vs. In-place options
+- [x] Consolidate library feature
+- [x] Advanced duplicate handling (content-hash dedup catches moved/copied re-imports)
 - [ ] Batch import optimization
+
+## Phase 5 (Hardening — from LibraryStrategy.md)
+- [x] Library Management settings always visible (with a note when Music.app owns imports)
+- [x] `file_hash` populated on every import; dedup by hash or path
+- [x] File watcher on the TagDeck library root: deleted files marked missing, moved files auto-relocated, restored files un-marked
+- [x] Consolidate Library (copies external tracks into the organized root; originals untouched; iTunes-linked tracks skipped)
 
 ---
 

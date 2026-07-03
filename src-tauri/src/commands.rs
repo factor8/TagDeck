@@ -2052,10 +2052,18 @@ pub async fn import_files(
             continue;
         }
 
-        // Check duplicate (by source path in local DB)
+        // Duplicate detection: same path/original path, or same file contents
+        // under a different path (hash catches re-imports of moved/copied files).
+        let file_hash = crate::file_manager::hash_file(source).ok();
         {
             let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-            if let Ok(Some(existing_id)) = db.find_track_by_path(&source_str) {
+            let existing = match db.find_track_by_path(&source_str) {
+                Ok(Some(id)) => Some(id),
+                _ => file_hash
+                    .as_deref()
+                    .and_then(|h| db.find_track_by_hash(h).ok().flatten()),
+            };
+            if let Some(existing_id) = existing {
                 // Still add existing track to the target playlist if requested
                 if target_playlist_id.is_some() {
                     imported_track_ids.push(existing_id);
@@ -2098,9 +2106,15 @@ pub async fn import_files(
                             let track_id = {
                                 let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
                                 db.insert_track(apple_track).map_err(|e| e.to_string())?;
-                                db.get_track_id_by_persistent_id(&apple_pid)
+                                let tid = db.get_track_id_by_persistent_id(&apple_pid)
                                     .map_err(|e| e.to_string())?
-                                    .unwrap_or(0)
+                                    .unwrap_or(0);
+                                if tid > 0 {
+                                    if let Some(h) = file_hash.as_deref() {
+                                        let _ = db.set_file_hash(tid, h);
+                                    }
+                                }
+                                tid
                             };
                             // Add to Apple Music playlist if the target playlist syncs with iTunes
                             if let Some((sync_enabled, ref ppid)) = target_playlist_info {
@@ -2221,7 +2235,7 @@ pub async fn import_files(
 
             let track_id = {
                 let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-                db.insert_imported_track(&track, Some(&source_str))
+                db.insert_imported_track(&track, Some(&source_str), file_hash.as_deref())
                     .map_err(|e| e.to_string())?
             };
 
@@ -2283,6 +2297,227 @@ pub async fn import_files(
         results,
         imported_track_ids: imported_track_ids.clone(),
     })
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct LibraryVerification {
+    pub checked: usize,
+    pub relocated: usize,
+    pub marked_missing: usize,
+    pub restored: usize,
+}
+
+/// Re-checks that every track's file still exists on disk. Files that moved
+/// within the library root are relocated by filename (+ size when known),
+/// vanished files are marked missing, and previously-missing tracks whose
+/// files are back are restored. Triggered by the TagDeck-root watcher and
+/// safe to run any time.
+#[tauri::command]
+pub async fn verify_library_files(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<LibraryVerification, String> {
+    let (index, root_path) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let index = db.get_track_file_index().map_err(|e| e.to_string())?;
+        let root = LibraryConfig::load(&db).map_err(|e| e.to_string())?.root_path;
+        (index, root)
+    };
+
+    let mut report = LibraryVerification { checked: index.len(), ..Default::default() };
+    let mut to_restore: Vec<i64> = Vec::new();
+    let mut gone: Vec<(i64, String, i64)> = Vec::new(); // (id, old_path, size)
+
+    for (id, file_path, missing, _linked, size) in &index {
+        let exists = std::path::Path::new(file_path).is_file();
+        match (exists, missing) {
+            (true, true) => to_restore.push(*id),
+            (false, false) => gone.push((*id, file_path.clone(), *size)),
+            _ => {}
+        }
+    }
+
+    // Try to relocate vanished files: index the library root by filename once,
+    // then match uniquely (disambiguating by stored size when available).
+    let mut relocations: Vec<(i64, String)> = Vec::new();
+    let mut newly_missing: Vec<i64> = Vec::new();
+    if !gone.is_empty() {
+        let mut by_name: std::collections::HashMap<String, Vec<std::path::PathBuf>> =
+            std::collections::HashMap::new();
+        for f in crate::file_manager::collect_audio_files(&[root_path.clone()]) {
+            if let Some(name) = f.file_name().and_then(|n| n.to_str()) {
+                by_name.entry(name.to_string()).or_default().push(f);
+            }
+        }
+
+        for (id, old_path, size) in &gone {
+            let name = std::path::Path::new(old_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let candidates: Vec<&std::path::PathBuf> = by_name
+                .get(name)
+                .map(|v| {
+                    v.iter()
+                        .filter(|p| {
+                            *size <= 0
+                                || std::fs::metadata(p).map(|m| m.len() as i64 == *size).unwrap_or(false)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            if candidates.len() == 1 {
+                relocations.push((*id, candidates[0].to_string_lossy().to_string()));
+            } else {
+                newly_missing.push(*id);
+            }
+        }
+    }
+
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        for id in &to_restore {
+            if db.set_track_missing(*id, false).is_ok() {
+                report.restored += 1;
+            }
+        }
+        for (id, new_path) in &relocations {
+            if db.update_track_path(*id, new_path).is_ok() {
+                report.relocated += 1;
+            }
+        }
+        for id in &newly_missing {
+            if db.set_track_missing(*id, true).is_ok() {
+                report.marked_missing += 1;
+            }
+        }
+    }
+
+    if report.relocated + report.marked_missing + report.restored > 0 {
+        let msg = format!(
+            "Library verification: {} relocated, {} marked missing, {} restored (of {} tracks)",
+            report.relocated, report.marked_missing, report.restored, report.checked
+        );
+        app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+    }
+
+    Ok(report)
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct ConsolidationReport {
+    pub total_candidates: usize,
+    pub consolidated: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
+}
+
+/// Copies every TagDeck-managed track stored outside the library root into it
+/// (organized by artist/album when that setting is on) and repoints the DB.
+/// Originals are never deleted, and iTunes-linked tracks are left where
+/// Music.app manages them.
+#[tauri::command]
+pub async fn consolidate_library(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<ConsolidationReport, String> {
+    let (index, config) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let index = db.get_track_file_index().map_err(|e| e.to_string())?;
+        let config = LibraryConfig::load(&db).map_err(|e| e.to_string())?;
+        (index, config)
+    };
+
+    let root = std::path::PathBuf::from(&config.root_path);
+    let candidates: Vec<(i64, String)> = index
+        .into_iter()
+        .filter(|(_id, path, missing, linked, _size)| {
+            !missing && !linked && !std::path::Path::new(path).starts_with(&root)
+        })
+        .map(|(id, path, _, _, _)| (id, path))
+        .collect();
+
+    let mut report = ConsolidationReport { total_candidates: candidates.len(), ..Default::default() };
+    const ERROR_CAP: usize = 10;
+
+    for (id, source_str) in &candidates {
+        let source = std::path::Path::new(source_str);
+        if !source.is_file() {
+            report.failed += 1;
+            if report.errors.len() < ERROR_CAP {
+                report.errors.push(format!("File not found: {}", source_str));
+            }
+            continue;
+        }
+
+        let filename = source.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+        let dest = if config.organize_files {
+            // Read tags from the file for organizing; fall back to Unknowns
+            let meta = crate::metadata::read_full_metadata(source).ok();
+            let m = meta.as_ref();
+            crate::file_manager::generate_organized_path(
+                &root,
+                m.and_then(|m| m.artist.as_deref()),
+                m.and_then(|m| m.album.as_deref()),
+                m.and_then(|m| m.title.as_deref()),
+                m.and_then(|m| m.track_number),
+                filename,
+                m.map(|m| m.is_compilation).unwrap_or(false),
+            )
+        } else {
+            // Flat layout with collision counter
+            let mut path = root.join(filename);
+            let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+            let ext = source.extension().and_then(|e| e.to_str()).unwrap_or("mp3");
+            let mut counter: u32 = 2;
+            while path.exists() {
+                path = root.join(format!("{} {}.{}", stem, counter, ext));
+                counter += 1;
+                if counter > 1000 {
+                    break;
+                }
+            }
+            Ok(path)
+        };
+
+        let copy_result = dest.and_then(|dest| {
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(source, &dest)?;
+            Ok(dest)
+        });
+
+        match copy_result {
+            Ok(dest) => {
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                match db.consolidate_track_path(*id, &dest.to_string_lossy(), source_str) {
+                    Ok(()) => report.consolidated += 1,
+                    Err(e) => {
+                        report.failed += 1;
+                        if report.errors.len() < ERROR_CAP {
+                            report.errors.push(format!("DB update failed for {}: {}", source_str, e));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                report.failed += 1;
+                if report.errors.len() < ERROR_CAP {
+                    report.errors.push(format!("Copy failed for {}: {}", source_str, e));
+                }
+            }
+        }
+    }
+
+    let msg = format!(
+        "Consolidate Library: {} of {} external track(s) copied into {}, {} failed",
+        report.consolidated, report.total_candidates, config.root_path, report.failed
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+
+    Ok(report)
 }
 
 /// Simple pseudo-UUID v4 generator (no external crate needed).

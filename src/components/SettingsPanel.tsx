@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Check, Loader2, FolderOpen, Bug, AudioWaveform, HardDrive, RefreshCw, ClipboardList } from 'lucide-react';
+import { X, Check, Loader2, FolderOpen, FolderSync, Bug, AudioWaveform, HardDrive, RefreshCw, ClipboardList } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useDebug } from './DebugContext';
+import { useToast } from './Toast';
 
 interface SettingsPanelProps {
     isOpen: boolean;
@@ -85,6 +86,9 @@ export function SettingsPanel({
         return (localStorage.getItem('app_player_mode') as 'standard' | 'waveform') || 'standard';
     });
     const [libraryConfig, setLibraryConfig] = useState<LibraryConfig | null>(null);
+    const [consolidating, setConsolidating] = useState(false);
+    const [showConsolidateConfirm, setShowConsolidateConfirm] = useState(false);
+    const { showSuccess, showError } = useToast();
 
     const handleRealTimeSyncToggle = () => {
         const newValue = !realTimeSyncEnabled;
@@ -207,6 +211,46 @@ export function SettingsPanel({
              invoke('log_error', { message: msg }).catch(console.error);
         } finally {
             setImporting(false);
+        }
+    };
+
+    const handleConsolidate = async () => {
+        setShowConsolidateConfirm(false);
+        setConsolidating(true);
+        try {
+            interface ConsolidateResult {
+                total_candidates: number;
+                consolidated: number;
+                failed: number;
+                errors: string[];
+            }
+            const result = await invoke<ConsolidateResult>('consolidate_library');
+
+            if (result.total_candidates === 0) {
+                showSuccess('Nothing to consolidate — all files are already in your library folder.');
+                return;
+            }
+
+            const parts: string[] = [`Consolidated ${result.consolidated} of ${result.total_candidates} tracks`];
+            if (result.failed > 0) {
+                parts.push(`${result.failed} failed`);
+                if (result.errors.length > 0) parts.push(result.errors[0]);
+            }
+
+            if (result.failed > 0) {
+                showError(parts.join(' — '));
+            } else {
+                showSuccess(parts.join(' — '));
+            }
+
+            if (result.consolidated > 0) {
+                onRefresh();
+            }
+        } catch (err: any) {
+            console.error(err);
+            showError(`Consolidate failed: ${err}`);
+        } finally {
+            setConsolidating(false);
         }
     };
 
@@ -482,11 +526,17 @@ export function SettingsPanel({
                         </div>
                     </div>
 
-                    {/* Library Management — shown whenever TagDeck's own file manager (not Music.app) handles imports */}
-                    {(!appleMusicAvailable || (libraryConfig ? libraryConfig.sync_mode !== 'TwoWay' : false)) && <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+                    {/* Library Management — always visible; some controls are informational-only when Music.app owns imports (Two-way sync) */}
+                    <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
                         <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <HardDrive size={14} /> Library Management
                         </h4>
+
+                        {appleMusicAvailable && libraryConfig?.sync_mode === 'TwoWay' && (
+                            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontStyle: 'italic', marginBottom: '14px' }}>
+                                Imports are currently handled by Music.app under Two-way sync. These settings apply to Consolidate Library and whenever sync is Off or Import-only.
+                            </div>
+                        )}
 
                         {/* Library root folder */}
                         <div style={{ marginBottom: '14px' }}>
@@ -585,7 +635,62 @@ export function SettingsPanel({
                         <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', fontStyle: 'italic' }}>
                             Drag audio files onto the window to import them into your library.
                         </div>
-                    </div>}
+
+                        {/* Consolidate Library */}
+                        <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border-color)' }}>
+                            {!showConsolidateConfirm ? (
+                                <button
+                                    onClick={() => setShowConsolidateConfirm(true)}
+                                    disabled={consolidating}
+                                    className="btn"
+                                    style={{
+                                        fontSize: '13px', padding: '6px 12px',
+                                        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                        color: 'var(--text-primary)', borderRadius: '6px',
+                                        cursor: consolidating ? 'not-allowed' : 'pointer',
+                                        display: 'flex', alignItems: 'center', gap: '6px'
+                                    }}
+                                    title="Copy tracks stored outside your library folder into it"
+                                >
+                                    {consolidating ? <Loader2 size={14} className="spin" /> : <FolderSync size={14} />}
+                                    {consolidating ? 'Consolidating…' : 'Consolidate Library…'}
+                                </button>
+                            ) : (
+                                <div style={{
+                                    background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                                    borderRadius: '8px', padding: '12px',
+                                }}>
+                                    <p style={{ margin: '0 0 10px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                                        Copy all tracks stored outside your library folder into it, organized by artist and album? Originals stay where they are. Tracks managed by Music.app are skipped.
+                                    </p>
+                                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                                        <button
+                                            className="btn"
+                                            onClick={() => setShowConsolidateConfirm(false)}
+                                            style={{
+                                                fontSize: '12px', padding: '5px 10px',
+                                                background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+                                                color: 'var(--text-primary)', borderRadius: '6px', cursor: 'pointer'
+                                            }}
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            className="btn btn-primary"
+                                            onClick={handleConsolidate}
+                                            style={{
+                                                fontSize: '12px', padding: '5px 10px',
+                                                background: 'var(--accent-hover)', border: '1px solid var(--accent-color)',
+                                                color: 'white', borderRadius: '6px', cursor: 'pointer'
+                                            }}
+                                        >
+                                            Consolidate
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
 
                 </div>{/* End Left Column */}
 

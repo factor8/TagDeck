@@ -1281,7 +1281,7 @@ impl Database {
 
     /// Insert a track that was imported via drag-and-drop (no persistent_id from
     /// iTunes). Returns the new database row id.
-    pub fn insert_imported_track(&self, track: &crate::models::Track, original_path: Option<&str>) -> Result<i64> {
+    pub fn insert_imported_track(&self, track: &crate::models::Track, original_path: Option<&str>, file_hash: Option<&str>) -> Result<i64> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
@@ -1291,8 +1291,8 @@ impl Database {
                 persistent_id, file_path, artist, title, album,
                 comment_raw, grouping_raw, duration_secs, format,
                 size_bytes, bit_rate, modified_date, rating, date_added, bpm,
-                original_path, import_date
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                original_path, import_date, file_hash
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 track.persistent_id,
                 track.file_path,
@@ -1311,10 +1311,59 @@ impl Database {
                 track.bpm,
                 original_path,
                 now,
+                file_hash,
             ],
         )?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Check whether a file's contents are already in the library.
+    pub fn find_track_by_hash(&self, file_hash: &str) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let id: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM tracks WHERE file_hash = ?1 LIMIT 1",
+                params![file_hash],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(id)
+    }
+
+    /// Stores the content hash for a track (imports that don't go through
+    /// insert_imported_track, e.g. the Apple Music path).
+    pub fn set_file_hash(&self, track_id: i64, file_hash: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET file_hash = ?1 WHERE id = ?2",
+            params![file_hash, track_id],
+        )?;
+        Ok(())
+    }
+
+    /// Lean scan of every track's file location for library verification and
+    /// consolidation: (id, file_path, missing, is_linked_to_itunes, size_bytes).
+    pub fn get_track_file_index(&self) -> Result<Vec<(i64, String, bool, bool, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_path, COALESCE(missing, 0), itunes_pid IS NOT NULL, COALESCE(size_bytes, 0) FROM tracks",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(rows)
+    }
+
+    /// Points a track at its consolidated copy inside the library root,
+    /// remembering where the file used to live if no origin was recorded yet.
+    pub fn consolidate_track_path(&self, id: i64, new_path: &str, old_path: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET original_path = COALESCE(original_path, ?1), file_path = ?2 WHERE id = ?3",
+            params![old_path, new_path, id],
+        )?;
+        Ok(())
     }
 
     /// Check whether a file is already in the library (by its current *or*

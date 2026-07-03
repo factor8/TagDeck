@@ -66,6 +66,7 @@ function App() {
   const prevSyncModeRef = useRef<'Off' | 'ImportOnly' | 'TwoWay'>('TwoWay');
   // Anti-nag: tracks the last set of pending-removal pids we've already shown/dismissed this session.
   const lastRemovalKeyRef = useRef<string | null>(null);
+  const verifyingLibraryRef = useRef(false);
 
   const leftPanelRef = useRef<PanelImperativeHandle>(null);
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
@@ -340,6 +341,66 @@ function App() {
       if (unlistenFn) unlistenFn();
     };
   }, [syncEnabledTrigger, appleMusicAvailable, syncMode]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    let isMounted = true;
+
+    const setupListener = async () => {
+      console.log("[App] Setting up tagdeck-library-changed listener");
+      const unlisten = await listen('tagdeck-library-changed', async () => {
+        if (!isMounted) return;
+        if (verifyingLibraryRef.current) return;
+        verifyingLibraryRef.current = true;
+
+        console.log("[App] tagdeck-library-changed event received!");
+        log('INFO', 'TagDeck library files changed on disk, verifying');
+
+        try {
+          interface VerifyResult {
+            checked: number;
+            relocated: number;
+            marked_missing: number;
+            restored: number;
+          }
+
+          const result = await invoke<VerifyResult>('verify_library_files');
+
+          console.log('[App] verify_library_files result:', result);
+
+          const { relocated, marked_missing, restored } = result;
+          if (relocated + marked_missing + restored > 0) {
+            const parts: string[] = [];
+            if (relocated > 0) parts.push(`${relocated} relocated`);
+            if (marked_missing > 0) parts.push(`${marked_missing} missing`);
+            if (restored > 0) parts.push(`${restored} restored`);
+
+            showSuccess(`Library files changed: ${parts.join(', ')}`);
+            setRefreshTrigger(p => p + 1);
+          }
+        } catch (e) {
+          console.error("Library verification failed:", e);
+          showError(`Library verification failed: ${e}`);
+          log('ERROR', `Library verification failed: ${e}`);
+        } finally {
+          verifyingLibraryRef.current = false;
+        }
+      });
+
+      if (isMounted) {
+        unlistenFn = unlisten;
+      } else {
+        unlisten();
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      isMounted = false;
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
 
   const sensors = useSensors(
       useSensor(PointerSensor, {
