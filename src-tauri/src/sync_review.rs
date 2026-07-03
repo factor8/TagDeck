@@ -305,8 +305,8 @@ pub async fn preview_sync(
             let music_playlist_pids: std::collections::HashSet<String> =
                 music_playlists.iter().map(|p| p.persistent_id.clone()).collect();
 
-            for (pid, (name, _is_folder, _parent, _tracks, origin)) in &db_snapshot {
-                if origin == "itunes" && !music_playlist_pids.contains(pid) {
+            for (pid, (name, _is_folder, _parent, _tracks, sync_enabled)) in &db_snapshot {
+                if *sync_enabled && !music_playlist_pids.contains(pid) {
                     preview.playlists.push(PlaylistChange {
                         persistent_id: pid.clone(),
                         name: name.clone(),
@@ -323,8 +323,8 @@ pub async fn preview_sync(
                         name: mp.name.clone(),
                         change_type: PlaylistChangeType::Added,
                     }),
-                    Some((db_name, db_is_folder, db_parent_pid, db_track_ids, origin)) => {
-                        if origin == "tagdeck" {
+                    Some((db_name, db_is_folder, db_parent_pid, db_track_ids, sync_enabled)) => {
+                        if !sync_enabled {
                             continue;
                         }
                         let mut sorted_filtered = filtered.clone();
@@ -548,7 +548,7 @@ pub async fn apply_sync_changes(
                     is_folder: mp.is_folder,
                     track_ids: Some(filter_playlist_tracks(&mp.track_ids, &all_track_pids)),
                     origin: "itunes".to_string(),
-                    itunes_sync_enabled: false,
+                    itunes_sync_enabled: true,
                     description: None,
                     color: None,
                     sort_position: 0,

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink } from 'lucide-react';
 import { useToast } from './Toast';
 
 interface SidebarProps {
@@ -13,6 +13,7 @@ interface SidebarProps {
   showArtwork?: boolean;
   highlightedPlaylistId?: number | null;
   onPlaylistsChanged?: () => void;
+  appleMusicAvailable?: boolean;
 }
 
 interface ContextMenuState {
@@ -239,13 +240,13 @@ const PlaylistRow = ({
                       </span>
                   )}
 
-                  {node.origin === 'itunes' && !isRenaming && (
-                      <Music size={12} style={{ 
-                          minWidth: 12, 
-                          flexShrink: 0, 
-                          opacity: 0.4,
-                          color: isSelected ? '#fff' : 'var(--text-secondary)'
-                      }} />
+                  {node.itunes_sync_enabled && !isRenaming && (
+                      <span title="Synced with iTunes" style={{ display: 'flex', minWidth: 12, flexShrink: 0 }}>
+                          <Music size={12} style={{
+                              opacity: 0.4,
+                              color: isSelected ? '#fff' : 'var(--text-secondary)'
+                          }} />
+                      </span>
                   )}
               </div>
               
@@ -279,7 +280,7 @@ const PlaylistRow = ({
     );
 };
 
-export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged }: SidebarProps) {
+export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged, appleMusicAvailable }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -302,6 +303,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<PlaylistNode | null>(null);
+
+  // Tracks the playlist id currently mid-flight for a sync toggle, to prevent double-triggering
+  const [syncTogglingId, setSyncTogglingId] = useState<number | null>(null);
 
   // iTunes section collapse state
   const [itunesCollapsed, setItunesCollapsed] = useState(() => {
@@ -560,6 +564,19 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       }
   }, [refreshPlaylists, showSuccess, showError]);
 
+  const handleToggleSync = useCallback(async (node: PlaylistNode, enabled: boolean) => {
+      if (syncTogglingId !== null) return;
+      setSyncTogglingId(node.id);
+      try {
+          await invoke<string>('set_playlist_sync', { playlistId: node.id, enabled });
+          await refreshPlaylists();
+      } catch (err) {
+          showError(typeof err === 'string' ? err : `Failed to update iTunes sync: ${err}`);
+      } finally {
+          setSyncTogglingId(null);
+      }
+  }, [syncTogglingId, refreshPlaylists, showError]);
+
   const { tagdeckTree, itunesTree } = useMemo(() => {
       const map = new Map<string, PlaylistNode>();
       const tagdeckRoots: PlaylistNode[] = [];
@@ -577,11 +594,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               const parent = map.get(p.parent_persistent_id)!;
               parent.children.push(node);
           } else {
-              // Split into TagDeck vs iTunes based on persistent_id prefix
-              if (p.persistent_id.startsWith('TD-')) {
-                  tagdeckRoots.push(node);
-              } else {
+              // Split into TagDeck vs iTunes based on whether the playlist is
+              // actively synced with iTunes, not its origin.
+              if (p.itunes_sync_enabled) {
                   itunesRoots.push(node);
+              } else {
+                  tagdeckRoots.push(node);
               }
           }
       });
@@ -842,7 +860,28 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                               <Copy size={14} /> Duplicate
                           </button>
                       )}
-                      
+
+                      {!contextMenu.node.is_folder && (
+                          contextMenu.node.itunes_sync_enabled ? (
+                              <button
+                                  className="ctx-item"
+                                  disabled={syncTogglingId === contextMenu.node.id}
+                                  onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, false); }}
+                              >
+                                  <Unlink size={14} /> Stop Syncing with iTunes
+                              </button>
+                          ) : (
+                              <button
+                                  className="ctx-item"
+                                  disabled={syncTogglingId === contextMenu.node.id || appleMusicAvailable === false}
+                                  title={appleMusicAvailable === false ? 'Music.app not detected' : undefined}
+                                  onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, true); }}
+                              >
+                                  <Music size={14} /> Sync to iTunes
+                              </button>
+                          )
+                      )}
+
                       {/* Move to submenu */}
                       <div 
                           className="ctx-item ctx-submenu-trigger"
@@ -911,7 +950,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                       Delete {deleteTarget.is_folder ? 'Folder' : 'Playlist'}
                   </h3>
                   <p style={{ margin: '0 0 16px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
-                      {deleteTarget.origin === 'itunes' 
+                      {deleteTarget.itunes_sync_enabled
                           ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Apple Music.`
                           : `Are you sure you want to permanently delete "${deleteTarget.name}"? This cannot be undone.`
                       }

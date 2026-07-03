@@ -820,6 +820,12 @@ input[type=range].volume-slider:focus {
   color: #fff;
 }
 
+.ctx-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
 .ctx-danger:hover {
   background: var(--error-color);
 }

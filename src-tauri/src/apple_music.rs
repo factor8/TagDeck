@@ -927,6 +927,78 @@ pub fn rename_playlist_in_music(persistent_id: &str, new_name: &str) -> Result<(
     Ok(())
 }
 
+/// Checks whether a playlist with the given persistent ID exists in Music.app.
+pub fn playlist_exists_in_music(persistent_id: &str) -> Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            r#"
+            tell application "Music"
+                if exists (some playlist whose persistent ID is "{}") then
+                    return "yes"
+                else
+                    return "no"
+                end if
+            end tell
+            "#,
+            persistent_id
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "AppleScript error (playlist_exists): {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        return Ok(String::from_utf8_lossy(&output.stdout).trim() == "yes");
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(false)
+}
+
+/// Creates a new user playlist in Music.app and returns its persistent ID.
+pub fn create_playlist_in_music(name: &str) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            r#"
+            tell application "Music"
+                set thePlaylist to (make new user playlist with properties {{name:"{}"}})
+                return persistent ID of thePlaylist
+            end tell
+            "#,
+            escaped_name
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "AppleScript error (create_playlist): {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if pid.is_empty() {
+            return Err(anyhow::anyhow!("Music.app did not return a persistent ID for the new playlist"));
+        }
+        return Ok(pid);
+    }
+    #[cfg(not(target_os = "macos"))]
+    Err(anyhow::anyhow!("Music.app playlists are only supported on macOS"))
+}
+
 /// Searches Music.app library for a track whose file location matches the given path.
 /// Returns the persistent ID if found, or None if no match.
 /// Used to prevent duplicate imports when re-adding a file already in the library.

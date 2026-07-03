@@ -1057,10 +1057,10 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 .collect();
 
             // Detect deleted playlists (in DB but not in Music.app)
-            // Only consider iTunes-origin playlists for deletion — TagDeck-native ones are independent.
+            // Only synced playlists are eligible — sync-disabled ones are independent.
             let deleted_pids: Vec<String> = db_snapshot.iter()
-                .filter(|(pid, (_name, _is_folder, _parent, _tracks, origin))| {
-                    origin == "itunes" && !music_pids.contains(*pid)
+                .filter(|(pid, (_name, _is_folder, _parent, _tracks, sync_enabled))| {
+                    *sync_enabled && !music_pids.contains(*pid)
                 })
                 .map(|(pid, _)| pid.clone())
                 .collect();
@@ -1102,9 +1102,9 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
 
                 let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
                     None => true, // New playlist from Music.app
-                    Some((_db_name, _db_is_folder, _db_parent_pid, _db_track_ids, origin)) => {
-                        // Skip TagDeck-native playlists — they are not managed by Music.app
-                        if origin == "tagdeck" {
+                    Some((_db_name, _db_is_folder, _db_parent_pid, _db_track_ids, sync_enabled)) => {
+                        // Skip playlists whose per-playlist sync is off
+                        if !sync_enabled {
                             false
                         } else {
                             let (db_name, db_is_folder, db_parent_pid, db_track_ids, _) =
@@ -1222,11 +1222,11 @@ pub async fn rename_playlist(
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
 
-    // If this is an iTunes-origin playlist, also rename in Music.app — only when
+    // If this playlist syncs with iTunes, also rename in Music.app — only when
     // the sync mode allows pushing TagDeck edits back to Music.app
-    let origin = db.get_playlist_origin(id).unwrap_or_default();
+    let sync_enabled = db.get_playlist_sync_enabled(id).unwrap_or(false);
     let mode = LibraryConfig::sync_mode(&db);
-    if origin == "itunes" && mode.push_enabled() {
+    if sync_enabled && mode.push_enabled() {
         let pid = db.get_playlist_persistent_id(id).map_err(|e| e.to_string())?;
         drop(db); // Release lock before AppleScript call
         if let Err(e) = crate::apple_music::rename_playlist_in_music(&pid, &name) {
@@ -1246,6 +1246,93 @@ pub async fn delete_playlist(
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     // Safety: We never delete playlists from Music.app, only from TagDeck's DB
     db.delete_playlist(id).map_err(|e| e.to_string())
+}
+
+/// Toggles per-playlist iTunes sync. Disabling just flips the flag — the
+/// Music.app copy is left alone, TagDeck simply stops reading from or writing
+/// to it. Enabling verifies the playlist exists in Music.app and, if it
+/// doesn't (TagDeck-native, or deleted from Music while unsynced), creates it
+/// there, pushes the linked tracks, and adopts the new Music persistent ID.
+/// Returns the playlist's (possibly new) persistent ID.
+#[tauri::command]
+pub async fn set_playlist_sync(
+    app: tauri::AppHandle,
+    playlist_id: i64,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let (pid, name, is_folder) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.get_playlist_basic(playlist_id).map_err(|e| e.to_string())?
+    };
+
+    if !enabled {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.set_playlist_sync_enabled(playlist_id, false).map_err(|e| e.to_string())?;
+        let msg = format!("Stopped syncing playlist \"{}\" with iTunes", name);
+        app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+        return Ok(pid);
+    }
+
+    if is_folder {
+        return Err("Folders can't be synced to iTunes yet — sync the playlists inside them individually.".to_string());
+    }
+    if !crate::apple_music::is_apple_music_available() {
+        return Err("Music.app is not available on this system.".to_string());
+    }
+
+    let exists = crate::apple_music::playlist_exists_in_music(&pid)
+        .map_err(|e| format!("Couldn't check Music.app for this playlist: {}", e))?;
+
+    let final_pid = if exists {
+        pid
+    } else {
+        // The playlist has no Music.app counterpart, so enabling sync means
+        // creating one — that's a push, which the mode must allow.
+        let mode = {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            LibraryConfig::sync_mode(&db)
+        };
+        if !mode.push_enabled() {
+            return Err("This playlist doesn't exist in Music.app yet. Turn on Two-way sync to create it there.".to_string());
+        }
+
+        let new_pid = crate::apple_music::create_playlist_in_music(&name)
+            .map_err(|e| format!("Failed to create playlist in Music.app: {}", e))?;
+
+        let track_pids = {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            db.get_playlist_linked_track_pids(playlist_id).map_err(|e| e.to_string())?
+        };
+        for tpid in &track_pids {
+            if let Err(e) = add_track_to_playlist(tpid, &new_pid) {
+                let msg = format!("Failed to add track {} to new Music.app playlist: {}", tpid, e);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            }
+        }
+
+        {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            db.relink_playlist_persistent_id(playlist_id, &new_pid).map_err(|e| e.to_string())?;
+        }
+
+        let msg = format!(
+            "Created playlist \"{}\" in Music.app with {} linked track(s)",
+            name,
+            track_pids.len()
+        );
+        app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+        new_pid
+    };
+
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.set_playlist_sync_enabled(playlist_id, true).map_err(|e| e.to_string())?;
+    }
+    let msg = format!("Playlist \"{}\" is now syncing with iTunes", name);
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+
+    Ok(final_pid)
 }
 
 #[tauri::command]
@@ -1308,11 +1395,11 @@ pub async fn add_to_playlist(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // 1. Get IDs
-    let (playlist_pid, track_data, origin, mode) = {
+    let (playlist_pid, track_data, sync_enabled, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
-        let origin = db.get_playlist_origin(playlist_id).unwrap_or_default();
+        let sync_enabled = db.get_playlist_sync_enabled(playlist_id).unwrap_or(false);
 
         let mut data = Vec::new();
         for tid in &track_ids {
@@ -1321,14 +1408,14 @@ pub async fn add_to_playlist(
             }
         }
         let mode = LibraryConfig::sync_mode(&db);
-        (pid, data, origin, mode)
+        (pid, data, sync_enabled, mode)
     };
 
     let valid_track_ids: Vec<i64> = track_data.iter().map(|(t, _)| *t).collect();
 
-    // 2. Apple Music Sync (only for iTunes-origin playlists, linked tracks, and
+    // 2. Apple Music Sync (only for synced playlists, linked tracks, and
     // when the sync mode allows pushing TagDeck edits back to Music.app)
-    if origin == "itunes" && mode.push_enabled() {
+    if sync_enabled && mode.push_enabled() {
         for (_, itunes_pid) in &track_data {
             if let Some(pid) = itunes_pid {
                 if let Err(e) = add_track_to_playlist(pid, &playlist_pid) {
@@ -1377,11 +1464,11 @@ pub async fn remove_from_playlist(
     playlist_id: i64,
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
-    let (playlist_pid, track_data, origin, mode) = {
+    let (playlist_pid, track_data, sync_enabled, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
-        let origin = db.get_playlist_origin(playlist_id).unwrap_or_default();
+        let sync_enabled = db.get_playlist_sync_enabled(playlist_id).unwrap_or(false);
         let mut data = Vec::new();
         for tid in &track_ids {
             if db.get_track_persistent_id(*tid).is_ok() {
@@ -1389,12 +1476,12 @@ pub async fn remove_from_playlist(
             }
         }
         let mode = LibraryConfig::sync_mode(&db);
-        (pid, data, origin, mode)
+        (pid, data, sync_enabled, mode)
     };
 
-    // Remove from Apple Music (only for iTunes-origin playlists, linked tracks,
+    // Remove from Apple Music (only for synced playlists, linked tracks,
     // and when the sync mode allows pushing TagDeck edits back to Music.app)
-    if origin == "itunes" && mode.push_enabled() {
+    if sync_enabled && mode.push_enabled() {
         for (_, itunes_pid) in &track_data {
             if let Some(tpid) = itunes_pid {
                 if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
@@ -1425,10 +1512,11 @@ pub async fn reorder_playlist_tracks(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     // 1. Get persistent IDs for the playlist and all tracks in order
-    let (playlist_pid, track_pids, mode) = {
+    let (playlist_pid, track_pids, sync_enabled, mode) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let ppid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
+        let sync_enabled = db.get_playlist_sync_enabled(playlist_id).unwrap_or(false);
         let mut pids = Vec::new();
         for tid in &ordered_track_ids {
             // Only linked tracks exist in Music.app's copy of the playlist
@@ -1436,7 +1524,7 @@ pub async fn reorder_playlist_tracks(
                 pids.push(tpid);
             }
         }
-        (ppid, pids, LibraryConfig::sync_mode(&db))
+        (ppid, pids, sync_enabled, LibraryConfig::sync_mode(&db))
     };
 
     // 2. Update local DB
@@ -1446,9 +1534,9 @@ pub async fn reorder_playlist_tracks(
             .map_err(|e| e.to_string())?;
     }
 
-    // 3. Sync to Apple Music (in background — don't block the UI), only when the
-    // sync mode allows pushing TagDeck edits back to Music.app
-    if mode.push_enabled() {
+    // 3. Sync to Apple Music (in background — don't block the UI), only for
+    // synced playlists and when the sync mode allows pushing TagDeck edits back
+    if sync_enabled && mode.push_enabled() {
         let app_handle = app.clone();
         tauri::async_runtime::spawn(async move {
             if let Err(e) = crate::apple_music::reorder_playlist(&playlist_pid, &track_pids) {
@@ -1933,12 +2021,12 @@ pub async fn import_files(
     let apple_music_available = config.sync_mode == SyncMode::TwoWay
         && crate::apple_music::is_apple_music_available();
 
-    // Resolve target playlist info once (origin + persistent ID) so we can sync to Apple Music after each import
-    let target_playlist_info: Option<(String, String)> = if let Some(pid) = target_playlist_id {
+    // Resolve target playlist info once (sync flag + persistent ID) so we can sync to Apple Music after each import
+    let target_playlist_info: Option<(bool, String)> = if let Some(pid) = target_playlist_id {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-        let origin = db.get_playlist_origin(pid).unwrap_or_default();
+        let sync_enabled = db.get_playlist_sync_enabled(pid).unwrap_or(false);
         let ppid = db.get_playlist_persistent_id(pid).unwrap_or_default();
-        Some((origin, ppid))
+        Some((sync_enabled, ppid))
     } else {
         None
     };
@@ -2014,9 +2102,9 @@ pub async fn import_files(
                                     .map_err(|e| e.to_string())?
                                     .unwrap_or(0)
                             };
-                            // Add to Apple Music playlist if the target playlist is iTunes-origin
-                            if let Some((ref origin, ref ppid)) = target_playlist_info {
-                                if origin == "itunes" && !ppid.is_empty() {
+                            // Add to Apple Music playlist if the target playlist syncs with iTunes
+                            if let Some((sync_enabled, ref ppid)) = target_playlist_info {
+                                if sync_enabled && !ppid.is_empty() {
                                     if let Err(e) = crate::apple_music::add_track_to_playlist(&apple_pid, ppid) {
                                         let msg = format!("Failed to add track to Apple Music playlist: {}", e);
                                         app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);

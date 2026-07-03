@@ -123,9 +123,12 @@ impl UndoStack {
                 Action::AddToPlaylist { playlist_id, playlist_persistent_id, tracks } => {
                      // Reverse: Remove tracks from playlist
 
-                     // 1. Apple Music (only when the sync mode allows pushing)
+                     // 1. Apple Music (only for synced playlists, and when the
+                     // sync mode allows pushing)
                      #[cfg(target_os = "macos")]
-                     if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() {
+                     if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled()
+                         && db.get_playlist_sync_enabled(*playlist_id).unwrap_or(false)
+                     {
                         // Generate AppleScript to remove these tracks from this playlist
                          for track in tracks {
                              if track.persistent_id.is_empty() {
@@ -212,9 +215,12 @@ impl UndoStack {
                 Action::AddToPlaylist { playlist_id, playlist_persistent_id, tracks } => {
                      // Re-apply Add
 
-                     // 1. Apple Music (only when the sync mode allows pushing)
+                     // 1. Apple Music (only for synced playlists, and when the
+                     // sync mode allows pushing)
                      #[cfg(target_os = "macos")]
-                     if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() {
+                     if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled()
+                         && db.get_playlist_sync_enabled(*playlist_id).unwrap_or(false)
+                     {
                          for track in tracks {
                             let _ = crate::apple_music::add_track_to_playlist(&track.persistent_id, playlist_persistent_id);
                          }

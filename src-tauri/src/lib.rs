@@ -158,6 +158,7 @@ pub fn run() {
             commands::duplicate_playlist,
             commands::reorder_sibling_playlists,
             commands::update_playlist_metadata,
+            commands::set_playlist_sync,
             commands::add_to_playlist,
             commands::get_playlist_track_ids,
             commands::mark_track_missing,

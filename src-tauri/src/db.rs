@@ -120,6 +120,26 @@ impl Database {
         // a conflict that must be resolved in Sync Review rather than auto-applied.
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN dirty_since_sync INTEGER NOT NULL DEFAULT 0", []);
 
+        // One-time backfill for per-playlist sync: playlists that came from
+        // iTunes keep syncing by default; TagDeck-native ones stay local-only.
+        let backfill_done = conn
+            .query_row(
+                "SELECT value FROM library_config WHERE key = 'playlist_sync_backfill_done'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .is_ok();
+        if !backfill_done {
+            let _ = conn.execute(
+                "UPDATE playlists SET itunes_sync_enabled = 1 WHERE COALESCE(origin, 'itunes') = 'itunes'",
+                [],
+            );
+            let _ = conn.execute(
+                "INSERT OR REPLACE INTO library_config (key, value) VALUES ('playlist_sync_backfill_done', '1')",
+                [],
+            );
+        }
+
         Ok(Self { conn })
     }
 
@@ -378,14 +398,14 @@ impl Database {
     }
 
     /// Returns a snapshot of all playlists in the DB for diffing.
-    /// Maps persistent_id → (name, is_folder, parent_persistent_id, vec of track persistent_ids, origin)
-    pub fn get_playlist_snapshot(&self) -> Result<std::collections::HashMap<String, (String, bool, Option<String>, Vec<String>, String)>> {
+    /// Maps persistent_id → (name, is_folder, parent_persistent_id, vec of track persistent_ids, itunes_sync_enabled)
+    pub fn get_playlist_snapshot(&self) -> Result<std::collections::HashMap<String, (String, bool, Option<String>, Vec<String>, bool)>> {
         use std::collections::HashMap;
 
-        let mut map: HashMap<String, (String, bool, Option<String>, Vec<String>, String)> = HashMap::new();
+        let mut map: HashMap<String, (String, bool, Option<String>, Vec<String>, bool)> = HashMap::new();
 
         let mut stmt = self.conn.prepare(
-            "SELECT id, persistent_id, parent_persistent_id, name, is_folder, COALESCE(origin, 'itunes') FROM playlists"
+            "SELECT id, persistent_id, parent_persistent_id, name, is_folder, COALESCE(itunes_sync_enabled, 0) FROM playlists"
         )?;
         let rows = stmt.query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -393,11 +413,11 @@ impl Database {
             let parent_pid: Option<String> = row.get(2)?;
             let name: String = row.get(3)?;
             let is_folder: bool = row.get(4)?;
-            let origin: String = row.get(5)?;
-            Ok((id, pid, parent_pid, name, is_folder, origin))
+            let sync_enabled: bool = row.get(5)?;
+            Ok((id, pid, parent_pid, name, is_folder, sync_enabled))
         })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
-        for (db_id, pid, parent_pid, name, is_folder, origin) in &rows {
+        for (db_id, pid, parent_pid, name, is_folder, sync_enabled) in &rows {
             // Get iTunes track IDs for this playlist. Only linked tracks are
             // compared against Music.app — TagDeck-native and unlinked tracks
             // are local-only members and must not produce phantom diffs.
@@ -410,7 +430,7 @@ impl Database {
             let track_pids = track_stmt.query_map(params![db_id], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
-            map.insert(pid.clone(), (name.clone(), *is_folder, parent_pid.clone(), track_pids, origin.clone()));
+            map.insert(pid.clone(), (name.clone(), *is_folder, parent_pid.clone(), track_pids, *sync_enabled));
         }
 
         Ok(map)
@@ -509,8 +529,11 @@ impl Database {
         // but rusqlite transaction is safer. Since `&self.conn` is immutable here, we use internal mutability of DB or simple execute.
         // For simplicity:
         
+        // Fresh rows only arrive here from iTunes pulls, so they default to
+        // synced. The conflict clause deliberately leaves origin and
+        // itunes_sync_enabled alone so a user's "stop syncing" choice survives.
         self.conn.execute(
-            "INSERT INTO playlists (persistent_id, parent_persistent_id, name, is_folder) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO playlists (persistent_id, parent_persistent_id, name, is_folder, origin, itunes_sync_enabled) VALUES (?1, ?2, ?3, ?4, 'itunes', 1)
              ON CONFLICT(persistent_id) DO UPDATE SET name=excluded.name, is_folder=excluded.is_folder, parent_persistent_id=excluded.parent_persistent_id",
             params![playlist.persistent_id, playlist.parent_persistent_id, playlist.name, playlist.is_folder],
         )?;
@@ -755,6 +778,72 @@ impl Database {
         self.conn.execute(
             "UPDATE playlists SET description = ?1, color = ?2, updated_at = ?3 WHERE id = ?4",
             params![description, color, now, id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns whether a playlist syncs with iTunes (per-playlist flag; the
+    /// global sync mode is checked separately by callers).
+    pub fn get_playlist_sync_enabled(&self, id: i64) -> Result<bool> {
+        let enabled: bool = self.conn.query_row(
+            "SELECT COALESCE(itunes_sync_enabled, 0) FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(enabled)
+    }
+
+    /// Sets the per-playlist iTunes sync flag.
+    pub fn set_playlist_sync_enabled(&self, id: i64, enabled: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE playlists SET itunes_sync_enabled = ?1 WHERE id = ?2",
+            params![enabled, id],
+        )?;
+        Ok(())
+    }
+
+    /// Returns (persistent_id, name, is_folder) for a playlist.
+    pub fn get_playlist_basic(&self, id: i64) -> Result<(String, String, bool)> {
+        let row = self.conn.query_row(
+            "SELECT persistent_id, name, is_folder FROM playlists WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        Ok(row)
+    }
+
+    /// Ordered iTunes PIDs of a playlist's linked tracks (unlinked/native
+    /// tracks have no Music.app counterpart and are skipped).
+    pub fn get_playlist_linked_track_pids(&self, playlist_id: i64) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.itunes_pid FROM playlist_tracks pt
+             JOIN tracks t ON t.id = pt.track_id
+             WHERE pt.playlist_id = ?1 AND t.itunes_pid IS NOT NULL
+             ORDER BY pt.position ASC",
+        )?;
+        let pids = stmt
+            .query_map(params![playlist_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(pids)
+    }
+
+    /// Re-keys a playlist to a new persistent ID (used when a TagDeck-native
+    /// playlist is linked to Music.app and adopts the Music PID). Child
+    /// references follow, and the playlist moves to root level to mirror where
+    /// Music.app created it.
+    pub fn relink_playlist_persistent_id(&self, id: i64, new_pid: &str) -> Result<()> {
+        let old_pid: String = self.conn.query_row(
+            "SELECT persistent_id FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        self.conn.execute(
+            "UPDATE playlists SET persistent_id = ?1, parent_persistent_id = NULL WHERE id = ?2",
+            params![new_pid, id],
+        )?;
+        self.conn.execute(
+            "UPDATE playlists SET parent_persistent_id = ?1 WHERE parent_persistent_id = ?2",
+            params![new_pid, old_pid],
         )?;
         Ok(())
     }
