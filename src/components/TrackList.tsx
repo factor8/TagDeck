@@ -39,6 +39,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity } from 'lucide-react';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
+import { startTrackDragOut, isNativeDragOutActive } from '../utils/dragOut';
 
 interface Props {
     refreshTrigger: number;
@@ -249,6 +250,7 @@ interface TrackRowProps {
     onFileDropIndicatorChange?: (indicator: { trackId: number; isAbove: boolean } | null) => void;
     onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
     prevTrackId?: number | null;
+    onDragOut: (track: Track) => void;
 }
 
 const TrackRow = ({
@@ -266,6 +268,7 @@ const TrackRow = ({
     onFileDropIndicatorChange,
     onFileDrop,
     prevTrackId,
+    onDragOut,
 }: TrackRowProps) => {
     if (isReorderable) {
         return (
@@ -283,6 +286,7 @@ const TrackRow = ({
                 onFileDropIndicatorChange={onFileDropIndicatorChange}
                 onFileDrop={onFileDrop}
                 prevTrackId={prevTrackId}
+                onDragOut={onDragOut}
             />
         );
     }
@@ -301,6 +305,7 @@ const TrackRow = ({
             onFileDropIndicatorChange={onFileDropIndicatorChange}
             onFileDrop={onFileDrop}
             prevTrackId={prevTrackId}
+            onDragOut={onDragOut}
         />
     );
 };
@@ -319,12 +324,13 @@ interface TrackRowInnerProps {
     onFileDropIndicatorChange?: (indicator: { trackId: number; isAbove: boolean } | null) => void;
     onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
     prevTrackId?: number | null;
+    onDragOut: (track: Track) => void;
 }
 
 const DraggableTrackRowInner = ({
     row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
     handleRowClick, onTrackDoubleClick, onContextMenu,
-    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId,
+    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId, onDragOut,
 }: TrackRowInnerProps) => {
     const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
         id: `track-${row.original.id}`,
@@ -343,6 +349,7 @@ const DraggableTrackRowInner = ({
             onFileDropIndicatorChange={onFileDropIndicatorChange}
             onFileDrop={onFileDrop}
             prevTrackId={prevTrackId}
+            onDragOut={onDragOut}
         />
     );
 };
@@ -357,7 +364,7 @@ const skipDropAnimation: AnimateLayoutChanges = (args) => {
 const SortableTrackRowInner = ({
     row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
     handleRowClick, onTrackDoubleClick, onContextMenu,
-    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId,
+    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId, onDragOut,
 }: TrackRowInnerProps) => {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
         id: `track-${row.original.id}`,
@@ -377,6 +384,7 @@ const SortableTrackRowInner = ({
             onFileDropIndicatorChange={onFileDropIndicatorChange}
             onFileDrop={onFileDrop}
             prevTrackId={prevTrackId}
+            onDragOut={onDragOut}
         />
     );
 };
@@ -401,15 +409,30 @@ interface TrackRowContentProps {
     onFileDropIndicatorChange?: (indicator: { trackId: number; isAbove: boolean } | null) => void;
     onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
     prevTrackId?: number | null;
+    onDragOut: (track: Track) => void;
 }
 
 const TrackRowContent = ({
     row, virtualRow, measureElement, isSelected, isPlaying, isMissing,
     isDragging, transform, transition, setNodeRef, attributes, listeners,
     handleRowClick, onTrackDoubleClick, onContextMenu,
-    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId,
+    fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId, onDragOut,
 }: TrackRowContentProps) => {
     const trackId = row.original.id;
+
+    // Wrap dnd-kit's pointer-down listener: Option-click starts a native file drag
+    // instead of the normal in-app dnd-kit drag (add-to-playlist/reorder).
+    const wrappedListeners = listeners ? {
+        ...listeners,
+        onPointerDown: (e: React.PointerEvent) => {
+            if (e.altKey && e.button === 0) {
+                e.preventDefault();
+                onDragOut(row.original);
+                return;
+            }
+            listeners.onPointerDown?.(e);
+        },
+    } : listeners;
     const isDropAbove = fileDropIndicator?.trackId === trackId && fileDropIndicator.isAbove;
     const isDropBelow = fileDropIndicator?.trackId === trackId && !fileDropIndicator.isAbove;
 
@@ -440,7 +463,7 @@ const TrackRowContent = ({
     };
 
     const handleFileDragOver = (e: React.DragEvent<HTMLTableRowElement>) => {
-        if (!e.dataTransfer.types.includes('Files') || !onFileDrop) return;
+        if (isNativeDragOutActive() || !e.dataTransfer.types.includes('Files') || !onFileDrop) return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'copy';
@@ -458,7 +481,7 @@ const TrackRowContent = ({
     };
 
     const handleFileDrop = (e: React.DragEvent<HTMLTableRowElement>) => {
-        if (!e.dataTransfer.types.includes('Files') || !onFileDrop) return;
+        if (isNativeDragOutActive() || !e.dataTransfer.types.includes('Files') || !onFileDrop) return;
         e.preventDefault();
         e.stopPropagation();
         e.nativeEvent.stopImmediatePropagation();
@@ -499,7 +522,7 @@ const TrackRowContent = ({
             onDragLeave={onFileDrop ? handleFileDragLeave : undefined}
             onDrop={onFileDrop ? handleFileDrop : undefined}
             {...attributes}
-            {...listeners}
+            {...wrappedListeners}
         >
             {row.getVisibleCells().map(cell => (
                 <td 
@@ -1559,6 +1582,18 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         }
     };
 
+    // Option-drag: start a native OS drag of the underlying file(s) for the pressed row
+    // (or the whole selection, if the pressed row is part of it).
+    const handleDragOut = useCallback((track: Track) => {
+        const selected = selectedTrackIds.has(track.id)
+            ? tracks.filter(t => selectedTrackIds.has(t.id))
+            : [track];
+        const paths = selected
+            .filter(t => !t.missing && t.file_path)
+            .map(t => t.file_path);
+        if (paths.length > 0) startTrackDragOut(paths);
+    }, [tracks, selectedTrackIds]);
+
     const parentRef = useRef<HTMLDivElement>(null);
     const { rows } = table.getRowModel();
     const rowVirtualizer = useVirtualizer({
@@ -1814,6 +1849,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         onFileDropIndicatorChange={setFileDropIndicator}
                                         onFileDrop={onFileDrop}
                                         prevTrackId={prevRow?.original.id ?? null}
+                                        onDragOut={handleDragOut}
                                         onContextMenu={(e) => {
                                             e.preventDefault();
                                             if (isMissing) {
@@ -1880,6 +1916,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                         onFileDropIndicatorChange={setFileDropIndicator}
                                         onFileDrop={onFileDrop}
                                         prevTrackId={prevRow?.original.id ?? null}
+                                        onDragOut={handleDragOut}
                                         onContextMenu={(e) => {
                                             e.preventDefault();
                                             if (isMissing) {

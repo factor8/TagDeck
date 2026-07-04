@@ -59,6 +59,15 @@ Items marked ⚠️ touch Music.app or files on disk — save those for last, on
 - [ ] Re-export: save dialog defaults to the previously chosen file
 - [ ] In Rekordbox: Preferences → Advanced → Database → "rekordbox xml" → select the file → playlists appear under *rekordbox xml* in the browser; drag a track into the collection and check title/BPM/comment carried over
 
+## Drag-out (⌥-drag)
+
+- [ ] Hold ⌥ and drag a track row → drop on Finder copies the file; drop on a Mail compose window attaches it
+- [ ] ⌥-drag with several tracks selected → all selected files drag together
+- [ ] ⌥-drag a *missing* track → nothing drags (no error)
+- [ ] ⌥-drag and drop back onto the TagDeck window → nothing is imported, no toast
+- [ ] Plain drag (no ⌥) still adds to playlists / reorders within a playlist
+- [ ] ⚠️ ⌥-drag a track into a Rekordbox playlist → track imports there with tags in the comment field
+
 ## Cross-cutting
 
 - [ ] Cmd+Z still undoes tag edits and add-to-playlist

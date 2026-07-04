@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Drag tracks out of the app** (⌥-drag): hold Option while dragging a track row to drag the actual audio file(s) out of TagDeck — drop into Finder to copy, onto Mail to attach, or into a Rekordbox playlist to import. Works with multi-selection; missing tracks are skipped. Plain drag still adds to playlists / reorders as before.
 - **Export to Rekordbox** (Settings → Export): writes the whole library — collection and playlist tree, with titles, artists, albums, BPM, ratings, and comments (so TagDeck tags ride along) — to a rekordbox.xml file. Point Rekordbox at it via Preferences → Advanced → Database → "rekordbox xml" and your playlists appear in its browser. The export destination is remembered, so re-exporting refreshes the same file. One-way by design; missing tracks are skipped.
 - **Export as M3U8**: right-click any playlist for "Export as M3U8…" — writes a standard extended M3U8 file (with artist/title and durations) usable by other players and DJ software. Missing tracks are skipped and counted.
 - **Add TagDeck-only tracks to Music.app** (Settings → iTunes Sync): the exit path back to iTunes. Adds every track that isn't linked to Music.app into your Music library and links it; files already present in Music.app are linked instead of duplicated. Files stay where they are — Music.app applies its own copy/organize settings.

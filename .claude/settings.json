@@ -24,7 +24,8 @@
       "Bash(mkdir -p /Users/factor8/Documents/GitHub/TagDeck/src/components/settings)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(npx vite *)",
-      "Bash(git commit -m 'refactor: reorganize settings panel into tabbed categories *)"
+      "Bash(git commit -m 'refactor: reorganize settings panel into tabbed categories *)",
+      "WebSearch"
     ],
     "additionalDirectories": [
       "/Users/factor8/Documents/GitHub/TagDeck/src/components"

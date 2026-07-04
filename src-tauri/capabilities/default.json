@@ -10,6 +10,7 @@
     "core:default",
     "opener:default",
     "dialog:default",
+    "drag:default",
     "fs:default",
     {
       "identifier": "shell:allow-execute",

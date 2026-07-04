@@ -1,6 +1,7 @@
 import { useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { isNativeDragOutActive } from '../utils/dragOut';
 
 export interface ImportSummary {
   total: number;
@@ -60,11 +61,13 @@ export function ImportDropZone({ onImportComplete, onDragChange, targetPlaylistI
     const unlisteners: Array<() => void> = [];
 
     listen('tauri://drag-enter', () => {
+      if (isNativeDragOutActive()) return;
       isDragActive.current = true;
       onDragChange?.(true);
     }).then(fn => unlisteners.push(fn));
 
     listen('tauri://drag-leave', () => {
+      if (isNativeDragOutActive()) return;
       isDragActive.current = false;
       onDragChange?.(false);
     }).then(fn => unlisteners.push(fn));
@@ -72,6 +75,7 @@ export function ImportDropZone({ onImportComplete, onDragChange, targetPlaylistI
     listen<{ paths: string[]; position: { x: number; y: number } }>(
       'tauri://drag-drop',
       async (event) => {
+        if (isNativeDragOutActive()) return;
         isDragActive.current = false;
         onDragChange?.(false);
 

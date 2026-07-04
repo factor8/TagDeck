@@ -4,6 +4,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
 import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown } from 'lucide-react';
 import { useToast } from './Toast';
+import { isNativeDragOutActive } from '../utils/dragOut';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
@@ -134,7 +135,7 @@ const PlaylistRow = ({
                       }
                   }}
                   onDrop={(e) => {
-                      if (node.is_folder) return;
+                      if (node.is_folder || isNativeDragOutActive()) return;
                       e.preventDefault();
                       e.stopPropagation();
                       // Stop the document-level drop listener in ImportDropZone from
