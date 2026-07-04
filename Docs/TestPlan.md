@@ -50,11 +50,11 @@ Items marked ⚠️ touch Music.app or files on disk — save those for last, on
 
 - [ ] Right-click playlist → **Export as M3U8…** → save dialog defaults to playlist name; open the file — paths, artist/title, durations all look right
 - [ ] Export a playlist containing a missing track → it's skipped and the toast says so
-- [ ] ⚠️ **Add TagDeck-only tracks to Music.app…** (Settings → iTunes Sync) → only run if you're OK with *all* unlinked tracks going to Music; verify they appear there and lose their unlinked status in TagDeck. Safe version: test with just one standalone-imported track in the library
+- [ ] ⚠️ **Add TagDeck-only tracks to Music.app…** (Settings → iTunes) → only run if you're OK with *all* unlinked tracks going to Music; verify they appear there and lose their unlinked status in TagDeck. Safe version: test with just one standalone-imported track in the library
 
 ## Rekordbox export (Phase 7)
 
-- [ ] Settings → Rekordbox → **Export to Rekordbox…** → save dialog → file written; toast reports track/playlist counts
+- [ ] Settings → Export → **Export to Rekordbox…** → save dialog → file written; toast reports track/playlist counts
 - [ ] Open the XML in a text editor: locations are `file://localhost/...` paths, tags appear in `Comments`, BPM/ratings present, playlist tree matches the sidebar
 - [ ] Re-export: save dialog defaults to the previously chosen file
 - [ ] In Rekordbox: Preferences → Advanced → Database → "rekordbox xml" → select the file → playlists appear under *rekordbox xml* in the browser; drag a track into the collection and check title/BPM/comment carried over

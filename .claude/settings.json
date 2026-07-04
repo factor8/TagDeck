@@ -20,7 +20,14 @@
       "Bash(sqlite3 /private/tmp/claude-501/-Users-factor8-Documents-GitHub-TagDeck/2a073e55-2945-41e6-932f-be9339870692/scratchpad/tagdeck-migtest.db 'SELECT MIN\\(id\\) FROM tracks')",
       "Bash(git commit -m 'feat: decouple track identity from iTunes — unlink instead of delete on sync *)",
       "Bash(touch src/commands.rs)",
-      "Bash(git status *)"
+      "Bash(git status *)",
+      "Bash(mkdir -p /Users/factor8/Documents/GitHub/TagDeck/src/components/settings)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(npx vite *)",
+      "Bash(git commit -m 'refactor: reorganize settings panel into tabbed categories *)"
+    ],
+    "additionalDirectories": [
+      "/Users/factor8/Documents/GitHub/TagDeck/src/components"
     ]
   }
 }
