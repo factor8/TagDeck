@@ -2667,6 +2667,74 @@ pub async fn export_playlist_m3u8(
     Ok(report)
 }
 
+#[derive(serde::Serialize, Default)]
+pub struct RekordboxExportReport {
+    pub tracks: usize,
+    pub playlists: usize,
+    pub folders: usize,
+    pub skipped_missing: usize,
+}
+
+/// Writes the full library (collection + playlist tree) as rekordbox.xml.
+/// The destination is remembered so re-exports default to the same file —
+/// Rekordbox is pointed at a fixed path in its preferences.
+#[tauri::command]
+pub async fn export_rekordbox_xml(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    dest_path: String,
+) -> Result<RekordboxExportReport, String> {
+    let (tracks, playlists) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let tracks = db.get_all_tracks().map_err(|e| e.to_string())?;
+        let playlists = db
+            .get_playlists()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|p| {
+                let ids = db.get_playlist_track_ids(p.id).unwrap_or_default();
+                (p, ids)
+            })
+            .collect::<Vec<_>>();
+        (tracks, playlists)
+    };
+
+    let (xml, stats) =
+        crate::rekordbox::build_rekordbox_xml(&tracks, &playlists, env!("CARGO_PKG_VERSION"));
+
+    std::fs::write(&dest_path, xml)
+        .map_err(|e| format!("Failed to write {}: {}", dest_path, e))?;
+
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        if let Err(e) = db.set_config("rekordbox_xml_path", &dest_path) {
+            eprintln!("Failed to remember rekordbox export path: {}", e);
+        }
+    }
+
+    let msg = format!(
+        "Rekordbox export: {} track(s), {} playlist(s) in {} folder(s) written to {} ({} missing skipped)",
+        stats.tracks, stats.playlists, stats.folders, dest_path, stats.skipped_missing
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+
+    Ok(RekordboxExportReport {
+        tracks: stats.tracks,
+        playlists: stats.playlists,
+        folders: stats.folders,
+        skipped_missing: stats.skipped_missing,
+    })
+}
+
+/// Last rekordbox.xml destination, used to default the save dialog.
+#[tauri::command]
+pub async fn get_rekordbox_export_path(
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.get_config("rekordbox_xml_path").map_err(|e| e.to_string())
+}
+
 /// Simple pseudo-UUID v4 generator (no external crate needed).
 fn uuid_v4_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};

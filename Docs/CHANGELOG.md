@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Export to Rekordbox** (Settings → Rekordbox): writes the whole library — collection and playlist tree, with titles, artists, albums, BPM, ratings, and comments (so TagDeck tags ride along) — to a rekordbox.xml file. Point Rekordbox at it via Preferences → Advanced → Database → "rekordbox xml" and your playlists appear in its browser. The export destination is remembered, so re-exporting refreshes the same file. One-way by design; missing tracks are skipped.
 - **Export as M3U8**: right-click any playlist for "Export as M3U8…" — writes a standard extended M3U8 file (with artist/title and durations) usable by other players and DJ software. Missing tracks are skipped and counted.
 - **Add TagDeck-only tracks to Music.app** (Settings → iTunes Sync): the exit path back to iTunes. Adds every track that isn't linked to Music.app into your Music library and links it; files already present in Music.app are linked instead of duplicated. Files stay where they are — Music.app applies its own copy/organize settings.
 - **Consolidate Library** (Settings → Library Management): copies every TagDeck-managed track stored outside your library folder into it (organized by artist/album), then updates the library to point at the new copies. Originals are never deleted, and tracks managed by Music.app are skipped.

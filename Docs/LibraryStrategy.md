@@ -94,7 +94,7 @@ A trust feature: users commit more readily when leaving is safe.
 4. **Per-playlist sync** ✅ — wire `itunes_sync_enabled`; context-menu link/unlink actions; update Phase 3 + write-back gates.
 5. **File management hardening** ✅ — always-visible settings, `file_hash` dedup, TagDeck-root watcher, Consolidate Library.
 6. **Exit path** ✅ — "Add TagDeck-only tracks to Music.app" in Settings → iTunes Sync; per-playlist "Export as M3U8…" context-menu action. (Playlist recreation in Music.app is covered by Phase 4's per-playlist "Sync to iTunes".)
-7. **Rekordbox export** — rekordbox.xml writer + export UI.
+7. **Rekordbox export** ✅ — rekordbox.xml writer (`rekordbox.rs`, unit-tested) + "Export to Rekordbox…" in Settings; destination remembered for re-export. Deferred: auto-export-on-change toggle, per-playlist include flag.
 
 Each phase ships independently; 1–2 are the foundation and should land before anything else builds on the mode setting.
 

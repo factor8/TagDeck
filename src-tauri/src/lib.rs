@@ -11,6 +11,7 @@ pub mod undo;
 pub mod library_watcher;
 pub mod file_manager;
 pub mod sync_review;
+pub mod rekordbox;
 
 use commands::AppState;
 use db::Database;
@@ -187,6 +188,8 @@ pub fn run() {
             commands::consolidate_library,
             commands::export_tracks_to_music,
             commands::export_playlist_m3u8,
+            commands::export_rekordbox_xml,
+            commands::get_rekordbox_export_path,
             commands::check_apple_music_available,
             sync_review::preview_sync,
             sync_review::apply_sync_changes
