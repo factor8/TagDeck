@@ -68,6 +68,15 @@ Items marked ⚠️ touch Music.app or files on disk — save those for last, on
 - [ ] Plain drag (no ⌥) still adds to playlists / reorders within a playlist
 - [ ] ⚠️ ⌥-drag a track into a Rekordbox playlist → track imports there with tags in the comment field
 
+## Playlist search
+
+- [ ] Sidebar filter bar: typing narrows both sections; matches keep their folder context and folders show expanded; clearing (✕ or Escape) restores your previous expand/collapse state exactly
+- [ ] Filter with no matches → "No matching playlists"; All Tracks stays visible
+- [ ] ⌘K opens the palette; typing fuzzy-matches (try initials like "dh" for "Deep House"); ↑↓ + ↩ selects the playlist — track list switches, sidebar expands/scrolls/flashes to it
+- [ ] ⌘K → pick a *folder* → it expands and flashes in the sidebar (track list unchanged)
+- [ ] ⌘K → pick an iTunes playlist while the iTunes section is collapsed → section un-collapses and reveals it
+- [ ] Escape and clicking the backdrop both close the palette; ⌘K toggles it closed too
+
 ## Cross-cutting
 
 - [ ] Settings → Library → Playlist Backup: export writes a JSON file; Restore… opens the picker and recreates the chosen playlists (merged from main during the tab refactor — worth a smoke test)

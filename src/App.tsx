@@ -7,6 +7,7 @@ import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
 import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X, Info, FolderOpen } from 'lucide-react';
 import { SettingsPanel } from './components/SettingsPanel';
+import { PlaylistCommandPalette } from './components/PlaylistCommandPalette';
 import { SearchHelpPanel } from './components/SearchHelpPanel';
 import { AppLogo } from './components/AppLogo';
 import Sidebar from './components/Sidebar';
@@ -51,6 +52,7 @@ function App() {
   const [activeDragItem, setActiveDragItem] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [highlightedPlaylistId, setHighlightedPlaylistId] = useState<number | null>(null);
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [isSidebarArtworkVisible, setIsSidebarArtworkVisible] = useState(() => {
     // Default to true or load from storage
     const saved = localStorage.getItem('app_show_sidebar_artwork');
@@ -526,6 +528,12 @@ function App() {
             }
         }
 
+        // Cmd+K -> Toggle playlist quick-switcher palette
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            setIsPaletteOpen(prev => !prev);
+        }
+
         // Cmd+0 -> Select All Tracks (playlistId = null)
         if ((e.metaKey || e.ctrlKey) && e.key === '0') {
              e.preventDefault();
@@ -670,6 +678,12 @@ function App() {
   const handleRefresh = () => {
     setRefreshTrigger(prev => prev + 1);
   };
+
+  const handlePaletteJump = useCallback((p: Playlist) => {
+    if (!p.is_folder) setSelectedPlaylistId(p.id);
+    setHighlightedPlaylistId(p.id);
+    setTimeout(() => setHighlightedPlaylistId(null), 2000);
+  }, []);
 
   const handleSyncReviewApplied = useCallback((summary: AppliedSummary) => {
     // Same post-sync refresh behavior as a completed sync_recent_changes call.
@@ -1011,6 +1025,11 @@ function App() {
                 onRefresh={handleRefresh}
                 appleMusicAvailable={appleMusicAvailable}
                 syncReviewLoading={syncReviewLoading}
+            />
+            <PlaylistCommandPalette
+                isOpen={isPaletteOpen}
+                onClose={() => setIsPaletteOpen(false)}
+                onJump={handlePaletteJump}
             />
         </div>
       </header>

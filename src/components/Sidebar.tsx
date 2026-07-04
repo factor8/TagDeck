@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, X } from 'lucide-react';
 import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
 
@@ -35,6 +35,7 @@ interface PlaylistRowProps {
     onSelectPlaylist: (id: number | null) => void;
     toggleFolder: (id: string) => void;
     scrollRef: (node: HTMLDivElement | null) => void;
+    highlightScrollRef: (node: HTMLDivElement | null) => void;
     highlightedPlaylistId?: number | null;
     renamingId: number | null;
     renameValue: string;
@@ -55,6 +56,7 @@ const PlaylistRow = ({
     onSelectPlaylist,
     toggleFolder,
     scrollRef,
+    highlightScrollRef,
     highlightedPlaylistId,
     renamingId,
     renameValue,
@@ -96,6 +98,7 @@ const PlaylistRow = ({
                   ref={(el) => {
                       setNodeRef(el);
                       if (isSelected) scrollRef(el);
+                      if (isHighlighted) highlightScrollRef(el);
                   }}
                   onClick={() => {
                       if (isRenaming) return;
@@ -263,6 +266,7 @@ const PlaylistRow = ({
                             onSelectPlaylist={onSelectPlaylist}
                             toggleFolder={toggleFolder}
                             scrollRef={scrollRef}
+                            highlightScrollRef={highlightScrollRef}
                             highlightedPlaylistId={highlightedPlaylistId}
                             renamingId={renamingId}
                             renameValue={renameValue}
@@ -293,6 +297,10 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
     }
   });
   const [hasScrolledToSelection, setHasScrolledToSelection] = useState(false);
+  const [hasScrolledToHighlight, setHasScrolledToHighlight] = useState(false);
+
+  // Ephemeral sidebar filter text — not persisted
+  const [filterText, setFilterText] = useState('');
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -372,6 +380,61 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       if (node && !hasScrolledToSelection) {
           node.scrollIntoView({ block: 'nearest' });
           setHasScrolledToSelection(true);
+      }
+  };
+
+  useEffect(() => {
+      setHasScrolledToHighlight(false);
+  }, [highlightedPlaylistId]);
+
+  // Reveal the highlighted playlist: expand its ancestor chain (and itself if a
+  // folder), and un-collapse the iTunes section if it lives there.
+  useEffect(() => {
+      if (highlightedPlaylistId == null || playlists.length === 0) return;
+      const pMap = new Map(playlists.map(p => [p.persistent_id, p]));
+      const target = playlists.find(p => p.id === highlightedPlaylistId);
+      if (!target) return;
+
+      // Walk to the root ancestor to determine which section (TagDeck/iTunes) owns it.
+      let root = target;
+      while (root.parent_persistent_id) {
+          const parent = pMap.get(root.parent_persistent_id);
+          if (!parent) break;
+          root = parent;
+      }
+
+      setExpandedFolders(prev => {
+          const next = new Set(prev);
+          let changed = false;
+
+          if (target.is_folder && !next.has(target.persistent_id)) {
+              next.add(target.persistent_id);
+              changed = true;
+          }
+
+          let curr: Playlist | undefined = target;
+          while (curr?.parent_persistent_id) {
+              const parent: Playlist | undefined = pMap.get(curr.parent_persistent_id);
+              if (!parent) break;
+              if (!next.has(parent.persistent_id)) {
+                  next.add(parent.persistent_id);
+                  changed = true;
+              }
+              curr = parent;
+          }
+
+          return changed ? next : prev;
+      });
+
+      if (root.itunes_sync_enabled && itunesCollapsed) {
+          setItunesCollapsed(false);
+      }
+  }, [highlightedPlaylistId, playlists, itunesCollapsed]);
+
+  const highlightScrollRef = (node: HTMLDivElement | null) => {
+      if (node && !hasScrolledToHighlight) {
+          node.scrollIntoView({ block: 'nearest' });
+          setHasScrolledToHighlight(true);
       }
   };
 
@@ -653,6 +716,57 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       return { tagdeckTree: tagdeckRoots, itunesTree: itunesRoots };
   }, [playlists]);
 
+  const isFiltering = filterText.trim().length > 0;
+
+  // Derive filtered trees (and the folders that should render expanded while
+  // filtering) from the raw trees + filter text. Ephemeral — does not touch
+  // the persisted expandedFolders state.
+  const { filteredTagdeckTree, filteredItunesTree, filterExpandedFolders } = useMemo(() => {
+      if (!isFiltering) {
+          return { filteredTagdeckTree: tagdeckTree, filteredItunesTree: itunesTree, filterExpandedFolders: expandedFolders };
+      }
+
+      const query = filterText.trim().toLowerCase();
+
+      const filterNodes = (nodes: PlaylistNode[]): PlaylistNode[] => {
+          const result: PlaylistNode[] = [];
+          for (const n of nodes) {
+              const selfMatch = n.name.toLowerCase().includes(query);
+              if (n.is_folder) {
+                  if (selfMatch) {
+                      // Whole subtree matches — keep it intact.
+                      result.push(n);
+                  } else {
+                      const children = filterNodes(n.children);
+                      if (children.length > 0) {
+                          result.push({ ...n, children });
+                      }
+                  }
+              } else if (selfMatch) {
+                  result.push(n);
+              }
+          }
+          return result;
+      };
+
+      const ft = filterNodes(tagdeckTree);
+      const it = filterNodes(itunesTree);
+
+      const folderIds = new Set<string>();
+      const collectFolderIds = (nodes: PlaylistNode[]) => {
+          for (const n of nodes) {
+              if (n.is_folder) {
+                  folderIds.add(n.persistent_id);
+                  collectFolderIds(n.children);
+              }
+          }
+      };
+      collectFolderIds(ft);
+      collectFolderIds(it);
+
+      return { filteredTagdeckTree: ft, filteredItunesTree: it, filterExpandedFolders: folderIds };
+  }, [isFiltering, filterText, tagdeckTree, itunesTree, expandedFolders]);
+
   // Collect all folders for the "Move to" submenu
   const allFolders = useMemo(() => {
       const collectFolders = (nodes: PlaylistNode[]): PlaylistNode[] => {
@@ -692,7 +806,57 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       }}>
         Library
       </div>
-      
+
+      <div style={{ padding: '0 16px 8px' }}>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <Search size={13} style={{ position: 'absolute', left: 8, color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+          <input
+            type="text"
+            value={filterText}
+            onChange={(e) => setFilterText(e.target.value)}
+            onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    setFilterText('');
+                    (e.target as HTMLInputElement).blur();
+                }
+            }}
+            placeholder="Filter playlists"
+            style={{
+                width: '100%',
+                fontSize: '12px',
+                background: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                padding: '5px 22px 5px 24px',
+                color: 'var(--text-primary)',
+                outline: 'none',
+                boxSizing: 'border-box',
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent-color)'; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-color)'; }}
+          />
+          {filterText.length > 0 && (
+            <button
+                onClick={() => setFilterText('')}
+                title="Clear filter"
+                style={{
+                    position: 'absolute',
+                    right: 6,
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'var(--text-secondary)',
+                    display: 'flex',
+                    padding: 2,
+                }}
+            >
+                <X size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+
       <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}
            onContextMenu={handleBackgroundContextMenu}
       >
@@ -763,18 +927,19 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           </button>
         </div>
 
-        {tagdeckTree.length > 0 ? (
+        {filteredTagdeckTree.length > 0 ? (
           <>
-            {tagdeckTree.map(node => (
+            {filteredTagdeckTree.map(node => (
               <PlaylistRow
                   key={node.persistent_id}
                   node={node}
                   level={0}
-                  expandedFolders={expandedFolders}
+                  expandedFolders={filterExpandedFolders}
                   selectedPlaylistId={selectedPlaylistId}
                   onSelectPlaylist={onSelectPlaylist}
                   toggleFolder={toggleFolder}
                   scrollRef={scrollRef}
+                  highlightScrollRef={highlightScrollRef}
                   highlightedPlaylistId={highlightedPlaylistId}
                   renamingId={renamingId}
                   renameValue={renameValue}
@@ -796,23 +961,23 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               fontSize: '12px',
               fontStyle: 'italic',
           }}>
-              No TagDeck playlists yet
+              {isFiltering ? 'No matching playlists' : 'No TagDeck playlists yet'}
           </div>
         )}
 
         {/* iTunes Playlists Section */}
-        {itunesTree.length > 0 && (
+        {filteredItunesTree.length > 0 && (
           <>
-            <div 
+            <div
               onClick={() => setItunesCollapsed(!itunesCollapsed)}
-              style={{ 
-                padding: '12px 16px 4px', 
-                fontWeight: 600, 
+              style={{
+                padding: '12px 16px 4px',
+                fontWeight: 600,
                 fontSize: '11px',
                 color: 'var(--text-secondary)',
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em',
-                marginTop: tagdeckTree.length > 0 ? '16px' : '8px',
+                marginTop: filteredTagdeckTree.length > 0 ? '16px' : '8px',
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -820,7 +985,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                 userSelect: 'none',
               }}
             >
-              {itunesCollapsed ? (
+              {(!isFiltering && itunesCollapsed) ? (
                 <ChevronRight size={12} style={{ minWidth: 12, flexShrink: 0 }} />
               ) : (
                 <ChevronDown size={12} style={{ minWidth: 12, flexShrink: 0 }} />
@@ -828,16 +993,17 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               <span>iTunes Playlists</span>
             </div>
 
-            {!itunesCollapsed && itunesTree.map(node => (
+            {(isFiltering || !itunesCollapsed) && filteredItunesTree.map(node => (
               <PlaylistRow
                   key={node.persistent_id}
                   node={node}
                   level={0}
-                  expandedFolders={expandedFolders}
+                  expandedFolders={filterExpandedFolders}
                   selectedPlaylistId={selectedPlaylistId}
                   onSelectPlaylist={onSelectPlaylist}
                   toggleFolder={toggleFolder}
                   scrollRef={scrollRef}
+                  highlightScrollRef={highlightScrollRef}
                   highlightedPlaylistId={highlightedPlaylistId}
                   renamingId={renamingId}
                   renameValue={renameValue}

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Playlist search**: a filter bar at the top of the sidebar narrows the playlist tree as you type (matches keep their folder context, folders auto-expand while filtering), and **⌘K** opens a quick switcher — fuzzy-search all playlists and folders with parent-path breadcrumbs and iTunes badges, then hit ↩ to jump straight to one (it's selected, revealed, and flashed in the sidebar).
 - **Playlist backup and restore** (Settings → Library): export all playlists — folder tree and track references — to a versioned JSON file, and restore from one with a picker (choose which playlists, folders auto-include parents). Restored tracks match by ID with a file-path fallback.
 - **Drag tracks out of the app** (⌥-drag): hold Option while dragging a track row to drag the actual audio file(s) out of TagDeck — drop into Finder to copy, onto Mail to attach, or into a Rekordbox playlist to import. Works with multi-selection; missing tracks are skipped. Plain drag still adds to playlists / reorders as before.
 - **Export to Rekordbox** (Settings → Export): writes the whole library — collection and playlist tree, with titles, artists, albums, BPM, ratings, and comments (so TagDeck tags ride along) — to a rekordbox.xml file. Point Rekordbox at it via Preferences → Advanced → Database → "rekordbox xml" and your playlists appear in its browser. The export destination is remembered, so re-exporting refreshes the same file. One-way by design; missing tracks are skipped.
