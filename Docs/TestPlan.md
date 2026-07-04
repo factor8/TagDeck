@@ -70,6 +70,7 @@ Items marked ⚠️ touch Music.app or files on disk — save those for last, on
 
 ## Cross-cutting
 
+- [ ] Settings → Library → Playlist Backup: export writes a JSON file; Restore… opens the picker and recreates the chosen playlists (merged from main during the tab refactor — worth a smoke test)
 - [ ] Cmd+Z still undoes tag edits and add-to-playlist
 - [ ] Nothing unexpected in Logs after a full session
 
