@@ -191,6 +191,9 @@ pub fn run() {
             commands::export_playlist_m3u8,
             commands::export_rekordbox_xml,
             commands::get_rekordbox_export_path,
+            commands::export_playlist_backup,
+            commands::read_playlist_backup,
+            commands::restore_playlist_backup,
             commands::check_apple_music_available,
             sync_review::preview_sync,
             sync_review::apply_sync_changes

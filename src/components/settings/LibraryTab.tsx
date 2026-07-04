@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useToast } from '../Toast';
 import { ToggleSwitch } from './ToggleSwitch';
+import { PlaylistBackupSection } from './PlaylistBackupSection';
 
 interface LibraryConfig {
     root_path: string;
@@ -66,6 +67,7 @@ export function LibraryTab({ libraryConfig, updateLibraryConfig, appleMusicAvail
     };
 
     return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
         <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
             <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <HardDrive size={14} /> Library Management
@@ -213,6 +215,9 @@ export function LibraryTab({ libraryConfig, updateLibraryConfig, appleMusicAvail
                     </div>
                 )}
             </div>
+        </div>
+
+        <PlaylistBackupSection onRefresh={onRefresh} />
         </div>
     );
 }

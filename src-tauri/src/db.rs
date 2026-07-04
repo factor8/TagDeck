@@ -1437,4 +1437,127 @@ impl Database {
             .optional()?;
         Ok(id)
     }
+    /// Export all playlists with their full tree structure and track details for backup.
+    /// Returns a Vec of (playlist_info, track_details) where track_details includes
+    /// persistent_id, file_path, title, and artist for matching on restore.
+    pub fn export_playlist_backup(&self) -> Result<Vec<PlaylistBackupEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, persistent_id, parent_persistent_id, name, is_folder FROM playlists WHERE name != 'Music' ORDER BY is_folder DESC, name ASC"
+        )?;
+
+        let playlists = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, bool>(4)?,
+            ))
+        })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+        let mut entries = Vec::new();
+
+        for (db_id, persistent_id, parent_persistent_id, name, is_folder) in playlists {
+            let mut track_stmt = self.conn.prepare(
+                "SELECT t.persistent_id, t.file_path, t.title, t.artist
+                 FROM playlist_tracks pt
+                 JOIN tracks t ON t.id = pt.track_id
+                 WHERE pt.playlist_id = ?1
+                 ORDER BY pt.position ASC"
+            )?;
+
+            let tracks = track_stmt.query_map(params![db_id], |row| {
+                Ok(BackupTrackRef {
+                    persistent_id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    title: row.get(2)?,
+                    artist: row.get(3)?,
+                })
+            })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+            entries.push(PlaylistBackupEntry {
+                persistent_id,
+                parent_persistent_id,
+                name,
+                is_folder,
+                tracks,
+            });
+        }
+
+        Ok(entries)
+    }
+
+    /// Restore specific playlists from a backup. `entries` are the chosen playlists,
+    /// and this method upserts them and rebuilds their track memberships.
+    pub fn restore_playlists_from_backup(&self, entries: &[PlaylistBackupEntry]) -> Result<usize> {
+        let mut restored = 0usize;
+
+        for entry in entries {
+            // Upsert the playlist row
+            self.conn.execute(
+                "INSERT INTO playlists (persistent_id, parent_persistent_id, name, is_folder)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(persistent_id) DO UPDATE SET
+                   name = excluded.name,
+                   is_folder = excluded.is_folder,
+                   parent_persistent_id = excluded.parent_persistent_id",
+                params![entry.persistent_id, entry.parent_persistent_id, entry.name, entry.is_folder],
+            )?;
+
+            let playlist_db_id: i64 = self.conn.query_row(
+                "SELECT id FROM playlists WHERE persistent_id = ?1",
+                params![entry.persistent_id],
+                |row| row.get(0),
+            )?;
+
+            // Clear existing track memberships for this playlist
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                params![playlist_db_id],
+            )?;
+
+            // Rebuild track memberships — match by persistent_id first, fall back to file_path
+            let mut insert_stmt = self.conn.prepare(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position)
+                 SELECT ?1, id, ?3 FROM tracks WHERE persistent_id = ?2"
+            )?;
+            let mut fallback_stmt = self.conn.prepare(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position)
+                 SELECT ?1, id, ?3 FROM tracks WHERE file_path = ?2 LIMIT 1"
+            )?;
+
+            for (pos, track) in entry.tracks.iter().enumerate() {
+                let rows = insert_stmt.execute(params![playlist_db_id, track.persistent_id, pos as i64])?;
+                if rows == 0 {
+                    // Persistent ID didn't match — try file path
+                    let _ = fallback_stmt.execute(params![playlist_db_id, track.file_path, pos as i64]);
+                }
+            }
+
+            if !entry.is_folder {
+                restored += 1;
+            }
+        }
+
+        Ok(restored)
+    }
+}
+
+/// A single playlist in a backup, with its track references.
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct PlaylistBackupEntry {
+    pub persistent_id: String,
+    pub parent_persistent_id: Option<String>,
+    pub name: String,
+    pub is_folder: bool,
+    pub tracks: Vec<BackupTrackRef>,
+}
+
+/// Minimal track reference for backup — enough info to match on restore.
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct BackupTrackRef {
+    pub persistent_id: String,
+    pub file_path: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
 }
