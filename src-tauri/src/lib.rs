@@ -201,7 +201,9 @@ pub fn run() {
             sync_review::preview_sync,
             sync_review::apply_sync_changes,
             spotify::commands::spotify_get_settings,
-            spotify::commands::spotify_set_client_id
+            spotify::commands::spotify_set_client_id,
+            spotify::commands::spotify_connect,
+            spotify::commands::spotify_disconnect
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
