@@ -12,6 +12,7 @@ pub mod library_watcher;
 pub mod file_manager;
 pub mod sync_review;
 pub mod rekordbox;
+pub mod spotify;
 
 use commands::AppState;
 use db::Database;
@@ -122,8 +123,10 @@ pub fn run() {
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()),
-                is_syncing: AtomicBool::new(false), 
+                is_syncing: AtomicBool::new(false),
             });
+
+            app.manage(spotify::SpotifyState::new());
 
             // Start Library Watcher
             library_watcher::start_library_watcher(app.handle().clone());
@@ -196,7 +199,9 @@ pub fn run() {
             commands::restore_playlist_backup,
             commands::check_apple_music_available,
             sync_review::preview_sync,
-            sync_review::apply_sync_changes
+            sync_review::apply_sync_changes,
+            spotify::commands::spotify_get_settings,
+            spotify::commands::spotify_set_client_id
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
