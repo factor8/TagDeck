@@ -143,6 +143,8 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             bpm: bpm as i64,
             missing: false,
             unlinked_at: None,
+            source: "local".to_string(),
+            spotify_id: None,
         };
 
         tracks.push(track);

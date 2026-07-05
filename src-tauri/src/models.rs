@@ -27,6 +27,23 @@ pub struct Track {
     /// Set when a previously linked track disappeared from Music.app.
     #[serde(default)]
     pub unlinked_at: Option<i64>,
+    /// "local" (has a file) or "spotify" (ghost — imported from Spotify, no file yet).
+    #[serde(default = "default_source")]
+    pub source: String,
+    /// Spotify track ID. Set on ghosts; retained on the local track after a merge.
+    #[serde(default)]
+    pub spotify_id: Option<String>,
+}
+
+fn default_source() -> String {
+    "local".to_string()
+}
+
+impl Track {
+    /// Ghost = imported from Spotify with no local file yet.
+    pub fn is_ghost(&self) -> bool {
+        self.source == "spotify"
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -52,6 +69,10 @@ pub struct Playlist {
     pub created_at: i64,
     #[serde(default)]
     pub updated_at: i64,
+    #[serde(default)]
+    pub spotify_playlist_id: Option<String>,
+    #[serde(default)]
+    pub spotify_snapshot_id: Option<String>,
 }
 
 fn default_origin() -> String {

@@ -554,6 +554,8 @@ pub async fn apply_sync_changes(
                     sort_position: 0,
                     created_at: 0,
                     updated_at: 0,
+                    spotify_playlist_id: None,
+                    spotify_snapshot_id: None,
                 };
                 match db.insert_playlist(&playlist) {
                     Ok(()) => summary.playlists_applied += 1,

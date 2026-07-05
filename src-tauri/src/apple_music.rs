@@ -155,6 +155,8 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                 bpm: jt.bpm,
                 missing: false,
                 unlinked_at: None,
+                source: "local".to_string(),
+                spotify_id: None,
             }
         }).collect();
 
@@ -826,6 +828,8 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
                     bpm: jt.bpm,
                     missing: false,
                     unlinked_at: None,
+                    source: "local".to_string(),
+                    spotify_id: None,
                 });
             }
         }

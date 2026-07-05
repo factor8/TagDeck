@@ -120,6 +120,14 @@ impl Database {
         // a conflict that must be resolved in Sync Review rather than auto-applied.
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN dirty_since_sync INTEGER NOT NULL DEFAULT 0", []);
 
+        // Spotify integration: ghosts are tracks with source='spotify' and
+        // file_path=''. spotify_id persists across the ghost→local merge.
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN source TEXT NOT NULL DEFAULT 'local'", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN spotify_id TEXT", []);
+        let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_spotify_id ON tracks(spotify_id)", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_playlist_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_snapshot_id TEXT", []);
+
         // One-time backfill for per-playlist sync: playlists that came from
         // iTunes keep syncing by default; TagDeck-native ones stay local-only.
         let backfill_done = conn
@@ -173,7 +181,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
              FROM tracks WHERE itunes_pid = ?1")?;
         for pid in pids {
             let mut rows = stmt.query(params![pid])?;
@@ -198,6 +206,8 @@ impl Database {
                     missing: row.get(16).unwrap_or(false),
                     itunes_pid: row.get(17).unwrap_or(None),
                     unlinked_at: row.get(18).unwrap_or(None),
+                    source: row.get(19).unwrap_or_else(|_| "local".to_string()),
+                    spotify_id: row.get(20).unwrap_or(None),
                 });
             }
         }
@@ -342,7 +352,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
              FROM tracks WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
 
@@ -367,6 +377,8 @@ impl Database {
                 missing: row.get(16).unwrap_or(false),
                 itunes_pid: row.get(17).unwrap_or(None),
                 unlinked_at: row.get(18).unwrap_or(None),
+                source: row.get(19).unwrap_or_else(|_| "local".to_string()),
+                spotify_id: row.get(20).unwrap_or(None),
             }))
         } else {
             Ok(None)
@@ -473,7 +485,8 @@ impl Database {
             "SELECT id, persistent_id, parent_persistent_id, name, is_folder,
                     COALESCE(origin, 'itunes'), COALESCE(itunes_sync_enabled, 0),
                     description, color, COALESCE(sort_position, 0),
-                    COALESCE(created_at, 0), COALESCE(updated_at, 0)
+                    COALESCE(created_at, 0), COALESCE(updated_at, 0),
+                    spotify_playlist_id, spotify_snapshot_id
              FROM playlists WHERE name != 'Music' ORDER BY is_folder DESC, sort_position ASC, name ASC"
         )?;
         let playlists = stmt.query_map([], |row| {
@@ -491,6 +504,8 @@ impl Database {
                 sort_position: row.get(9)?,
                 created_at: row.get(10)?,
                 updated_at: row.get(11)?,
+                spotify_playlist_id: row.get(12).unwrap_or(None),
+                spotify_snapshot_id: row.get(13).unwrap_or(None),
             })
         })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
         Ok(playlists)
@@ -654,6 +669,8 @@ impl Database {
             sort_position,
             created_at: now,
             updated_at: now,
+            spotify_playlist_id: None,
+            spotify_snapshot_id: None,
         })
     }
 
@@ -971,7 +988,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
              FROM tracks",
         )?;
 
@@ -996,6 +1013,8 @@ impl Database {
                 missing: row.get(16).unwrap_or(false),
                 itunes_pid: row.get(17).unwrap_or(None),
                 unlinked_at: row.get(18).unwrap_or(None),
+                source: row.get(19).unwrap_or_else(|_| "local".to_string()),
+                spotify_id: row.get(20).unwrap_or(None),
             })
         })?;
 
@@ -1291,8 +1310,8 @@ impl Database {
                 persistent_id, file_path, artist, title, album,
                 comment_raw, grouping_raw, duration_secs, format,
                 size_bytes, bit_rate, modified_date, rating, date_added, bpm,
-                original_path, import_date, file_hash
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                original_path, import_date, file_hash, source, spotify_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 track.persistent_id,
                 track.file_path,
@@ -1312,6 +1331,8 @@ impl Database {
                 original_path,
                 now,
                 file_hash,
+                track.source,
+                track.spotify_id,
             ],
         )?;
 
@@ -1560,4 +1581,49 @@ pub struct BackupTrackRef {
     pub file_path: String,
     pub title: Option<String>,
     pub artist: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ghost(spotify_id: &str) -> crate::models::Track {
+        crate::models::Track {
+            id: 0,
+            persistent_id: format!("SP-{}", spotify_id),
+            file_path: String::new(),
+            artist: Some("Artist".into()),
+            title: Some("Title".into()),
+            album: Some("Album".into()),
+            comment_raw: None,
+            grouping_raw: None,
+            duration_secs: 200.0,
+            format: "SPOTIFY".into(),
+            size_bytes: 0,
+            bit_rate: 0,
+            modified_date: 0,
+            rating: 0,
+            date_added: 0,
+            bpm: 0,
+            missing: false,
+            itunes_pid: None,
+            unlinked_at: None,
+            source: "spotify".into(),
+            spotify_id: Some(spotify_id.to_string()),
+        }
+    }
+
+    #[test]
+    fn ghost_track_roundtrip() {
+        let db = Database::new(":memory:").unwrap();
+        let id = db.insert_imported_track(&ghost("abc123"), None, None).unwrap();
+        let t = db.get_track(id).unwrap().unwrap();
+        assert_eq!(t.source, "spotify");
+        assert_eq!(t.spotify_id.as_deref(), Some("abc123"));
+        assert_eq!(t.file_path, "");
+        assert!(t.is_ghost());
+        // local tracks default to source='local'
+        let all = db.get_all_tracks().unwrap();
+        assert_eq!(all.len(), 1);
+    }
 }

@@ -1144,6 +1144,8 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                         sort_position: 0,
                         created_at: 0,
                         updated_at: 0,
+                        spotify_playlist_id: None,
+                        spotify_snapshot_id: None,
                     };
                     if let Err(e) = db.insert_playlist(&playlist) {
                         let msg = format!("DB Error upserting playlist {}: {}", mp.name, e);
@@ -2231,6 +2233,8 @@ pub async fn import_files(
                 missing: false,
                 itunes_pid: None,
                 unlinked_at: None,
+                source: "local".to_string(),
+                spotify_id: None,
             };
 
             let track_id = {

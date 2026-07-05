@@ -24,7 +24,7 @@ Ghost tracks (Spotify tracks without local files) live in the existing `tracks` 
 
 Migration on `tracks`:
 
-- `file_path` becomes **nullable** (`NULL` = ghost track).
+- `file_path` stays **NOT NULL**; ghosts store `file_path = ''` and `source = 'spotify'` (empty-string sentinel — avoids a SQLite table rebuild and an `Option<String>` ripple through every `Track` consumer).
 - `source TEXT NOT NULL DEFAULT 'local'` — `'local' | 'spotify'`.
 - `spotify_id TEXT UNIQUE` — Spotify track ID. Present on ghosts; retained on the local track after a merge so future playlist syncs resolve that Spotify track to the owned file.
 
@@ -51,7 +51,7 @@ New **Spotify** tab in Settings:
 - Sidebar Spotify section → **"Import playlists…"** opens a modal listing the user's Spotify playlists with checkboxes (selective import). Import fetches items (paginated), creates/reuses ghost tracks (dedupe on `spotify_id`), and writes playlist + membership rows.
 - **Auto-sync** on app launch and every 15 minutes: fetch `/me/playlists`, compare each imported playlist's `snapshot_id`; only changed playlists re-fetch items. Adds new ghosts, updates membership/positions, renames playlists.
 - Ghosts removed from all Spotify playlists: **kept if tagged** (still purchase candidates), garbage-collected if untagged.
-- Spotify-side "local file" entries and region-unavailable tracks import as metadata-only ghosts (taggable, not playable).
+- Spotify-side "local file" entries are **skipped on import** — they have no Spotify track ID (nothing to dedupe or merge on) and the user already owns those files. Region-unavailable tracks still import as taggable, unplayable ghosts.
 - All sync activity goes through the existing logging system.
 
 ## 4. UI
@@ -82,6 +82,7 @@ Runs wherever new local tracks appear (file import, iTunes sync).
 - Offline / revoked token: quiet banner in the Spotify section, sync skipped, cached data remains browsable.
 - Connect-time failures (user not allowlisted, owner lost Premium) surface clear, actionable error messages.
 - Duplicate Spotify tracks across playlists share one ghost; merging updates every containing playlist at once.
+- Spotify-side "local file" entries are **skipped on import** — they have no Spotify track ID (nothing to dedupe or merge on) and the user already owns those files. Region-unavailable tracks still import as taggable, unplayable ghosts.
 
 ## 8. Testing & Docs
 

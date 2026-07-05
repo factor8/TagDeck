@@ -62,6 +62,8 @@ impl ExternalTrack {
             bpm: self.bpm,
             missing: false,
             unlinked_at: None,
+            source: "local".to_string(),
+            spotify_id: None,
         }
     }
 }
@@ -106,6 +108,8 @@ pub async fn fetch_system_library(app: &AppHandle) -> Result<(Vec<Track>, Vec<Pl
             sort_position: 0,
             created_at: 0,
             updated_at: 0,
+            spotify_playlist_id: None,
+            spotify_snapshot_id: None,
         })
         .collect();
 

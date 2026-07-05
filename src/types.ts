@@ -20,6 +20,10 @@ export interface Track {
     itunes_pid?: string | null;
     /** Set when a previously linked track disappeared from Music.app. */
     unlinked_at?: number | null;
+    /** 'local' (has a file) or 'spotify' (ghost — no file yet). */
+    source: 'local' | 'spotify';
+    /** Spotify track ID; kept after merge onto the local track. */
+    spotify_id?: string | null;
 }
 
 export interface Playlist {
@@ -28,13 +32,15 @@ export interface Playlist {
     parent_persistent_id?: string;
     name: string;
     is_folder: boolean;
-    origin: 'itunes' | 'tagdeck';
+    origin: 'itunes' | 'tagdeck' | 'spotify';
     itunes_sync_enabled: boolean;
     description?: string;
     color?: string;
     sort_position: number;
     created_at: number;
     updated_at: number;
+    spotify_playlist_id?: string | null;
+    spotify_snapshot_id?: string | null;
 }
 
 export interface Tag {
