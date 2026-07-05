@@ -20,6 +20,7 @@
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
 
 ### Fixed
+- The app icon now follows Apple's icon-grid sizing (artwork inset with the standard transparent margin), so it no longer looks oversized next to other icons in the Dock.
 - In Import-only mode, syncing no longer overwrites tags with iTunes' stale copy of the comment field (TagDeck stops pushing comments in that mode, so the file/TagDeck copy is authoritative).
 
 ### Changed

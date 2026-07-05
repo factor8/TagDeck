@@ -1,27 +1,31 @@
-<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="g5" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#F472B6"/>
-      <stop offset="100%" stop-color="#7C3AED"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="48" fill="#0E0B16"/>
-  <!-- Outer hex r=100 - dashed segments (full edges) -->
-  <line x1="128" y1="28" x2="214.6" y2="78" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
-  <line x1="214.6" y1="78" x2="214.6" y2="178" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
-  <line x1="214.6" y1="178" x2="128" y2="228" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
-  <line x1="128" y1="228" x2="41.4" y2="178" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
-  <line x1="41.4" y1="178" x2="41.4" y2="78" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
-  <line x1="41.4" y1="78" x2="128" y2="28" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
-  <!-- Mid hex r=68 - symmetric inset segments (10% from each end) -->
-  <line x1="133.89" y1="63.4" x2="181.0" y2="90.6" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
-  <line x1="186.89" y1="100.8" x2="186.89" y2="155.2" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
-  <line x1="181.0" y1="165.4" x2="133.89" y2="192.6" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
-  <line x1="122.11" y1="192.6" x2="75.0" y2="165.4" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
-  <line x1="69.11" y1="155.2" x2="69.11" y2="100.8" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
-  <line x1="75.0" y1="90.6" x2="122.11" y2="63.4" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
-  <!-- Inner hex r=43 solid -->
-  <polygon points="128,85 165.24,106.5 165.24,149.5 128,171 90.76,149.5 90.76,106.5" fill="url(#g5)" opacity="0.85"/>
-  <!-- Bright core r=24 -->
-  <polygon points="128,104 148.78,116 148.78,140 128,152 107.22,140 107.22,116" fill="#F9A8D4"/>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- macOS app icon: artwork occupies 824x824 centered on a 1024 canvas (Apple HIG margin),
+       so the icon renders at the same visual size as other Dock icons. -->
+  <g transform="translate(100 100) scale(3.21875)">
+    <defs>
+      <linearGradient id="g5" x1="40" y1="40" x2="220" y2="220" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="#F472B6"/>
+        <stop offset="100%" stop-color="#7C3AED"/>
+      </linearGradient>
+    </defs>
+    <rect width="256" height="256" rx="48" fill="#0E0B16"/>
+    <!-- Outer hex r=100 - dashed segments (full edges) -->
+    <line x1="128" y1="28" x2="214.6" y2="78" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+    <line x1="214.6" y1="78" x2="214.6" y2="178" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+    <line x1="214.6" y1="178" x2="128" y2="228" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+    <line x1="128" y1="228" x2="41.4" y2="178" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+    <line x1="41.4" y1="178" x2="41.4" y2="78" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+    <line x1="41.4" y1="78" x2="128" y2="28" stroke="url(#g5)" stroke-width="4" opacity="0.2" stroke-dasharray="12 8"/>
+    <!-- Mid hex r=68 - symmetric inset segments (10% from each end) -->
+    <line x1="133.89" y1="63.4" x2="181.0" y2="90.6" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+    <line x1="186.89" y1="100.8" x2="186.89" y2="155.2" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+    <line x1="181.0" y1="165.4" x2="133.89" y2="192.6" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+    <line x1="122.11" y1="192.6" x2="75.0" y2="165.4" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+    <line x1="69.11" y1="155.2" x2="69.11" y2="100.8" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+    <line x1="75.0" y1="90.6" x2="122.11" y2="63.4" stroke="url(#g5)" stroke-width="4" opacity="0.5"/>
+    <!-- Inner hex r=43 solid -->
+    <polygon points="128,85 165.24,106.5 165.24,149.5 128,171 90.76,149.5 90.76,106.5" fill="url(#g5)" opacity="0.85"/>
+    <!-- Bright core r=24 -->
+    <polygon points="128,104 148.78,116 148.78,140 128,152 107.22,140 107.22,116" fill="#F9A8D4"/>
+  </g>
 </svg>
