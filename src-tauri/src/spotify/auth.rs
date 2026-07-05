@@ -184,68 +184,8 @@ pub async fn connect(
 
     // Wait for the callback on a blocking thread so we don't stall the async runtime.
     let expected_state = state_param.clone();
-    let code = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        listener
-            .set_nonblocking(false)
-            .map_err(|e| e.to_string())?;
-        // Accept connections until we get /callback or time out (~120s).
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
-        for stream in listener.incoming() {
-            if std::time::Instant::now() > deadline {
-                return Err("Timed out waiting for Spotify authorization".into());
-            }
-            let mut stream = stream.map_err(|e| e.to_string())?;
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .ok();
-            let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
-            let mut request_line = String::new();
-            if reader.read_line(&mut request_line).is_err() {
-                continue;
-            }
-            // request_line: "GET /callback?code=...&state=... HTTP/1.1"
-            let path = request_line.split_whitespace().nth(1).unwrap_or("");
-            if !path.starts_with("/callback") {
-                let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n");
-                continue;
-            }
-            let query = path.splitn(2, '?').nth(1).unwrap_or("");
-            let mut code = None;
-            let mut state_val = None;
-            let mut error = None;
-            for pair in query.split('&') {
-                let mut kv = pair.splitn(2, '=');
-                match (kv.next(), kv.next()) {
-                    (Some("code"), Some(v)) => code = Some(v.to_string()),
-                    (Some("state"), Some(v)) => state_val = Some(v.to_string()),
-                    (Some("error"), Some(v)) => error = Some(v.to_string()),
-                    _ => {}
-                }
-            }
-            let body = if error.is_none() && code.is_some() {
-                "<html><body style='font-family:sans-serif'><h2>TagDeck connected to Spotify</h2>You can close this tab.</body></html>"
-            } else {
-                "<html><body style='font-family:sans-serif'><h2>Spotify authorization failed</h2>Return to TagDeck and try again.</body></html>"
-            };
-            let _ = stream.write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    body.len(),
-                    body
-                )
-                .as_bytes(),
-            );
-            if let Some(err) = error {
-                return Err(format!("Spotify authorization denied: {}", err));
-            }
-            if state_val.as_deref() != Some(expected_state.as_str()) {
-                return Err("State mismatch in OAuth callback".into());
-            }
-            if let Some(c) = code {
-                return Ok(c);
-            }
-        }
-        Err("Listener closed unexpectedly".into())
+    let code = tauri::async_runtime::spawn_blocking(move || {
+        wait_for_callback(listener, &expected_state, std::time::Duration::from_secs(120))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -270,6 +210,87 @@ pub async fn connect(
         .and_then(|v| v.as_str())
         .unwrap_or("Spotify user")
         .to_string())
+}
+
+/// Polls `listener` for the OAuth `/callback` request until a valid authorization
+/// code arrives or `timeout` elapses. The listener is put into non-blocking mode so
+/// the deadline check keeps running even if the browser tab is never completed
+/// (closed, navigated away, etc.) — a blocking `accept()` would otherwise hang
+/// forever and leak the listener's port for the rest of the app's lifetime.
+fn wait_for_callback(
+    listener: TcpListener,
+    expected_state: &str,
+    timeout: std::time::Duration,
+) -> Result<String, String> {
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let mut stream = match listener.accept() {
+            Ok((stream, _addr)) => stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if std::time::Instant::now() > deadline {
+                    return Err(
+                        "Timed out waiting for Spotify authorization (2 minutes). Please try again."
+                            .to_string(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                continue;
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+        stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .ok();
+        let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() {
+            continue;
+        }
+        // request_line: "GET /callback?code=...&state=... HTTP/1.1"
+        let path = request_line.split_whitespace().nth(1).unwrap_or("");
+        if !path.starts_with("/callback") {
+            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\n\r\n");
+            continue;
+        }
+        let query = path.splitn(2, '?').nth(1).unwrap_or("");
+        let mut code = None;
+        let mut state_val = None;
+        let mut error = None;
+        for pair in query.split('&') {
+            let mut kv = pair.splitn(2, '=');
+            match (kv.next(), kv.next()) {
+                (Some("code"), Some(v)) => code = Some(v.to_string()),
+                (Some("state"), Some(v)) => state_val = Some(v.to_string()),
+                (Some("error"), Some(v)) => error = Some(v.to_string()),
+                _ => {}
+            }
+        }
+        let body = if error.is_none() && code.is_some() {
+            "<html><body style='font-family:sans-serif'><h2>TagDeck connected to Spotify</h2>You can close this tab.</body></html>"
+        } else {
+            "<html><body style='font-family:sans-serif'><h2>Spotify authorization failed</h2>Return to TagDeck and try again.</body></html>"
+        };
+        let _ = stream.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .as_bytes(),
+        );
+        if let Some(err) = error {
+            return Err(format!("Spotify authorization denied: {}", err));
+        }
+        if state_val.as_deref() != Some(expected_state) {
+            return Err("State mismatch in OAuth callback".into());
+        }
+        if let Some(c) = code {
+            return Ok(c);
+        }
+        // /callback request with neither `code` nor `error` — keep waiting.
+    }
 }
 
 pub fn disconnect(spotify: &super::SpotifyState) {
@@ -298,5 +319,23 @@ mod tests {
         let v = generate_code_verifier();
         assert!(v.len() >= 43 && v.len() <= 128);
         assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c)));
+    }
+
+    #[test]
+    fn wait_for_callback_times_out_when_no_connection_arrives() {
+        // Ephemeral port — never bind the real 43110 redirect port in tests.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let start = std::time::Instant::now();
+        let result = wait_for_callback(
+            listener,
+            "irrelevant-state",
+            std::time::Duration::from_millis(300),
+        );
+        let elapsed = start.elapsed();
+        match &result {
+            Err(e) => assert!(e.contains("Timed out"), "unexpected error message: {}", e),
+            Ok(_) => panic!("expected a timeout error, got Ok"),
+        }
+        assert!(elapsed < std::time::Duration::from_secs(2), "took too long: {:?}", elapsed);
     }
 }
