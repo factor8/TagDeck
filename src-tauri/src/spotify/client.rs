@@ -58,7 +58,19 @@ pub struct ItemsPage {
 
 #[derive(Debug, Deserialize)]
 pub struct ItemWire {
+    // Pre-Feb-2026 API wraps the payload as "track", post-rename as "item".
+    // Two optional fields (not a serde alias) so a transitional response
+    // carrying both can't fail with a duplicate-field error.
+    #[serde(default)]
     pub track: Option<TrackWire>,
+    #[serde(default)]
+    pub item: Option<TrackWire>,
+}
+
+impl ItemWire {
+    pub fn payload(&self) -> Option<&TrackWire> {
+        self.item.as_ref().or(self.track.as_ref())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,7 +136,7 @@ pub struct SpotifyDevice {
 pub fn page_to_track_metas(page: &ItemsPage) -> Vec<SpotifyTrackMeta> {
     page.items
         .iter()
-        .filter_map(|item| item.track.as_ref())
+        .filter_map(|item| item.payload())
         .filter_map(|t| {
             let id = t.id.clone()?; // skip Spotify local files (id null)
             Some(SpotifyTrackMeta {
@@ -421,6 +433,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_post_feb_2026_item_wrapper_field() {
+        // Live /playlists/{id}/items responses wrap the track as "item",
+        // not "track" (same Feb-2026 rename as the endpoint and count field).
+        let json = r#"{
+            "items": [
+                {"item": {"id":"t1","uri":"spotify:track:t1","name":"Xoyo",
+                          "duration_ms": 279642, "is_playable": true,
+                          "artists":[{"name":"A"}], "album":{"name":"Alb"}}},
+                {"item": null}
+            ],
+            "next": null
+        }"#;
+        let page: ItemsPage = serde_json::from_str(json).unwrap();
+        let metas = page_to_track_metas(&page);
+        assert_eq!(metas.len(), 1);
+        assert_eq!(metas[0].title, "Xoyo");
+    }
+
+    #[test]
     fn parses_playlist_items_and_skips_null_tracks() {
         let json = r#"{
             "items": [
@@ -441,4 +472,5 @@ mod tests {
         assert!((metas[0].duration_secs - 200.0).abs() < 0.001);
     }
 }
+
 

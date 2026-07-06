@@ -21,6 +21,7 @@
 
 ### Fixed
 - Loading Spotify playlists no longer fails with "missing field `tracks`": the Spotify API now reports playlist track counts under `items` instead of `tracks`, and TagDeck accepts both (a playlist missing the count entirely shows 0 instead of failing the whole list).
+- Importing a Spotify playlist no longer produces an empty playlist: the same Spotify API rename also changed the per-row track wrapper from `track` to `item`, which TagDeck was silently skipping. Both names are accepted now — re-import any playlist that came in empty to backfill its tracks.
 - The app icon now follows Apple's icon-grid sizing (artwork inset with the standard transparent margin), so it no longer looks oversized next to other icons in the Dock.
 - In Import-only mode, syncing no longer overwrites tags with iTunes' stale copy of the comment field (TagDeck stops pushing comments in that mode, so the file/TagDeck copy is authoritative).
 
