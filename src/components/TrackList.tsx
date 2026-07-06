@@ -2243,6 +2243,13 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
         return filtered.slice(0, 20);
     }, [tracks, search]);
 
+    const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+    // Flag candidates whose duration differs from the ghost's by more than the
+    // auto-matcher's own tolerance (DURATION_TOLERANCE_SECS = 3.0 in matcher.rs).
+    // Linking is irreversible (tags written into the file, spotify_id transferred),
+    // so give the user a cue against e.g. radio-edit vs extended-mix mix-ups.
+    const durMismatch = (t: Track) => Math.abs(t.duration_secs - ghost.duration_secs) > 3;
+
     const pick = async (local: Track) => {
         if (linking) return;
         setLinking(true);
@@ -2273,8 +2280,11 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
                     <h3 style={{ margin: 0 }}>Link to Local Track</h3>
                     <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={16} /></button>
                 </div>
-                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {ghost.artist || '?'} — {ghost.title || '?'}
+                <div style={{ marginBottom: 8, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ghost.artist || '?'} — {ghost.title || '?'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{ghost.album || ''} · {fmtDur(ghost.duration_secs)}</div>
                 </div>
                 <input
                     autoFocus
@@ -2296,9 +2306,17 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
                                      cursor: linking ? 'default' : 'pointer', opacity: linking ? 0.6 : 1 }}
                         >
                             <FileAudio size={13} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
-                                {t.artist || '?'} — {t.title || '?'}
-                            </span>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+                                    {t.artist || '?'} — {t.title || '?'}
+                                </div>
+                                <div style={{ fontSize: 11, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {t.album || ''} · <span title={durMismatch(t) ? 'Duration differs from the Spotify track by more than 3s' : undefined}
+                                                           style={durMismatch(t) ? { color: 'var(--error-color)' } : undefined}>
+                                        {fmtDur(t.duration_secs)}
+                                    </span>
+                                </div>
+                            </div>
                         </div>
                     ))}
                 </div>
