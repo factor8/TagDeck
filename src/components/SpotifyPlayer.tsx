@@ -4,6 +4,10 @@ import { invoke } from '@tauri-apps/api/core';
 import { Track } from '../types';
 import { playerStyles } from './playerStyles';
 
+// Keys that actually move a range input's value — the keyboard seek path.
+// Anything else (Tab, ⌘K, plain letters) must neither arm a scrub nor commit one.
+const SEEK_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
+
 interface Props {
     track: Track;
     autoPlay?: boolean;
@@ -96,6 +100,13 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
         isScrubbingRef.current = true;
     };
 
+    // Keyboard path only arms on keys that actually move the slider —
+    // otherwise Tab/⌘K/any letter while focused would arm a scrub that never
+    // commits (focus leaves before keyup), stranding isScrubbingRef true.
+    const startKeyScrub = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (SEEK_KEYS.includes(e.key)) isScrubbingRef.current = true;
+    };
+
     // Shared release handler for both pointer (mouse/touch drag) and keyboard
     // (arrow-key) seeking — keyboard seeking has no pointerup, so onKeyUp
     // commits the same way onPointerUp does for a drag.
@@ -104,6 +115,20 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
         isScrubbingRef.current = false;
         const ms = Number(e.currentTarget.value);
         invoke('spotify_seek', { positionMs: ms }).catch(() => { /* ignore */ });
+    };
+
+    // Keyup side of the same gate: only a seek key's release commits, so a
+    // stray letter/modifier keyup can never fire a seek (e.g. mid pointer-drag).
+    const commitKeySeek = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (SEEK_KEYS.includes(e.key)) commitSeek(e);
+    };
+
+    // Abandon a scrub without committing — focus stolen mid-scrub (Tab, ⌘K
+    // quick switcher, Cmd+Tab) or a cancelled pointer drag. The pending
+    // position is dropped (no stale spotify_seek), and the tick/poll resume
+    // driving progressMs, which self-corrects the handle.
+    const cancelScrub = () => {
+        isScrubbingRef.current = false;
     };
 
     const fmt = (ms: number) => {
@@ -195,8 +220,10 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
                         onChange={handleSeekChange}
                         onPointerDown={startScrub}
                         onPointerUp={commitSeek}
-                        onKeyDown={startScrub}
-                        onKeyUp={commitSeek}
+                        onPointerCancel={cancelScrub}
+                        onKeyDown={startKeyScrub}
+                        onKeyUp={commitKeySeek}
+                        onBlur={cancelScrub}
                         style={{ flex: 1, accentColor }}
                     />
                     <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{fmt(durationMs)}</span>
