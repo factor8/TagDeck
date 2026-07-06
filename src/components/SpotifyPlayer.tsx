@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Pause, Play, SkipBack, SkipForward, AudioLines } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { Track } from '../types';
-import { playerStyles } from './Player';
+import { playerStyles } from './playerStyles';
 
 interface Props {
     track: Track;
@@ -25,13 +25,32 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
     const [error, setError] = useState<string | null>(null);
     const durationMs = Math.round(track.duration_secs * 1000);
     const lastPollRef = useRef<number>(0);
+    // While the user is actively dragging the seek handle or holding an arrow
+    // key on it, suppress the interpolation tick and poll overwrites so the
+    // handle doesn't fight the drag; commit exactly one spotify_seek on release.
+    const isScrubbingRef = useRef(false);
+
+    // Error toast timer
+    useEffect(() => {
+        if (error) {
+            const timer = setTimeout(() => setError(null), 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [error]);
 
     // Start playback when the track changes (double-click sets autoPlay).
     useEffect(() => {
         if (!autoPlay || !track.spotify_id) return;
         setError(null);
+        // Reset unconditionally before the request goes out — if it fails
+        // (non-Premium, no network, device-wake timeout), we must not be left
+        // showing the previous track's progress/isPlaying, which would make
+        // togglePlay send pause/resume against whatever Spotify actually has
+        // active rather than this track.
+        setIsPlaying(false);
+        setProgressMs(0);
         invoke('spotify_play_track', { spotifyId: track.spotify_id })
-            .then(() => { setIsPlaying(true); setProgressMs(0); onPlayStateChange?.(true); })
+            .then(() => { setIsPlaying(true); onPlayStateChange?.(true); })
             .catch(e => setError(String(e)))
             .finally(() => onAutoPlayProcessed?.());
     }, [track.id, autoPlay]);
@@ -43,7 +62,9 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
                 const s = await invoke<{ is_playing: boolean; progress_ms: number; track_uri: string | null } | null>('spotify_get_playback');
                 if (!s || s.track_uri !== `spotify:track:${track.spotify_id}`) return;
                 setIsPlaying(s.is_playing);
-                setProgressMs(s.progress_ms);
+                // Don't let a poll response overwrite the handle position while
+                // the user is mid-drag/mid-keypress on the seek slider.
+                if (!isScrubbingRef.current) setProgressMs(s.progress_ms);
                 onPlayStateChange?.(s.is_playing);
                 lastPollRef.current = Date.now();
             } catch { /* offline / no device — leave UI as-is */ }
@@ -51,6 +72,7 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
         poll();
         const pollId = setInterval(poll, 5000);
         const tickId = setInterval(() => {
+            if (isScrubbingRef.current) return;
             setProgressMs(p => (isPlaying ? Math.min(p + 250, durationMs) : p));
         }, 250);
         return () => { clearInterval(pollId); clearInterval(tickId); };
@@ -63,10 +85,25 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
         } catch (e) { setError(String(e)); }
     };
 
-    const seek = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const ms = Number(e.target.value);
-        setProgressMs(ms);
-        try { await invoke('spotify_seek', { positionMs: ms }); } catch { /* ignore */ }
+    // Dragging (or arrow-keying) the seek handle must not fire a network call
+    // per tick — onChange only updates local UI while scrubbing; the actual
+    // spotify_seek PUT is committed once, on release.
+    const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setProgressMs(Number(e.target.value));
+    };
+
+    const startScrub = () => {
+        isScrubbingRef.current = true;
+    };
+
+    // Shared release handler for both pointer (mouse/touch drag) and keyboard
+    // (arrow-key) seeking — keyboard seeking has no pointerup, so onKeyUp
+    // commits the same way onPointerUp does for a drag.
+    const commitSeek = (e: React.SyntheticEvent<HTMLInputElement>) => {
+        if (!isScrubbingRef.current) return;
+        isScrubbingRef.current = false;
+        const ms = Number(e.currentTarget.value);
+        invoke('spotify_seek', { positionMs: ms }).catch(() => { /* ignore */ });
     };
 
     const fmt = (ms: number) => {
@@ -155,7 +192,11 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
                         min={0}
                         max={durationMs || 0}
                         value={Math.min(progressMs, durationMs)}
-                        onChange={seek}
+                        onChange={handleSeekChange}
+                        onPointerDown={startScrub}
+                        onPointerUp={commitSeek}
+                        onKeyDown={startScrub}
+                        onKeyUp={commitSeek}
                         style={{ flex: 1, accentColor }}
                     />
                     <span style={{ fontSize: '11px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{fmt(durationMs)}</span>
