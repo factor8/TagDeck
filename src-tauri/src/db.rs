@@ -1730,9 +1730,33 @@ mod tests {
         let id1 = db.upsert_ghost_track("abc", "spotify:track:abc", "Artist", "Title", "Album", 200.0).unwrap();
         let id2 = db.upsert_ghost_track("abc", "spotify:track:abc", "Artist2", "Title2", "Album2", 200.0).unwrap();
         assert_eq!(id1, id2);
-        // metadata refreshed, tags untouched
+        // metadata refreshed; see upsert_ghost_preserves_tags_on_reupsert for the tag-preservation guarantee
         let t = db.get_track(id1).unwrap().unwrap();
         assert_eq!(t.artist.as_deref(), Some("Artist2"));
+    }
+
+    #[test]
+    fn upsert_ghost_preserves_tags_on_reupsert() {
+        let db = Database::new(":memory:").unwrap();
+        let id1 = db.upsert_ghost_track("abc", "spotify:track:abc", "Artist", "Title", "Album", 200.0).unwrap();
+
+        // Tag the ghost track, same as the app would between syncs.
+        let mut t = db.get_track(id1).unwrap().unwrap();
+        t.comment_raw = Some("my note && energetic; deep".to_string());
+        db.update_track(&t).unwrap();
+
+        // Re-import with changed metadata (e.g. the track was edited on Spotify).
+        let id2 = db.upsert_ghost_track("abc", "spotify:track:abc", "Artist2", "Title2", "Album2", 210.0).unwrap();
+        assert_eq!(id1, id2);
+
+        let t2 = db.get_track(id2).unwrap().unwrap();
+        // metadata refreshed
+        assert_eq!(t2.artist.as_deref(), Some("Artist2"));
+        assert_eq!(t2.title.as_deref(), Some("Title2"));
+        assert_eq!(t2.album.as_deref(), Some("Album2"));
+        assert_eq!(t2.duration_secs, 210.0);
+        // tags preserved
+        assert_eq!(t2.comment_raw.as_deref(), Some("my note && energetic; deep"));
     }
 
     #[test]

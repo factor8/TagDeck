@@ -94,7 +94,17 @@ pub async fn spotify_import_playlists(
     let client_id = get_client_id(&state)?;
     let all = super::client::list_my_playlists(&spotify, &client_id).await?;
     let selected: Vec<_> = all.into_iter().filter(|p| playlist_ids.contains(&p.id)).collect();
-    let report = super::sync::import_playlists(&spotify, &client_id, &state.db, selected).await?;
+    let report = match super::sync::import_playlists(&spotify, &client_id, &state.db, selected).await {
+        Ok(r) => r,
+        Err(e) => {
+            app.state::<crate::logging::LogState>().add_log(
+                "ERROR",
+                &format!("Spotify import failed: {}", e),
+                &app,
+            );
+            return Err(e);
+        }
+    };
     {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let _ = db.sync_tags();
