@@ -338,6 +338,15 @@ pub async fn write_tags(
     let mut track = db.get_track(id).map_err(|e| e.to_string())?
         .ok_or("Track not found")?;
 
+    // Ghost tracks (Spotify, no file): DB-only tag storage; no file IO,
+    // no Music.app push, no dirty flag, no undo (nothing external to revert).
+    if track.is_ghost() {
+        track.comment_raw = Some(new_tags);
+        db.update_track(&track).map_err(|e| e.to_string())?;
+        let _ = db.sync_tags();
+        return Ok(());
+    }
+
     // Prepare Undo
     let old_comment = track.comment_raw.clone().unwrap_or_default();
     let undo_action = Action::UpdateTrackComments { 
@@ -446,6 +455,15 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                 user_comment.to_string()
             };
 
+            // Ghost tracks (Spotify, no file): DB-only tag storage.
+            if track.is_ghost() {
+                track.comment_raw = Some(new_full_comment.clone());
+                if let Ok(db) = state.db.lock() {
+                    let _ = db.update_track(&track);
+                }
+                continue; // no file write, no Music push, no undo entry
+            }
+
             // Prepare Undo State
             undo_track_states.push(TrackState {
                 id: track.id,
@@ -460,7 +478,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
             // 1. File
              if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
                  println!("Failed to write file {}: {}", track.id, e);
-                 continue; 
+                 continue;
              }
 
             // 2. DB (re-lock)
@@ -568,6 +586,15 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                 user_comment.to_string()
             };
 
+            // Ghost tracks (Spotify, no file): DB-only tag storage.
+            if track.is_ghost() {
+                track.comment_raw = Some(new_full_comment.clone());
+                if let Ok(db) = state.db.lock() {
+                    let _ = db.update_track(&track);
+                }
+                continue; // no file write, no Music push, no undo entry
+            }
+
             // Prepare Undo State
             undo_track_states.push(TrackState {
                 id: track.id,
@@ -581,7 +608,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
             // WRITE
             if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
                 println!("Failed to write file {}: {}", track.id, e);
-                continue; 
+                continue;
             }
 
             // DB
@@ -1582,10 +1609,14 @@ pub async fn update_rating(
     db.update_track_rating(track_id, rating).map_err(|e| e.to_string())?;
 
     // Push is disabled for this edit, so it diverges from Music.app - flag for later reconciliation.
+    // Ghosts have no Music.app link to diverge from, so they're never dirty-marked.
     if !push_enabled {
-        if let Err(e) = db.mark_tracks_dirty(&[track_id]) {
-            let msg = format!("Failed to mark track dirty: {}", e);
-            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+        let is_ghost = db.get_track(track_id).ok().flatten().map(|t| t.is_ghost()).unwrap_or(false);
+        if !is_ghost {
+            if let Err(e) = db.mark_tracks_dirty(&[track_id]) {
+                let msg = format!("Failed to mark track dirty: {}", e);
+                app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+            }
         }
     }
 
@@ -1651,10 +1682,14 @@ pub async fn debug_db_path(_state: State<'_, AppState>) -> Result<String, String
 #[tauri::command]
 pub async fn get_track_artwork(id: i64, state: State<'_, AppState>) -> Result<Option<Vec<u8>>, String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    let path = db.get_track_path(id).map_err(|e| e.to_string())?;
+    let track = db.get_track(id).map_err(|e| e.to_string())?.ok_or("Track not found")?;
     drop(db); // Release lock before doing IO
-    
-    get_artwork(&path).map_err(|e| e.to_string())
+
+    if track.is_ghost() {
+        return Ok(None);
+    }
+
+    get_artwork(&track.file_path).map_err(|e| e.to_string())
 }
 
 // Tag Group Commands
@@ -1725,6 +1760,10 @@ pub async fn update_track_info(
     // 1. Get track for persistent_id, file_path, and old values
     let track = db.get_track(track_id).map_err(|e| e.to_string())?
         .ok_or("Track not found")?;
+
+    if track.is_ghost() {
+        return Err("Spotify tracks can't be edited until the file is purchased and merged".into());
+    }
 
     // 2. Build the new comment_raw if the user edited the comment portion.
     //    comment_raw format: "user comment && tag1; tag2; tag3"
@@ -2333,6 +2372,9 @@ pub async fn verify_library_files(
     let mut gone: Vec<(i64, String, i64)> = Vec::new(); // (id, old_path, size)
 
     for (id, file_path, missing, _linked, size) in &index {
+        // Ghost tracks (Spotify, no file yet) have no path to verify — skip,
+        // or every ghost would be flagged missing.
+        if file_path.is_empty() { continue; }
         let exists = std::path::Path::new(file_path).is_file();
         match (exists, missing) {
             (true, true) => to_restore.push(*id),
@@ -2446,6 +2488,8 @@ pub async fn consolidate_library(
     const ERROR_CAP: usize = 10;
 
     for (id, source_str) in &candidates {
+        // Ghost tracks (Spotify, no file yet) have nothing to consolidate.
+        if source_str.is_empty() { continue; }
         let source = std::path::Path::new(source_str);
         if !source.is_file() {
             report.failed += 1;
@@ -2565,6 +2609,8 @@ pub async fn export_tracks_to_music(
     };
 
     for (id, path) in &candidates {
+        // Ghost tracks (Spotify, no file yet) have nothing to add to Music.app.
+        if path.is_empty() { continue; }
         if !std::path::Path::new(path).is_file() {
             fail(&mut report, format!("File not found: {}", path));
             continue;
@@ -2642,6 +2688,8 @@ pub async fn export_playlist_m3u8(
     let mut report = M3u8ExportReport::default();
     let mut out = String::from("#EXTM3U\n");
     for (path, duration, artist, title, missing) in rows {
+        // Ghost tracks (Spotify, no file yet) have nothing to export.
+        if path.is_empty() { continue; }
         if missing {
             report.skipped_missing += 1;
             continue;
@@ -2690,7 +2738,13 @@ pub async fn export_rekordbox_xml(
 ) -> Result<RekordboxExportReport, String> {
     let (tracks, playlists) = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-        let tracks = db.get_all_tracks().map_err(|e| e.to_string())?;
+        // Ghost tracks (Spotify, no file yet) have nothing to export; drop them
+        // before build_rekordbox_xml so they're excluded from both the
+        // collection and any playlist membership (same as `missing` tracks).
+        let tracks: Vec<Track> = db.get_all_tracks().map_err(|e| e.to_string())?
+            .into_iter()
+            .filter(|t| !t.is_ghost())
+            .collect();
         let playlists = db
             .get_playlists()
             .map_err(|e| e.to_string())?
@@ -2803,4 +2857,146 @@ pub async fn restore_playlist_backup(
 ) -> Result<usize, String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.restore_playlists_from_backup(&entries).map_err(|e| e.to_string())
+}
+
+// ─── Ghost-aware guard tests ────────────────────────────────────────────────
+//
+// The `#[tauri::command]` functions above take `State<'_, AppState>`, which
+// has no public constructor (tauri::State's inner field is private, and this
+// crate doesn't enable tauri's `test` feature) — consistent with there being
+// no command-level tests anywhere else in this file. These tests instead
+// exercise the DB-level contract each ghost guard relies on: (1) ghost tag
+// edits update comment_raw/tags vocabulary without ever touching file_path,
+// and (2) file_path.is_empty() is a safe stand-in for Track::is_ghost() in
+// the commands whose track loop only has a raw `(id, file_path, ...)` tuple
+// (no `Track`) to work with — verify_library_files, consolidate_library,
+// export_tracks_to_music, export_playlist_m3u8. The guards' control flow
+// itself (early `return`/`continue` placed before any file IO or Music.app
+// call) is structural and reviewed by inspection.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+
+    fn ghost(spotify_id: &str) -> Track {
+        Track {
+            id: 0,
+            persistent_id: format!("SP-{}", spotify_id),
+            file_path: String::new(),
+            artist: Some("Artist".into()),
+            title: Some("Title".into()),
+            album: Some("Album".into()),
+            comment_raw: None,
+            grouping_raw: None,
+            duration_secs: 200.0,
+            format: "SPOTIFY".into(),
+            size_bytes: 0,
+            bit_rate: 0,
+            modified_date: 0,
+            rating: 0,
+            date_added: 0,
+            bpm: 0,
+            missing: false,
+            itunes_pid: None,
+            unlinked_at: None,
+            source: "spotify".into(),
+            spotify_id: Some(spotify_id.to_string()),
+        }
+    }
+
+    fn local_track(persistent_id: &str, path: &str) -> Track {
+        Track {
+            id: 0,
+            persistent_id: persistent_id.to_string(),
+            file_path: path.to_string(),
+            artist: Some("Artist".into()),
+            title: Some("Title".into()),
+            album: Some("Album".into()),
+            comment_raw: None,
+            grouping_raw: None,
+            duration_secs: 200.0,
+            format: "MP3".into(),
+            size_bytes: 1000,
+            bit_rate: 320,
+            modified_date: 0,
+            rating: 0,
+            date_added: 0,
+            bpm: 0,
+            missing: false,
+            itunes_pid: None,
+            unlinked_at: None,
+            source: "local".into(),
+            spotify_id: None,
+        }
+    }
+
+    /// DB-level equivalent of write_tags's (and batch_add_tag's/
+    /// batch_remove_tag's) ghost branch: tag-editing a ghost updates
+    /// comment_raw and the tags vocabulary, and never touches file_path
+    /// (there is no file write call in this path at all).
+    #[test]
+    fn ghost_tag_edit_is_db_only() {
+        let db = Database::new(":memory:").unwrap();
+        let id = db.insert_imported_track(&ghost("xyz789"), None, None).unwrap();
+
+        let mut track = db.get_track(id).unwrap().unwrap();
+        assert!(track.is_ghost());
+
+        // Exactly what write_tags's ghost branch does.
+        track.comment_raw = Some(" && House; Peak Time".to_string());
+        db.update_track(&track).unwrap();
+        let _ = db.sync_tags();
+
+        let reloaded = db.get_track(id).unwrap().unwrap();
+        assert_eq!(reloaded.comment_raw.as_deref(), Some(" && House; Peak Time"));
+        // Never touched — proves the DB-only path never reaches a file write.
+        assert_eq!(reloaded.file_path, "");
+
+        let tags = db.get_all_tags().unwrap();
+        assert!(tags.iter().any(|t| t.name == "House"));
+        assert!(tags.iter().any(|t| t.name == "Peak Time"));
+    }
+
+    /// Batch variant: each ghost in a multi-track batch is updated
+    /// independently (mirrors batch_add_tag's/batch_remove_tag's per-track
+    /// ghost branch), still DB-only.
+    #[test]
+    fn ghost_batch_tag_edit_updates_each_track_independently() {
+        let db = Database::new(":memory:").unwrap();
+        let id1 = db.insert_imported_track(&ghost("g1"), None, None).unwrap();
+        let id2 = db.insert_imported_track(&ghost("g2"), None, None).unwrap();
+
+        for id in [id1, id2] {
+            let mut track = db.get_track(id).unwrap().unwrap();
+            assert!(track.is_ghost());
+            track.comment_raw = Some(" && Techno".to_string());
+            db.update_track(&track).unwrap();
+        }
+
+        assert_eq!(db.get_track(id1).unwrap().unwrap().comment_raw.as_deref(), Some(" && Techno"));
+        assert_eq!(db.get_track(id2).unwrap().unwrap().comment_raw.as_deref(), Some(" && Techno"));
+        assert_eq!(db.get_track(id1).unwrap().unwrap().file_path, "");
+        assert_eq!(db.get_track(id2).unwrap().unwrap().file_path, "");
+    }
+
+    /// verify_library_files/consolidate_library/export_tracks_to_music/
+    /// export_playlist_m3u8 only have a raw `(id, file_path, ...)` tuple in
+    /// their loop (no `Track`, so no `.is_ghost()` available) — they use
+    /// `file_path.is_empty()` as the ghost check instead. This proves that
+    /// proxy is sound: every ghost row has an empty path and every local
+    /// row does not, across a real DB round trip.
+    #[test]
+    fn ghost_file_path_empty_invariant_holds_through_db_round_trip() {
+        let db = Database::new(":memory:").unwrap();
+        let ghost_id = db.insert_imported_track(&ghost("abc123"), None, None).unwrap();
+        db.insert_track(&local_track("LOC-1", "/Users/me/Music/song.mp3")).unwrap();
+
+        let index = db.get_track_file_index().unwrap();
+        assert_eq!(index.len(), 2);
+        for (id, file_path, _missing, _linked, _size) in &index {
+            let is_ghost_row = db.get_track(*id).unwrap().unwrap().is_ghost();
+            assert_eq!(*id == ghost_id, is_ghost_row);
+            assert_eq!(file_path.is_empty(), is_ghost_row);
+        }
+    }
 }
