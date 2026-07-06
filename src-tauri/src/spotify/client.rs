@@ -133,7 +133,7 @@ async fn request(
     url: &str,
     body: Option<serde_json::Value>,
 ) -> Result<(reqwest::StatusCode, String), String> {
-    for attempt in 0..3 {
+    for attempt in 0..2 {
         let token = auth::get_valid_access_token(spotify, client_id).await?;
         let mut req = spotify.http.request(method.clone(), url).bearer_auth(&token);
         if let Some(b) = &body {
@@ -141,7 +141,7 @@ async fn request(
         }
         let resp = req.send().await.map_err(|e| format!("Spotify request failed: {}", e))?;
         let status = resp.status();
-        if status.as_u16() == 429 && attempt < 2 {
+        if status.as_u16() == 429 && attempt < 1 {
             let wait = resp
                 .headers()
                 .get("Retry-After")
@@ -151,7 +151,7 @@ async fn request(
             tokio::time::sleep(std::time::Duration::from_secs(wait.min(30))).await;
             continue;
         }
-        if status.as_u16() == 401 && attempt < 2 {
+        if status.as_u16() == 401 && attempt < 1 {
             // Force refresh by clearing the cache and retrying.
             if let Ok(mut t) = spotify.tokens.lock() {
                 if let Some(ts) = t.as_mut() {
