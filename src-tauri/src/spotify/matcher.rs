@@ -5,9 +5,10 @@ pub const AUTO_MERGE_THRESHOLD: f64 = 0.90;
 pub const REVIEW_THRESHOLD: f64 = 0.60;
 const DURATION_TOLERANCE_SECS: f64 = 3.0;
 
-/// Lowercase, strip punctuation, drop "feat./ft./featuring …" credits and
-/// remaster/version suffixes. Keeps mix names ("extended mix") — those
-/// distinguish genuinely different recordings.
+/// Lowercase, strip punctuation, drop "feat./ft./featuring …" credits
+/// (inline or bracketed, e.g. "(feat. X)") and remaster/version suffixes.
+/// Keeps mix names ("extended mix") — those distinguish genuinely different
+/// recordings.
 pub fn normalize(s: &str) -> String {
     let lower = s.to_lowercase();
 
@@ -15,11 +16,12 @@ pub fn normalize(s: &str) -> String {
     // after — but only when the *whole token* (modulo a trailing '.') is the
     // marker, so words that merely contain "ft"/"feat" as a substring
     // ("Left Alone", "Daft Punk", "Defeat of Napoleon") survive intact.
+    // Bracketed credits like "(feat. X)" glue the '(' onto the token, so
+    // they don't match here — the bracket pass below handles those.
     let lower = {
         let mut tokens: Vec<&str> = Vec::new();
         for token in lower.split_whitespace() {
-            let stripped = token.trim_end_matches('.');
-            if stripped == "feat" || stripped == "ft" || stripped == "featuring" {
+            if is_feat_marker(token) {
                 break;
             }
             tokens.push(token);
@@ -27,11 +29,12 @@ pub fn normalize(s: &str) -> String {
         tokens.join(" ")
     };
 
-    // Remove parenthesized/bracketed chunks that are remaster/version noise.
-    // Nested brackets accumulate into the same outermost chunk (a space is
-    // pushed in place of the inner delimiter) so an inner bracket can't wipe
-    // out outer-chunk text already collected; the whole outermost chunk is
-    // judged for noise only once it fully closes.
+    // Remove parenthesized/bracketed chunks that are remaster/version noise
+    // or featuring credits ("(feat. X)"). Nested brackets accumulate into
+    // the same outermost chunk (a space is pushed in place of the inner
+    // delimiter) so an inner bracket can't wipe out outer-chunk text already
+    // collected; the whole outermost chunk is judged only once it fully
+    // closes.
     let mut out = String::with_capacity(lower.len());
     let mut depth = 0usize;
     let mut chunk = String::new();
@@ -49,7 +52,7 @@ pub fn normalize(s: &str) -> String {
                 if depth > 0 {
                     depth -= 1;
                     if depth == 0 {
-                        if !is_version_noise(&chunk) {
+                        if !is_droppable_bracket_chunk(&chunk) {
                             out.push(' ');
                             out.push_str(&chunk);
                         }
@@ -69,9 +72,10 @@ pub fn normalize(s: &str) -> String {
         }
     }
     // An unterminated bracket left the tail sitting in `chunk` — it was
-    // dropped on the floor before; now it gets the same noise check and is
-    // flushed back in when it isn't noise.
-    if depth > 0 && !is_version_noise(&chunk) {
+    // dropped on the floor before; now it gets the same droppable check and
+    // is flushed back in when it's meaningful ("Song (feat. Someone" still
+    // loses the credit, "Prelude (Part 1" keeps its tail).
+    if depth > 0 && !is_droppable_bracket_chunk(&chunk) {
         out.push(' ');
         out.push_str(&chunk);
     }
@@ -79,15 +83,17 @@ pub fn normalize(s: &str) -> String {
     // Remove "- 2014 remastered version"-style dash suffixes. Split on every
     // " - " so each segment is judged independently — a noise keyword in one
     // segment ("Remastered") no longer eats distinguishing content in an
-    // earlier segment ("Part 1" vs "Part 2").
-    let out = if out.contains(" - ") {
-        out.split(" - ")
-            .filter(|segment| !is_version_noise(segment))
-            .collect::<Vec<_>>()
-            .join(" - ")
-    } else {
-        out
-    };
+    // earlier segment ("Part 1" vs "Part 2"). Segment 0 is the title itself
+    // and is kept unconditionally: "Bonus Track - Live" must not lose its
+    // head, and two noise-titled tracks must never both collapse to "" (a
+    // both-empty pair scores similarity 1.0).
+    let out = out
+        .split(" - ")
+        .enumerate()
+        .filter(|&(i, segment)| i == 0 || !is_version_noise(segment))
+        .map(|(_, segment)| segment)
+        .collect::<Vec<_>>()
+        .join(" - ");
 
     // Strip punctuation, collapse whitespace.
     out.chars()
@@ -98,6 +104,12 @@ pub fn normalize(s: &str) -> String {
         .join(" ")
 }
 
+/// True when a whole token (modulo one trailing '.') is a featuring marker.
+fn is_feat_marker(token: &str) -> bool {
+    let t = token.trim_end_matches('.');
+    t == "feat" || t == "ft" || t == "featuring"
+}
+
 fn is_version_noise(s: &str) -> bool {
     let s = s.trim();
     // A bare 4-digit year is NOT noise on its own (different live dates/mixes
@@ -106,6 +118,18 @@ fn is_version_noise(s: &str) -> bool {
     ["remaster", "remastered", "re-master", "deluxe", "bonus", "single version", "album version", "radio edit"]
         .iter()
         .any(|k| s.contains(k))
+}
+
+/// A bracketed chunk is dropped when it's version noise OR a featuring
+/// credit — i.e. its first token is "feat"/"ft"/"featuring" (Spotify's
+/// canonical "(feat. X)" format). First-token-only keeps meaningful chunks
+/// like "[extended mix]" or "(live 1999)" intact.
+fn is_droppable_bracket_chunk(chunk: &str) -> bool {
+    is_version_noise(chunk)
+        || chunk
+            .split_whitespace()
+            .next()
+            .is_some_and(is_feat_marker)
 }
 
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -264,6 +288,36 @@ mod tests {
             normalize("Song (Live (Acoustic) Version)"),
             "song live acoustic version"
         );
+    }
+
+    // --- Regression tests for Fix-1 fallout (re-review findings A and B). ---
+
+    #[test]
+    fn bracketed_feat_credit_stripped() {
+        // Finding A: the word-boundary feat-cut tokenizes on whitespace, so
+        // the token "(feat." trims to "(feat" != "feat" and never matches;
+        // Spotify's canonical bracketed credit then survived normalization,
+        // tanking scores against local rips without the credit.
+        assert_eq!(normalize("Song (feat. Someone)"), "song");
+        assert_eq!(normalize("Song [ft. X]"), "song");
+        assert_eq!(normalize("Song (feat. Someone"), "song"); // unclosed
+        // Blast-radius pin: canonical Spotify title vs uncredited local rip
+        // must stay auto-mergeable.
+        let s = match_score(
+            "B.o.B", "Airplanes (feat. Hayley Williams)", 240.0,
+            "B.o.B", "Airplanes", 240.5,
+        );
+        assert!(s >= AUTO_MERGE_THRESHOLD, "score was {}", s);
+    }
+
+    #[test]
+    fn dash_filter_never_drops_head_segment() {
+        // Finding B: the per-segment dash filter dropped ANY noise segment,
+        // including segment 0 — erasing the title itself ("Bonus Track -
+        // Live" -> "live") and opening a new both-empty => similarity 1.0
+        // false-positive path ("The Deluxe Life - Radio Edit" -> "").
+        assert_eq!(normalize("Bonus Track - Live"), "bonus track live");
+        assert_eq!(normalize("The Deluxe Life - Radio Edit"), "the deluxe life");
     }
 
     #[test]
