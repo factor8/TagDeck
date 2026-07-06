@@ -19,9 +19,25 @@ pub struct PlaylistWire {
     pub id: String,
     pub name: String,
     pub snapshot_id: String,
-    pub tracks: TracksRef,
+    // Pre-Feb-2026 API sends the count as "tracks", post-rename as "items".
+    // Kept as two optional fields (not a serde alias) so a response carrying
+    // both during the transition can't fail with a duplicate-field error.
+    #[serde(default)]
+    pub tracks: Option<TracksRef>,
+    #[serde(default)]
+    pub items: Option<TracksRef>,
     #[serde(default)]
     pub owner: OwnerWire,
+}
+
+impl PlaylistWire {
+    pub fn track_total(&self) -> i64 {
+        self.items
+            .as_ref()
+            .or(self.tracks.as_ref())
+            .map(|t| t.total)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -187,10 +203,10 @@ pub async fn list_my_playlists(
         ensure_ok(status, &body, "List playlists")?;
         let page: PlaylistPage = serde_json::from_str(&body).map_err(|e| e.to_string())?;
         out.extend(page.items.into_iter().map(|p| SpotifyPlaylistSummary {
+            track_count: p.track_total(),
             id: p.id,
             name: p.name,
             snapshot_id: p.snapshot_id,
-            track_count: p.tracks.total,
             owner_name: p.owner.display_name.unwrap_or_default(),
         }));
         match page.next {
@@ -376,8 +392,32 @@ mod tests {
         let p = &page.items[0];
         assert_eq!(p.id, "pl1");
         assert_eq!(p.snapshot_id, "snapA");
-        assert_eq!(p.tracks.total, 42);
+        assert_eq!(p.track_total(), 42);
         assert_eq!(p.owner.display_name.as_deref(), Some("jordan"));
+    }
+
+    #[test]
+    fn parses_playlist_page_with_post_feb_2026_items_field() {
+        // Live /me/playlists responses now carry "items":{...,"total":N} on each
+        // playlist instead of "tracks" (same Feb-2026 rename as the endpoint).
+        let json = r#"{
+            "items": [{"id":"pl1","name":"Crate","snapshot_id":"snapA",
+                       "items":{"href":"https://api.spotify.com/v1/playlists/pl1/items","total":4},
+                       "owner":{"display_name":"jordan"}}],
+            "next": null
+        }"#;
+        let page: PlaylistPage = serde_json::from_str(json).unwrap();
+        assert_eq!(page.items[0].track_total(), 4);
+    }
+
+    #[test]
+    fn playlist_missing_both_count_fields_still_parses() {
+        let json = r#"{
+            "items": [{"id":"pl1","name":"Crate","snapshot_id":"snapA"}],
+            "next": null
+        }"#;
+        let page: PlaylistPage = serde_json::from_str(json).unwrap();
+        assert_eq!(page.items[0].track_total(), 0);
     }
 
     #[test]
@@ -401,3 +441,4 @@ mod tests {
         assert!((metas[0].duration_secs - 200.0).abs() < 0.001);
     }
 }
+
