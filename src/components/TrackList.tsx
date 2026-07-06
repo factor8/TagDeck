@@ -1479,6 +1479,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             header: () => <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><Folder size={16} /></div>,
             cell: ({ row }) => (
                 <div style={{ textAlign: 'center' }}>
+                    {row.original.source !== 'spotify' && (
                     <button
                         onClick={(e) => {
                             e.stopPropagation();
@@ -1502,6 +1503,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                     >
                         <Folder size={16} />
                     </button>
+                    )}
                 </div>
             )
         })
