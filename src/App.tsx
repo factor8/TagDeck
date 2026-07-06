@@ -108,6 +108,29 @@ function App() {
       .catch(console.error);
   }, []);
 
+  // Spotify auto-sync: on launch and every 15 minutes. Failures are quiet —
+  // logged to the console and surfaced via the sidebar's offline indicator,
+  // never a toast (this runs unattended in the background).
+  useEffect(() => {
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const s = await invoke<{ connected: boolean }>('spotify_get_settings');
+        if (!s.connected || cancelled) return;
+        const report = await invoke<{ updated: number }>('spotify_sync_now');
+        if (cancelled) return;
+        window.dispatchEvent(new CustomEvent('spotify-sync-error', { detail: null }));
+        if (report.updated > 0) handleRefresh();
+      } catch (e) {
+        console.warn('Spotify sync skipped:', e);
+        if (!cancelled) window.dispatchEvent(new CustomEvent('spotify-sync-error', { detail: String(e) }));
+      }
+    };
+    sync();
+    const id = setInterval(sync, 15 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // Reused by the manual "Review iTunes Changes" action and the auto-review-on-enable flow.
   const getSyncReviewSinceTimestamp = useCallback((): number => {
     const lastSync = localStorage.getItem('app_last_sync_time');
@@ -1017,7 +1040,14 @@ function App() {
             </button>
             <SettingsPanel
                 isOpen={isSettingsOpen}
-                onClose={() => setIsSettingsOpen(false)}
+                onClose={() => {
+                    setIsSettingsOpen(false);
+                    // The Spotify tab has no onRefresh wiring of its own (unlike
+                    // iTunes/Library), so pick up a fresh connect/disconnect here —
+                    // otherwise the sidebar's Spotify section only updates on the
+                    // next unrelated refresh.
+                    handleRefresh();
+                }}
                 currentTheme={theme}
                 onThemeChange={setTheme}
                 currentAccent={accentColor}

@@ -2,9 +2,10 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, X, AudioLines, CloudOff, RefreshCw } from 'lucide-react';
 import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
+import { SpotifyImportModal } from './SpotifyImportModal';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
@@ -45,7 +46,8 @@ interface PlaylistRowProps {
     onStartRename: (node: PlaylistNode) => void;
     onContextMenu: (e: React.MouseEvent, node: PlaylistNode) => void;
     folders: PlaylistNode[];
-    onFileDrop: (playlistId: number, playlistName: string, paths: string[]) => Promise<void>;
+    /** Omitted for Spotify rows — ghost playlists aren't a local file-drop target. */
+    onFileDrop?: (playlistId: number, playlistName: string, paths: string[]) => Promise<void>;
 }
 
 const PlaylistRow = ({
@@ -115,14 +117,14 @@ const PlaylistRow = ({
                   onContextMenu={(e) => onContextMenu(e, node)}
                   className={isHighlighted ? 'flash-highlight' : ''}
                   onDragEnter={(e) => {
-                      if (node.is_folder || !e.dataTransfer.types.includes('Files')) return;
+                      if (node.is_folder || !onFileDrop || !e.dataTransfer.types.includes('Files')) return;
                       e.preventDefault();
                       e.stopPropagation();
                       fileDragCounter.current += 1;
                       if (fileDragCounter.current === 1) setIsFileDragOver(true);
                   }}
                   onDragOver={(e) => {
-                      if (node.is_folder || !e.dataTransfer.types.includes('Files')) return;
+                      if (node.is_folder || !onFileDrop || !e.dataTransfer.types.includes('Files')) return;
                       e.preventDefault();
                       e.stopPropagation();
                       e.dataTransfer.dropEffect = 'copy';
@@ -138,7 +140,7 @@ const PlaylistRow = ({
                       }
                   }}
                   onDrop={(e) => {
-                      if (node.is_folder || isNativeDragOutActive()) return;
+                      if (node.is_folder || !onFileDrop || isNativeDragOutActive()) return;
                       e.preventDefault();
                       e.stopPropagation();
                       // Stop the document-level drop listener in ImportDropZone from
@@ -150,7 +152,7 @@ const PlaylistRow = ({
                       const paths = files
                           .map((f) => (f as unknown as { path?: string }).path)
                           .filter((p): p is string => Boolean(p));
-                      if (paths.length > 0) onFileDrop(node.id, node.name, paths);
+                      if (paths.length > 0) onFileDrop?.(node.id, node.name, paths);
                   }}
                   style={{
                       padding: `6px 16px 6px ${paddingLeft}px`,
@@ -252,6 +254,11 @@ const PlaylistRow = ({
                           }} />
                       </span>
                   )}
+                  {node.origin === 'spotify' && !isRenaming && (
+                      <span title="Imported from Spotify" style={{ display: 'flex', minWidth: 12, flexShrink: 0 }}>
+                          <AudioLines size={12} style={{ opacity: 0.5, color: isSelected ? '#fff' : '#1DB954' }} />
+                      </span>
+                  )}
               </div>
               
               {node.is_folder && isExpanded && (
@@ -334,6 +341,34 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       console.error('Failed to save iTunes collapse state', e);
     }
   }, [itunesCollapsed]);
+
+  // Spotify section state
+  const [spotifyCollapsed, setSpotifyCollapsed] = useState(false);
+  const [spotifyImportOpen, setSpotifyImportOpen] = useState(false);
+  const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [spotifySyncError, setSpotifySyncError] = useState<string | null>(null);
+
+  // Whether Spotify is connected — the section (with its import button) shows
+  // even before anything has been imported. Only sets the error indicator on
+  // failure here; success does NOT clear it — that's the sync outcome's job
+  // (via the spotify-sync-error event below), not this unrelated settings
+  // check, which fires far more often (any refreshTrigger bump) than actual
+  // sync attempts and would otherwise flicker a real error away early.
+  useEffect(() => {
+    invoke<{ connected: boolean }>('spotify_get_settings')
+      .then(s => setSpotifyConnected(s.connected))
+      .catch(e => setSpotifySyncError(String(e)));
+  }, [refreshTrigger]);
+
+  // Quiet offline/error indicator for the Spotify header, driven by App.tsx's
+  // launch/15-minute auto-sync timer (never a toast — see spec).
+  useEffect(() => {
+    const handleSyncError = (e: Event) => {
+      setSpotifySyncError((e as CustomEvent<string | null>).detail);
+    };
+    window.addEventListener('spotify-sync-error', handleSyncError);
+    return () => window.removeEventListener('spotify-sync-error', handleSyncError);
+  }, []);
 
   useEffect(() => {
     loadPlaylists();
@@ -641,6 +676,18 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       }
   }, [syncTogglingId, refreshPlaylists, showError]);
 
+  const handleSpotifySyncNow = useCallback(async () => {
+      try {
+          await invoke('spotify_sync_now');
+          setSpotifySyncError(null);
+          await refreshPlaylists();
+      } catch (err) {
+          const msg = typeof err === 'string' ? err : String(err);
+          setSpotifySyncError(msg);
+          showError(`Spotify sync failed: ${msg}`);
+      }
+  }, [refreshPlaylists, showError]);
+
   const handleExportM3u8 = useCallback(async (node: PlaylistNode) => {
       try {
           const { save } = await import('@tauri-apps/plugin-dialog');
@@ -668,10 +715,11 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       }
   }, [showSuccess, showError]);
 
-  const { tagdeckTree, itunesTree } = useMemo(() => {
+  const { tagdeckTree, itunesTree, spotifyTree } = useMemo(() => {
       const map = new Map<string, PlaylistNode>();
       const tagdeckRoots: PlaylistNode[] = [];
       const itunesRoots: PlaylistNode[] = [];
+      const spotifyRoots: PlaylistNode[] = [];
 
       // Initialize nodes
       playlists.forEach(p => {
@@ -684,6 +732,10 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           if (p.parent_persistent_id && map.has(p.parent_persistent_id)) {
               const parent = map.get(p.parent_persistent_id)!;
               parent.children.push(node);
+          } else if (p.origin === 'spotify') {
+              // Spotify-imported playlists always get their own section,
+              // regardless of iTunes sync state (which doesn't apply to them).
+              spotifyRoots.push(node);
           } else {
               // Split into TagDeck vs iTunes based on whether the playlist is
               // actively synced with iTunes, not its origin.
@@ -703,7 +755,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   return a.is_folder ? -1 : 1;
               }
               // 2. Name
-              // Special handling for underscores/symbols if desired, 
+              // Special handling for underscores/symbols if desired,
               // but localeCompare usually handles this well or standard ASCII rules.
               // " _" < "A" is standard ASCII.
               return a.name.localeCompare(b.name);
@@ -713,7 +765,8 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
       sortNodes(tagdeckRoots);
       sortNodes(itunesRoots);
-      return { tagdeckTree: tagdeckRoots, itunesTree: itunesRoots };
+      sortNodes(spotifyRoots);
+      return { tagdeckTree: tagdeckRoots, itunesTree: itunesRoots, spotifyTree: spotifyRoots };
   }, [playlists]);
 
   const isFiltering = filterText.trim().length > 0;
@@ -721,9 +774,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   // Derive filtered trees (and the folders that should render expanded while
   // filtering) from the raw trees + filter text. Ephemeral — does not touch
   // the persisted expandedFolders state.
-  const { filteredTagdeckTree, filteredItunesTree, filterExpandedFolders } = useMemo(() => {
+  const { filteredTagdeckTree, filteredItunesTree, filteredSpotifyTree, filterExpandedFolders } = useMemo(() => {
       if (!isFiltering) {
-          return { filteredTagdeckTree: tagdeckTree, filteredItunesTree: itunesTree, filterExpandedFolders: expandedFolders };
+          return { filteredTagdeckTree: tagdeckTree, filteredItunesTree: itunesTree, filteredSpotifyTree: spotifyTree, filterExpandedFolders: expandedFolders };
       }
 
       const query = filterText.trim().toLowerCase();
@@ -751,6 +804,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
       const ft = filterNodes(tagdeckTree);
       const it = filterNodes(itunesTree);
+      const st = filterNodes(spotifyTree);
 
       const folderIds = new Set<string>();
       const collectFolderIds = (nodes: PlaylistNode[]) => {
@@ -763,9 +817,10 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       };
       collectFolderIds(ft);
       collectFolderIds(it);
+      collectFolderIds(st);
 
-      return { filteredTagdeckTree: ft, filteredItunesTree: it, filterExpandedFolders: folderIds };
-  }, [isFiltering, filterText, tagdeckTree, itunesTree, expandedFolders]);
+      return { filteredTagdeckTree: ft, filteredItunesTree: it, filteredSpotifyTree: st, filterExpandedFolders: folderIds };
+  }, [isFiltering, filterText, tagdeckTree, itunesTree, spotifyTree, expandedFolders]);
 
   // Collect all folders for the "Move to" submenu
   const allFolders = useMemo(() => {
@@ -1018,8 +1073,91 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
             ))}
           </>
         )}
+
+        {/* Spotify Playlists Section — only present once connected or something's imported */}
+        {(filteredSpotifyTree.length > 0 || spotifyConnected) && (
+          <>
+            <div
+              onClick={() => setSpotifyCollapsed(!spotifyCollapsed)}
+              style={{
+                padding: '12px 16px 4px',
+                fontWeight: 600,
+                fontSize: '11px',
+                color: 'var(--text-secondary)',
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                marginTop: (filteredTagdeckTree.length > 0 || filteredItunesTree.length > 0) ? '16px' : '8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              {(!isFiltering && spotifyCollapsed) ? (
+                <ChevronRight size={12} style={{ minWidth: 12, flexShrink: 0 }} />
+              ) : (
+                <ChevronDown size={12} style={{ minWidth: 12, flexShrink: 0 }} />
+              )}
+              <span style={{ flex: 1 }}>Spotify</span>
+              {spotifySyncError && (
+                <span title={`Spotify sync unavailable: ${spotifySyncError}`}
+                      style={{ display: 'flex', flexShrink: 0 }}>
+                  <CloudOff size={12} style={{ color: 'var(--text-secondary)', opacity: 0.7 }} />
+                </span>
+              )}
+              <button
+                  className="sidebar-add-btn"
+                  title="Import playlists…"
+                  onClick={(e) => { e.stopPropagation(); setSpotifyImportOpen(true); }}
+                  style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--text-secondary)',
+                      padding: '0 2px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      borderRadius: '3px',
+                      transition: 'color 0.15s ease',
+                  }}
+              >
+                  <Plus size={14} />
+              </button>
+            </div>
+
+            {(isFiltering || !spotifyCollapsed) && filteredSpotifyTree.map(node => (
+              <PlaylistRow
+                  key={node.persistent_id}
+                  node={node}
+                  level={0}
+                  expandedFolders={filterExpandedFolders}
+                  selectedPlaylistId={selectedPlaylistId}
+                  onSelectPlaylist={onSelectPlaylist}
+                  toggleFolder={toggleFolder}
+                  scrollRef={scrollRef}
+                  highlightScrollRef={highlightScrollRef}
+                  highlightedPlaylistId={highlightedPlaylistId}
+                  renamingId={renamingId}
+                  renameValue={renameValue}
+                  onRenameChange={onRenameChange}
+                  onRenameCommit={onRenameCommit}
+                  onRenameCancel={onRenameCancel}
+                  onStartRename={onStartRename}
+                  onContextMenu={onContextMenu}
+                  folders={allFolders}
+              />
+            ))}
+          </>
+        )}
       </div>
-      
+
+      <SpotifyImportModal
+          isOpen={spotifyImportOpen}
+          onClose={() => setSpotifyImportOpen(false)}
+          onImported={() => { onPlaylistsChanged?.(); }}
+      />
+
       {showArtwork && selectedTrack && (
           <SidebarArtwork track={selectedTrack} />
       )}
@@ -1046,76 +1184,91 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
               {contextMenu.node && (
                   <>
                       <div className="ctx-separator" />
-                      <button className="ctx-item" onClick={() => { setContextMenu(null); onStartRename(contextMenu.node!); }}>
-                          <Pencil size={14} /> Rename
-                      </button>
-                      {!contextMenu.node.is_folder && (
-                          <button className="ctx-item" onClick={() => { setContextMenu(null); handleDuplicate(contextMenu.node!); }}>
-                              <Copy size={14} /> Duplicate
-                          </button>
-                      )}
-
-                      {!contextMenu.node.is_folder && (
-                          contextMenu.node.itunes_sync_enabled ? (
-                              <button
-                                  className="ctx-item"
-                                  disabled={syncTogglingId === contextMenu.node.id}
-                                  onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, false); }}
-                              >
-                                  <Unlink size={14} /> Stop Syncing with iTunes
+                      {contextMenu.node.origin === 'spotify' ? (
+                          <>
+                              {/* Spotify playlists: rename/duplicate/iTunes-sync/export/move don't apply. */}
+                              <button className="ctx-item" onClick={() => { setContextMenu(null); handleSpotifySyncNow(); }}>
+                                  <RefreshCw size={14} /> Sync Now
                               </button>
-                          ) : (
-                              <button
-                                  className="ctx-item"
-                                  disabled={syncTogglingId === contextMenu.node.id || appleMusicAvailable === false}
-                                  title={appleMusicAvailable === false ? 'Music.app not detected' : undefined}
-                                  onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, true); }}
-                              >
-                                  <Music size={14} /> Sync to iTunes
+                              <div className="ctx-separator" />
+                              <button className="ctx-item ctx-danger" onClick={() => { setContextMenu(null); setDeleteTarget(contextMenu.node!); }}>
+                                  <Trash2 size={14} /> Remove from TagDeck
                               </button>
-                          )
-                      )}
-
-                      {!contextMenu.node.is_folder && (
-                          <button className="ctx-item" onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleExportM3u8(n); }}>
-                              <FileDown size={14} /> Export as M3U8…
-                          </button>
-                      )}
-
-                      {/* Move to submenu */}
-                      <div 
-                          className="ctx-item ctx-submenu-trigger"
-                          onMouseEnter={() => setMoveSubmenuOpen(true)}
-                          onMouseLeave={() => setMoveSubmenuOpen(false)}
-                      >
-                          <ArrowRight size={14} /> Move to…
-                          {moveSubmenuOpen && (
-                              <div className="sidebar-context-menu ctx-submenu">
-                                  <button className="ctx-item" onClick={() => {
-                                      setContextMenu(null);
-                                      handleMove(contextMenu.node!, null);
-                                  }}>
-                                      Root
+                          </>
+                      ) : (
+                          <>
+                              <button className="ctx-item" onClick={() => { setContextMenu(null); onStartRename(contextMenu.node!); }}>
+                                  <Pencil size={14} /> Rename
+                              </button>
+                              {!contextMenu.node.is_folder && (
+                                  <button className="ctx-item" onClick={() => { setContextMenu(null); handleDuplicate(contextMenu.node!); }}>
+                                      <Copy size={14} /> Duplicate
                                   </button>
-                                  {allFolders
-                                      .filter(f => f.id !== contextMenu.node!.id)
-                                      .map(f => (
-                                          <button key={f.id} className="ctx-item" onClick={() => {
-                                              setContextMenu(null);
-                                              handleMove(contextMenu.node!, f.id);
-                                          }}>
-                                              {f.name}
-                                          </button>
-                                      ))
-                                  }
-                              </div>
-                          )}
-                      </div>
+                              )}
 
-                      <div className="ctx-separator" />
-                      <button className="ctx-item ctx-danger" onClick={() => { setContextMenu(null); setDeleteTarget(contextMenu.node!); }}>
-                          <Trash2 size={14} /> Delete
-                      </button>
+                              {!contextMenu.node.is_folder && (
+                                  contextMenu.node.itunes_sync_enabled ? (
+                                      <button
+                                          className="ctx-item"
+                                          disabled={syncTogglingId === contextMenu.node.id}
+                                          onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, false); }}
+                                      >
+                                          <Unlink size={14} /> Stop Syncing with iTunes
+                                      </button>
+                                  ) : (
+                                      <button
+                                          className="ctx-item"
+                                          disabled={syncTogglingId === contextMenu.node.id || appleMusicAvailable === false}
+                                          title={appleMusicAvailable === false ? 'Music.app not detected' : undefined}
+                                          onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, true); }}
+                                      >
+                                          <Music size={14} /> Sync to iTunes
+                                      </button>
+                                  )
+                              )}
+
+                              {!contextMenu.node.is_folder && (
+                                  <button className="ctx-item" onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleExportM3u8(n); }}>
+                                      <FileDown size={14} /> Export as M3U8…
+                                  </button>
+                              )}
+
+                              {/* Move to submenu */}
+                              <div
+                                  className="ctx-item ctx-submenu-trigger"
+                                  onMouseEnter={() => setMoveSubmenuOpen(true)}
+                                  onMouseLeave={() => setMoveSubmenuOpen(false)}
+                              >
+                                  <ArrowRight size={14} /> Move to…
+                                  {moveSubmenuOpen && (
+                                      <div className="sidebar-context-menu ctx-submenu">
+                                          <button className="ctx-item" onClick={() => {
+                                              setContextMenu(null);
+                                              handleMove(contextMenu.node!, null);
+                                          }}>
+                                              Root
+                                          </button>
+                                          {allFolders
+                                              .filter(f => f.id !== contextMenu.node!.id)
+                                              .map(f => (
+                                                  <button key={f.id} className="ctx-item" onClick={() => {
+                                                      setContextMenu(null);
+                                                      handleMove(contextMenu.node!, f.id);
+                                                  }}>
+                                                      {f.name}
+                                                  </button>
+                                              ))
+                                          }
+                                      </div>
+                                  )}
+                              </div>
+
+                              <div className="ctx-separator" />
+                              <button className="ctx-item ctx-danger" onClick={() => { setContextMenu(null); setDeleteTarget(contextMenu.node!); }}>
+                                  <Trash2 size={14} /> Delete
+                              </button>
+                          </>
+                      )}
                   </>
               )}
           </div>
@@ -1152,6 +1305,8 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   <p style={{ margin: '0 0 16px', fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5' }}>
                       {deleteTarget.itunes_sync_enabled
                           ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Apple Music.`
+                          : deleteTarget.origin === 'spotify'
+                          ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Spotify — you can re-import it later.`
                           : `Are you sure you want to permanently delete "${deleteTarget.name}"? This cannot be undone.`
                       }
                       {deleteTarget.is_folder && deleteTarget.children.length > 0 && (
