@@ -74,3 +74,44 @@ pub async fn spotify_disconnect(
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     db.set_config("spotify_account_name", "").map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn spotify_list_playlists(
+    state: State<'_, AppState>,
+    spotify: State<'_, SpotifyState>,
+) -> Result<Vec<super::client::SpotifyPlaylistSummary>, String> {
+    let client_id = get_client_id(&state)?;
+    super::client::list_my_playlists(&spotify, &client_id).await
+}
+
+#[tauri::command]
+pub async fn spotify_import_playlists(
+    app: tauri::AppHandle,
+    playlist_ids: Vec<String>,
+    state: State<'_, AppState>,
+    spotify: State<'_, SpotifyState>,
+) -> Result<super::sync::ImportReport, String> {
+    let client_id = get_client_id(&state)?;
+    let all = super::client::list_my_playlists(&spotify, &client_id).await?;
+    let selected: Vec<_> = all.into_iter().filter(|p| playlist_ids.contains(&p.id)).collect();
+    let report = super::sync::import_playlists(&spotify, &client_id, &state.db, selected).await?;
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let _ = db.sync_tags();
+    }
+    app.state::<crate::logging::LogState>().add_log(
+        "INFO",
+        &format!("Spotify import: {} playlists, {} new tracks", report.playlists, report.tracks_added),
+        &app,
+    );
+    Ok(report)
+}
+
+/// Shared helper for commands needing the configured client id.
+fn get_client_id(state: &State<'_, AppState>) -> Result<String, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.get_config("spotify_client_id")
+        .map_err(|e| e.to_string())?
+        .filter(|s| !s.is_empty())
+        .ok_or("Set your Spotify Client ID first".into())
+}

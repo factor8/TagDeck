@@ -203,7 +203,9 @@ pub fn run() {
             spotify::commands::spotify_get_settings,
             spotify::commands::spotify_set_client_id,
             spotify::commands::spotify_connect,
-            spotify::commands::spotify_disconnect
+            spotify::commands::spotify_disconnect,
+            spotify::commands::spotify_list_playlists,
+            spotify::commands::spotify_import_playlists
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

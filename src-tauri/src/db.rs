@@ -1562,6 +1562,103 @@ impl Database {
 
         Ok(restored)
     }
+
+    // -----------------------------------------------------------------------
+    // Spotify integration: ghost tracks + imported playlists
+    // -----------------------------------------------------------------------
+
+    /// Insert or refresh a Spotify ghost track. Dedupes on spotify_id — the
+    /// existing row (which may hold tags, or may be an already-merged local
+    /// track) is metadata-refreshed only when still a ghost. Returns row id.
+    pub fn upsert_ghost_track(
+        &self,
+        spotify_id: &str,
+        _uri: &str,
+        artist: &str,
+        title: &str,
+        album: &str,
+        duration_secs: f64,
+    ) -> Result<i64> {
+        use rusqlite::OptionalExtension;
+        let existing: Option<(i64, String)> = self.conn.query_row(
+            "SELECT id, source FROM tracks WHERE spotify_id = ?1",
+            params![spotify_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        if let Some((id, source)) = existing {
+            if source == "spotify" {
+                self.conn.execute(
+                    "UPDATE tracks SET artist = ?1, title = ?2, album = ?3, duration_secs = ?4 WHERE id = ?5",
+                    params![artist, title, album, duration_secs, id],
+                )?;
+            }
+            return Ok(id);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        self.conn.execute(
+            "INSERT INTO tracks (
+                persistent_id, file_path, artist, title, album, duration_secs,
+                format, size_bytes, bit_rate, modified_date, rating, date_added,
+                bpm, source, spotify_id
+            ) VALUES (?1, '', ?2, ?3, ?4, ?5, 'SPOTIFY', 0, 0, 0, 0, ?6, 0, 'spotify', ?7)",
+            params![format!("SP-{}", spotify_id), artist, title, album, duration_secs, now, spotify_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn find_track_by_spotify_id(&self, spotify_id: &str) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        Ok(self.conn.query_row(
+            "SELECT id FROM tracks WHERE spotify_id = ?1",
+            params![spotify_id], |row| row.get(0),
+        ).optional()?)
+    }
+
+    /// Upsert a Spotify playlist row and replace its membership (ordered).
+    pub fn upsert_spotify_playlist(
+        &self,
+        spotify_playlist_id: &str,
+        name: &str,
+        snapshot_id: &str,
+        track_db_ids: &[i64],
+    ) -> Result<i64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        self.conn.execute(
+            "INSERT INTO playlists (persistent_id, name, is_folder, origin, itunes_sync_enabled,
+                                    spotify_playlist_id, spotify_snapshot_id, created_at, updated_at)
+             VALUES (?1, ?2, 0, 'spotify', 0, ?3, ?4, ?5, ?5)
+             ON CONFLICT(persistent_id) DO UPDATE SET
+                name = excluded.name,
+                spotify_snapshot_id = excluded.spotify_snapshot_id,
+                updated_at = excluded.updated_at",
+            params![format!("SP-PL-{}", spotify_playlist_id), name, spotify_playlist_id, snapshot_id, now],
+        )?;
+        let playlist_id: i64 = self.conn.query_row(
+            "SELECT id FROM playlists WHERE persistent_id = ?1",
+            params![format!("SP-PL-{}", spotify_playlist_id)], |row| row.get(0),
+        )?;
+        self.conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ?1", params![playlist_id])?;
+        for (pos, tid) in track_db_ids.iter().enumerate() {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+                params![playlist_id, tid, pos as i64],
+            )?;
+        }
+        Ok(playlist_id)
+    }
+
+    /// (db id, spotify_playlist_id, snapshot_id) for all imported Spotify playlists.
+    pub fn get_spotify_playlists(&self) -> Result<Vec<(i64, String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, spotify_playlist_id, spotify_snapshot_id FROM playlists
+             WHERE origin = 'spotify' AND spotify_playlist_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
 }
 
 /// A single playlist in a backup, with its track references.
@@ -1625,5 +1722,35 @@ mod tests {
         // local tracks default to source='local'
         let all = db.get_all_tracks().unwrap();
         assert_eq!(all.len(), 1);
+    }
+
+    #[test]
+    fn upsert_ghost_dedupes_by_spotify_id() {
+        let db = Database::new(":memory:").unwrap();
+        let id1 = db.upsert_ghost_track("abc", "spotify:track:abc", "Artist", "Title", "Album", 200.0).unwrap();
+        let id2 = db.upsert_ghost_track("abc", "spotify:track:abc", "Artist2", "Title2", "Album2", 200.0).unwrap();
+        assert_eq!(id1, id2);
+        // metadata refreshed, tags untouched
+        let t = db.get_track(id1).unwrap().unwrap();
+        assert_eq!(t.artist.as_deref(), Some("Artist2"));
+    }
+
+    #[test]
+    fn upsert_spotify_playlist_sets_membership() {
+        let db = Database::new(":memory:").unwrap();
+        let t1 = db.upsert_ghost_track("t1", "spotify:track:t1", "A", "One", "", 100.0).unwrap();
+        let t2 = db.upsert_ghost_track("t2", "spotify:track:t2", "B", "Two", "", 100.0).unwrap();
+        let pl = db.upsert_spotify_playlist("pl1", "Crate", "snapA", &[t1, t2]).unwrap();
+        let pls = db.get_spotify_playlists().unwrap();
+        assert_eq!(pls.len(), 1);
+        assert_eq!(pls[0].0, pl);
+        assert_eq!(pls[0].2.as_deref(), Some("snapA"));
+        // re-import with fewer tracks replaces membership
+        db.upsert_spotify_playlist("pl1", "Crate", "snapB", &[t2]).unwrap();
+        let ids: Vec<i64> = {
+            let mut stmt = db.conn.prepare("SELECT track_id FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position").unwrap();
+            stmt.query_map([pl], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(ids, vec![t2]);
     }
 }
