@@ -1204,6 +1204,19 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     println!("{}", complete_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", &complete_msg, &app);
 
+    // Spotify merge-on-purchase: newly-synced local tracks may complete a
+    // ghost. Ids aren't threaded through the phases above, so approximate
+    // "new in this pass" via date_added >= since_timestamp.
+    if tracks_added > 0 {
+        let new_ids = {
+            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+            db.get_local_track_ids_added_since(since_timestamp).unwrap_or_default()
+        };
+        if !new_ids.is_empty() {
+            let _ = crate::spotify::merge::process_new_local_tracks(&state.db, &app, &new_ids);
+        }
+    }
+
     // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
     Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_unlinked, playlists_updated: playlist_changes, pending_removals, conflicts_skipped })
 }
@@ -2340,6 +2353,11 @@ pub async fn import_files(
         imported, skipped, failed, total
     );
     app.state::<crate::logging::LogState>().add_log("INFO", &summary_msg, &app);
+
+    // Spotify merge-on-purchase: match new files against ghost tracks.
+    if !imported_track_ids.is_empty() {
+        let _ = crate::spotify::merge::process_new_local_tracks(&state.db, &app, &imported_track_ids);
+    }
 
     Ok(ImportSummary {
         total,

@@ -227,3 +227,56 @@ pub async fn spotify_get_playback(
     let client_id = get_client_id(&state)?;
     super::client::get_playback(&spotify, &client_id).await
 }
+
+// ---------------------------------------------------------------------------
+// Merge engine: pending-match review queue (Task 13)
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+pub struct PendingMatch {
+    pub id: i64,
+    pub ghost: crate::models::Track,
+    pub local: crate::models::Track,
+    pub score: f64,
+}
+
+#[tauri::command]
+pub async fn spotify_get_pending_matches(state: State<'_, AppState>) -> Result<Vec<PendingMatch>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let rows = db.get_pending_match_rows().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (id, ghost_id, local_id, score) in rows {
+        if let (Ok(Some(ghost)), Ok(Some(local))) = (db.get_track(ghost_id), db.get_track(local_id)) {
+            out.push(PendingMatch { id, ghost, local, score });
+        } else {
+            let _ = db.delete_pending_match(id); // stale row
+        }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn spotify_confirm_match(match_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    let (ghost_id, local_id) = db.delete_pending_match(match_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Match not found")?;
+    super::merge::merge_ghost_into_local(&db, ghost_id, local_id)
+}
+
+#[tauri::command]
+pub async fn spotify_reject_match(match_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.delete_pending_match(match_id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn spotify_manual_link(
+    ghost_track_id: i64,
+    local_track_id: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    super::merge::merge_ghost_into_local(&db, ghost_track_id, local_track_id)
+}

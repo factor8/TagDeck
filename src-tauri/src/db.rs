@@ -61,7 +61,9 @@ const DB_SCHEMA: &str = r#"
 "#;
 
 pub struct Database {
-    conn: Connection,
+    // `pub(crate)` so tests in sibling modules (e.g. spotify::merge) can poke
+    // rows directly, matching the established in-memory-DB test pattern.
+    pub(crate) conn: Connection,
 }
 
 impl Database {
@@ -127,6 +129,20 @@ impl Database {
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_spotify_id ON tracks(spotify_id)", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_playlist_id TEXT", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_snapshot_id TEXT", []);
+
+        // Pending-match queue: mid-confidence ghost/local pairs awaiting user
+        // review before merge (see spotify::merge).
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS spotify_pending_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ghost_track_id INTEGER NOT NULL,
+                local_track_id INTEGER NOT NULL,
+                score REAL NOT NULL,
+                created_at INTEGER NOT NULL,
+                UNIQUE(ghost_track_id, local_track_id)
+            )",
+            [],
+        );
 
         // One-time backfill for per-playlist sync: playlists that came from
         // iTunes keep syncing by default; TagDeck-native ones stay local-only.
@@ -1679,6 +1695,137 @@ impl Database {
             [],
         )?;
         Ok(n)
+    }
+
+    /// All Spotify ghost tracks (source = 'spotify'). Same column list/mapping
+    /// as `get_all_tracks`, filtered to ghosts.
+    pub fn get_ghost_tracks(&self) -> Result<Vec<crate::models::Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, persistent_id, file_path, artist, title, album,
+             comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
+             FROM tracks WHERE source = 'spotify'",
+        )?;
+
+        let track_iter = stmt.query_map([], |row| {
+            Ok(crate::models::Track {
+                id: row.get(0)?,
+                persistent_id: row.get(1)?,
+                file_path: row.get(2)?,
+                artist: row.get(3)?,
+                title: row.get(4)?,
+                album: row.get(5)?,
+                comment_raw: row.get(6)?,
+                grouping_raw: row.get(7)?,
+                duration_secs: row.get(8)?,
+                format: row.get(9)?,
+                size_bytes: row.get(10)?,
+                bit_rate: row.get(11)?,
+                modified_date: row.get(12)?,
+                rating: row.get(13)?,
+                date_added: row.get(14)?,
+                bpm: row.get(15)?,
+                missing: row.get(16).unwrap_or(false),
+                itunes_pid: row.get(17).unwrap_or(None),
+                unlinked_at: row.get(18).unwrap_or(None),
+                source: row.get(19).unwrap_or_else(|_| "local".to_string()),
+                spotify_id: row.get(20).unwrap_or(None),
+            })
+        })?;
+
+        let mut tracks = Vec::new();
+        for track in track_iter {
+            tracks.push(track?);
+        }
+        Ok(tracks)
+    }
+
+    // -----------------------------------------------------------------------
+    // Spotify integration: merge engine + pending-match queue (Task 13)
+    // -----------------------------------------------------------------------
+
+    /// Move playlist memberships from one track to another, skipping
+    /// playlists where the target is already a member.
+    pub fn repoint_playlist_tracks(&self, from_track: i64, to_track: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE OR IGNORE playlist_tracks SET track_id = ?2 WHERE track_id = ?1",
+            params![from_track, to_track],
+        )?;
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE track_id = ?1",
+            params![from_track],
+        )?;
+        Ok(())
+    }
+
+    /// Transfers `spotify_id` from one track to another. Clears the source
+    /// row first since spotify_id carries a unique index.
+    pub fn transfer_spotify_id(&self, from_track: i64, to_track: i64) -> Result<()> {
+        use rusqlite::OptionalExtension;
+        let sid: Option<String> = self.conn.query_row(
+            "SELECT spotify_id FROM tracks WHERE id = ?1", params![from_track], |r| r.get(0),
+        ).optional()?.flatten();
+        // Clear on the ghost FIRST (unique index), then set on the local track.
+        self.conn.execute("UPDATE tracks SET spotify_id = NULL WHERE id = ?1", params![from_track])?;
+        if let Some(sid) = sid {
+            self.conn.execute("UPDATE tracks SET spotify_id = ?1 WHERE id = ?2", params![sid, to_track])?;
+        }
+        Ok(())
+    }
+
+    /// Deletes a track row and its playlist memberships.
+    pub fn delete_track(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM playlist_tracks WHERE track_id = ?1", params![id])?;
+        self.conn.execute("DELETE FROM tracks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Local (non-ghost) track ids added at/after `since` — an approximation
+    /// of "newly synced in this pass" used by `sync_recent_changes`.
+    pub fn get_local_track_ids_added_since(&self, since: i64) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM tracks WHERE source = 'local' AND date_added >= ?1")?;
+        let rows = stmt.query_map(params![since], |r| r.get(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// Queue a mid-confidence ghost/local match for user review. No-op if the
+    /// pair is already queued (UNIQUE(ghost_track_id, local_track_id)).
+    pub fn add_pending_match(&self, ghost_id: i64, local_id: i64, score: f64) -> Result<()> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO spotify_pending_matches (ghost_track_id, local_track_id, score, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![ghost_id, local_id, score, now],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes a pending match by id, returning the (ghost_id, local_id) pair
+    /// if it existed.
+    pub fn delete_pending_match(&self, id: i64) -> Result<Option<(i64, i64)>> {
+        use rusqlite::OptionalExtension;
+        let pair: Option<(i64, i64)> = self.conn.query_row(
+            "SELECT ghost_track_id, local_track_id FROM spotify_pending_matches WHERE id = ?1",
+            params![id], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?;
+        self.conn.execute("DELETE FROM spotify_pending_matches WHERE id = ?1", params![id])?;
+        Ok(pair)
+    }
+
+    /// Drops any queued matches for a ghost — called once it's merged/deleted
+    /// so stale rows don't linger in the review queue.
+    pub fn delete_pending_matches_for_ghost(&self, ghost_id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM spotify_pending_matches WHERE ghost_track_id = ?1", params![ghost_id])?;
+        Ok(())
+    }
+
+    /// Raw (id, ghost_track_id, local_track_id, score) rows, highest score first.
+    pub fn get_pending_match_rows(&self) -> Result<Vec<(i64, i64, i64, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, ghost_track_id, local_track_id, score FROM spotify_pending_matches ORDER BY score DESC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
     }
 }
 
