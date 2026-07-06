@@ -2243,7 +2243,12 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
         return filtered.slice(0, 20);
     }, [tracks, search]);
 
-    const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+    // Round the total first — rounding minutes/seconds separately can carry
+    // seconds to 60 (e.g. 239.7 -> "3:60") instead of rolling into the minute.
+    const fmtDur = (s: number) => {
+        const total = Math.round(s);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+    };
     // Flag candidates whose duration differs from the ghost's by more than the
     // auto-matcher's own tolerance (DURATION_TOLERANCE_SECS = 3.0 in matcher.rs).
     // Linking is irreversible (tags written into the file, spotify_id transferred),

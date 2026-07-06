@@ -45,7 +45,12 @@ export function SpotifyMatchReview({ isOpen, onClose, onChanged }: Props) {
         }
     };
 
-    const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+    // Round the total first — rounding minutes/seconds separately can carry
+    // seconds to 60 (e.g. 239.7 -> "3:60") instead of rolling into the minute.
+    const fmtDur = (s: number) => {
+        const total = Math.round(s);
+        return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+    };
 
     const cell = (t: Track, icon: React.ReactNode) => (
         <div style={{ flex: 1, minWidth: 0 }}>

@@ -1441,11 +1441,28 @@ pub async fn add_to_playlist(
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let pid = db.get_playlist_persistent_id(playlist_id)
             .map_err(|e| format!("Failed to get playlist: {}", e))?;
+
+        // Spotify playlists are snapshot-owned — upsert_spotify_playlist deletes
+        // and re-inserts membership on every sync, so a manual add here would
+        // just be silently wiped by the next import. Reject outright instead
+        // of pretending it worked.
+        let origin = db.get_playlist_origin(playlist_id).unwrap_or_else(|_| "itunes".to_string());
+        if origin == "spotify" {
+            return Err("Spotify playlists are managed by sync — tracks can't be added manually".to_string());
+        }
+
         let sync_enabled = db.get_playlist_sync_enabled(playlist_id).unwrap_or(false);
 
         let mut data = Vec::new();
         for tid in &track_ids {
             if db.get_track_persistent_id(*tid).is_ok() {
+                // Ghosts (Spotify-only, no file) belong only inside Spotify
+                // playlists — skip them here rather than let one join a
+                // non-Spotify playlist it can never really live in.
+                let is_ghost = db.get_track(*tid).ok().flatten().map(|t| t.is_ghost()).unwrap_or(false);
+                if is_ghost {
+                    continue;
+                }
                 data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None)));
             }
         }
@@ -1946,11 +1963,39 @@ pub async fn copy_playlist_memberships(
         let t_pid = db.get_track_itunes_pid(target_track_id).unwrap_or(None);
         let s_pid = db.get_track_itunes_pid(source_track_id).unwrap_or(None);
 
+        // Same origin/ghost guards as add_to_playlist, applied per playlist in
+        // this batch-over-playlists loop (one target track, many playlists):
+        //   - a playlist whose origin is Spotify never accepts a manual add —
+        //     its membership is snapshot-owned and the next sync would wipe it;
+        //   - a ghost target track belongs only inside Spotify playlists, so it
+        //     is skipped for every non-Spotify playlist in the selection.
+        // Judgment call: skip-in-loop rather than hard-fail the whole request,
+        // so a mixed selection (some valid targets, some not) still copies to
+        // whatever IS valid — that degrades more gracefully than an all-or-
+        // nothing error. The one exception is when EVERY playlist was skipped
+        // for being Spotify-origin: silently returning "Added to 0 playlists"
+        // would read as success while hiding the real (sync-ownership) reason,
+        // so that case surfaces the same explicit rejection add_to_playlist
+        // uses. A target-is-ghost-only wipeout is left to report 0 added,
+        // mirroring add_to_playlist's silent skip-the-batch behavior for ghosts.
+        let target_is_ghost = db.get_track(target_track_id).ok().flatten().map(|t| t.is_ghost()).unwrap_or(false);
         let mut pdata = Vec::new();
+        let mut skipped_spotify_origin = false;
         for pid in &playlist_ids {
             if let Ok(ppid) = db.get_playlist_persistent_id(*pid) {
+                let origin = db.get_playlist_origin(*pid).unwrap_or_else(|_| "itunes".to_string());
+                if origin == "spotify" {
+                    skipped_spotify_origin = true;
+                    continue;
+                }
+                if target_is_ghost {
+                    continue;
+                }
                 pdata.push((*pid, ppid));
             }
+        }
+        if pdata.is_empty() && skipped_spotify_origin {
+            return Err("Spotify playlists are managed by sync — tracks can't be added manually".to_string());
         }
         (t_pid, s_pid, pdata, LibraryConfig::sync_mode(&db))
     };
@@ -2900,9 +2945,13 @@ pub async fn restore_playlist_backup(
 // export_tracks_to_music, export_playlist_m3u8 — and (3) for
 // mark_track_missing, that `set_track_missing` itself has no ghost
 // awareness, so the command's early-return guard is the only thing standing
-// between a ghost and a wrongly-set `missing` flag. The guards' control flow
-// itself (early `return`/`continue` placed before any file IO or Music.app
-// call) is structural and reviewed by inspection.
+// between a ghost and a wrongly-set `missing` flag; and (4) for
+// add_to_playlist/copy_playlist_memberships, that `get_playlist_origin`
+// and `Track::is_ghost()` — the two primitives their playlist-membership
+// guards read — report Spotify-origin playlists and ghost tracks correctly.
+// The guards' control flow itself (early `return`/`continue`/`skip` placed
+// before any DB write or Music.app call) is structural and reviewed by
+// inspection.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3054,5 +3103,27 @@ mod tests {
         // shown here to have no ghost exception baked into the DB layer.
         db.set_track_missing(id, true).unwrap();
         assert!(db.get_track(id).unwrap().unwrap().missing);
+    }
+
+    /// add_to_playlist's and copy_playlist_memberships's playlist-membership
+    /// guards (Finding 1) key off exactly these two primitives — a ghost
+    /// track's `Track::is_ghost()` and a playlist's `get_playlist_origin()` —
+    /// to decide "skip this ghost, it doesn't belong in a non-Spotify
+    /// playlist" and "reject outright, this playlist's membership is
+    /// sync-owned", respectively. As with the other guards in this file, the
+    /// commands' own control flow (skip-in-loop / early `return Err`) can't
+    /// be exercised here (no public `State` constructor) and is reviewed by
+    /// inspection; this proves the primitives it reads report correctly.
+    #[test]
+    fn playlist_guard_primitives_report_ghost_and_spotify_origin_correctly() {
+        let db = Database::new(":memory:").unwrap();
+        let ghost_id = db.insert_imported_track(&ghost("guard-check"), None, None).unwrap();
+        assert!(db.get_track(ghost_id).unwrap().unwrap().is_ghost());
+
+        let spotify_pl = db.upsert_spotify_playlist("pl-guard", "Synced Crate", "snap1", &[ghost_id]).unwrap();
+        assert_eq!(db.get_playlist_origin(spotify_pl).unwrap(), "spotify");
+
+        let native_pl = db.create_playlist("My Crate", None, false, "TD-guard").unwrap();
+        assert_eq!(db.get_playlist_origin(native_pl.id).unwrap(), "tagdeck");
     }
 }

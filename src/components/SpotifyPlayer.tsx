@@ -33,6 +33,10 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
     // key on it, suppress the interpolation tick and poll overwrites so the
     // handle doesn't fight the drag; commit exactly one spotify_seek on release.
     const isScrubbingRef = useRef(false);
+    // Mirrors isPlaying for the unmount-cleanup closure below, which otherwise
+    // would only ever see the isPlaying value from the render that mounted it.
+    const isPlayingRef = useRef(false);
+    useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
     // Error toast timer
     useEffect(() => {
@@ -41,6 +45,19 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
             return () => clearTimeout(timer);
         }
     }, [error]);
+
+    // Pause Spotify playback when this transport unmounts — switching to a
+    // local track (or closing the player) otherwise leaves Spotify playing
+    // behind whatever comes next, so two audio streams run in parallel.
+    // Empty deps: the cleanup below only runs on a real unmount, never on a
+    // re-render. Fire-and-forget — there's no UI left here to show an error.
+    useEffect(() => {
+        return () => {
+            if (isPlayingRef.current) {
+                invoke('spotify_pause').catch(() => {});
+            }
+        };
+    }, []);
 
     // Start playback when the track changes (double-click sets autoPlay).
     useEffect(() => {

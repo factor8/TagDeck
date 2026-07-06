@@ -1685,12 +1685,13 @@ impl Database {
         ).optional()?)
     }
 
-    /// Delete ghosts that are in no playlist and carry no tags/comment.
-    /// Tagged orphans are kept — they're still purchase candidates.
+    /// Delete ghosts that are in no playlist and carry no tags/comment/rating.
+    /// Tagged or rated orphans are kept — they're still purchase candidates.
     pub fn gc_orphan_ghosts(&self) -> Result<usize> {
         let n = self.conn.execute(
             "DELETE FROM tracks WHERE source = 'spotify'
              AND (comment_raw IS NULL OR TRIM(comment_raw) = '')
+             AND rating = 0
              AND id NOT IN (SELECT track_id FROM playlist_tracks)",
             [],
         )?;
@@ -1946,6 +1947,21 @@ mod tests {
         assert_eq!(ids, vec![t2]);
     }
 
+    /// add_to_playlist/copy_playlist_memberships (commands.rs) key their
+    /// playlist-membership guards off this exact call — a Spotify-imported
+    /// playlist must report origin 'spotify' (snapshot-owned, no manual
+    /// adds), while a normal TagDeck-native playlist must not.
+    #[test]
+    fn get_playlist_origin_distinguishes_spotify_from_tagdeck() {
+        let db = Database::new(":memory:").unwrap();
+        let t1 = db.upsert_ghost_track("t1", "spotify:track:t1", "A", "One", "", 100.0).unwrap();
+        let spotify_pl = db.upsert_spotify_playlist("pl1", "Crate", "snapA", &[t1]).unwrap();
+        assert_eq!(db.get_playlist_origin(spotify_pl).unwrap(), "spotify");
+
+        let native_pl = db.create_playlist("My Crate", None, false, "TD-native").unwrap();
+        assert_eq!(db.get_playlist_origin(native_pl.id).unwrap(), "tagdeck");
+    }
+
     #[test]
     fn gc_removes_untagged_orphan_ghosts_only() {
         let db = Database::new(":memory:").unwrap();
@@ -1960,5 +1976,18 @@ mod tests {
         assert!(db.get_track(orphan_untagged).unwrap().is_none());
         assert!(db.get_track(orphan_tagged).unwrap().is_some());
         assert!(db.get_track(member).unwrap().is_some());
+    }
+
+    /// A rated-but-untagged orphan ghost is a purchase/interest signal exactly
+    /// like a tagged one — gc must keep it, not just tagged orphans.
+    #[test]
+    fn gc_keeps_rated_orphan_ghosts() {
+        let db = Database::new(":memory:").unwrap();
+        let orphan_rated = db.upsert_ghost_track("g4", "u", "A", "T", "", 100.0).unwrap();
+        db.conn.execute("UPDATE tracks SET rating = 80 WHERE id = ?1",
+            rusqlite::params![orphan_rated]).unwrap();
+        let removed = db.gc_orphan_ghosts().unwrap();
+        assert_eq!(removed, 0);
+        assert!(db.get_track(orphan_rated).unwrap().is_some());
     }
 }
