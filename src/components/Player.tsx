@@ -5,6 +5,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
 import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw, Music, AlertTriangle } from 'lucide-react';
 import { useDebug } from './DebugContext';
+import { SpotifyPlayer } from './SpotifyPlayer';
 
 function formatFileSize(bytes: number): string {
     if (!bytes) return '';
@@ -49,7 +50,28 @@ interface Props {
     onAutoPlayProcessed?: () => void;
 }
 
-export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, playerMode = 'standard', onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange, onAutoPlayProcessed }: Props) {
+export function Player(props: Props) {
+    // Ghost tracks (Spotify, no local file) route to the Spotify Connect
+    // transport instead of the local WaveSurfer/file-based player. This check
+    // must happen before any hooks are called (component switch, not a branch
+    // inside a single component), so hook order stays legal in both paths.
+    if (props.track && props.track.source === 'spotify') {
+        return (
+            <SpotifyPlayer
+                track={props.track}
+                autoPlay={props.autoPlay}
+                onAutoPlayProcessed={props.onAutoPlayProcessed}
+                onNext={props.onNext}
+                onPrev={props.onPrev}
+                accentColor={props.accentColor}
+                onPlayStateChange={props.onPlayStateChange}
+            />
+        );
+    }
+    return <LocalPlayer {...props} />;
+}
+
+function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, autoPlay = false, playerMode = 'standard', onTrackError, accentColor = '#3b82f6', onArtworkClick, onTrackClick, onPlayStateChange, onAutoPlayProcessed }: Props) {
     const { debugMode } = useDebug();
     const containerRef = useRef<HTMLDivElement>(null);
     const waveformRef = useRef<HTMLDivElement>(null);
@@ -591,9 +613,9 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     const hasTrack = !!track;
 
     return (
-        <div style={styles.container}>
+        <div style={playerStyles.container}>
             {/* Left: Track Info */}
-            <div style={{ ...styles.info, display: 'flex', alignItems: 'center', opacity: hasTrack ? 1 : 0.5 }}>
+            <div style={{ ...playerStyles.info, display: 'flex', alignItems: 'center', opacity: hasTrack ? 1 : 0.5 }}>
                 {/* Artwork */}
                 <div 
                     onClick={hasTrack ? onArtworkClick : undefined}
@@ -697,12 +719,12 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '16px', margin: '0 20px', maxWidth: '800px', opacity: hasTrack ? 1 : 0.5, pointerEvents: hasTrack ? 'auto' : 'none' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     {/* Previous Track */}
-                    <button onClick={onPrev} style={styles.iconButton} title="Previous Track">
+                    <button onClick={onPrev} style={playerStyles.iconButton} title="Previous Track">
                         <SkipBack size={20} />
                     </button>
 
                     {/* Rewind 5s */}
-                    <button onClick={() => skip(-5)} style={styles.iconButton} title="Rewind 5s">
+                    <button onClick={() => skip(-5)} style={playerStyles.iconButton} title="Rewind 5s">
                         <RotateCcw size={18} />
                     </button>
 
@@ -728,12 +750,12 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
                     </button>
 
                     {/* Fast Forward 5s */}
-                    <button onClick={() => skip(5)} style={styles.iconButton} title="Forward 5s">
+                    <button onClick={() => skip(5)} style={playerStyles.iconButton} title="Forward 5s">
                         <RotateCw size={18} />
                     </button>
 
                     {/* Next Track */}
-                    <button onClick={onNext} style={styles.iconButton} title="Next Track">
+                    <button onClick={onNext} style={playerStyles.iconButton} title="Next Track">
                         <SkipForward size={20} />
                     </button>
                 </div>
@@ -871,7 +893,7 @@ export function Player({ track, playlistName, onPlaylistClick, onNext, onPrev, a
     );
 }
 
-const styles = {
+export const playerStyles = {
     container: {
         padding: '0 20px',
         background: 'var(--bg-secondary)',

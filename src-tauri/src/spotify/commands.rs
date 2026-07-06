@@ -165,3 +165,65 @@ fn get_client_id(state: &State<'_, AppState>) -> Result<String, String> {
         .filter(|s| !s.is_empty())
         .ok_or("Set your Spotify Client ID first".into())
 }
+
+#[tauri::command]
+pub async fn spotify_play_track(
+    app: tauri::AppHandle,
+    spotify_id: String,
+    state: State<'_, AppState>,
+    spotify: State<'_, SpotifyState>,
+) -> Result<(), String> {
+    let client_id = get_client_id(&state)?;
+    let uri = format!("spotify:track:{}", spotify_id);
+
+    // Prefer the active device; otherwise wake the Spotify desktop app.
+    let devices = super::client::list_devices(&spotify, &client_id).await?;
+    let device_id = match devices.iter().find(|d| d.is_active).or(devices.first()) {
+        Some(d) => Some(d.id.clone()),
+        None => {
+            // Launch Spotify.app and poll for it to register (max ~15s).
+            use tauri_plugin_opener::OpenerExt;
+            app.opener()
+                .open_url("spotify:", None::<String>)
+                .map_err(|e| format!("Couldn't launch Spotify: {}", e))?;
+            let mut found = None;
+            for _ in 0..15 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let ds = super::client::list_devices(&spotify, &client_id).await.unwrap_or_default();
+                if let Some(d) = ds.into_iter().next() {
+                    found = Some(d.id);
+                    break;
+                }
+            }
+            Some(found.ok_or("Spotify app didn't become available — is it installed and logged in?")?)
+        }
+    };
+    super::client::play_track(&spotify, &client_id, &uri, device_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn spotify_pause(state: State<'_, AppState>, spotify: State<'_, SpotifyState>) -> Result<(), String> {
+    let client_id = get_client_id(&state)?;
+    super::client::pause(&spotify, &client_id).await
+}
+
+#[tauri::command]
+pub async fn spotify_resume(state: State<'_, AppState>, spotify: State<'_, SpotifyState>) -> Result<(), String> {
+    let client_id = get_client_id(&state)?;
+    super::client::resume(&spotify, &client_id).await
+}
+
+#[tauri::command]
+pub async fn spotify_seek(position_ms: u64, state: State<'_, AppState>, spotify: State<'_, SpotifyState>) -> Result<(), String> {
+    let client_id = get_client_id(&state)?;
+    super::client::seek(&spotify, &client_id, position_ms).await
+}
+
+#[tauri::command]
+pub async fn spotify_get_playback(
+    state: State<'_, AppState>,
+    spotify: State<'_, SpotifyState>,
+) -> Result<Option<super::client::PlaybackState>, String> {
+    let client_id = get_client_id(&state)?;
+    super::client::get_playback(&spotify, &client_id).await
+}
