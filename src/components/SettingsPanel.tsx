@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Sliders, RefreshCw, HardDrive, Disc3, Palette, Bug } from 'lucide-react';
+import { X, Sliders, RefreshCw, HardDrive, Disc3, Palette, Bug, AudioLines } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { GeneralTab } from './settings/GeneralTab';
 import { ITunesTab } from './settings/ITunesTab';
@@ -7,6 +7,7 @@ import { LibraryTab } from './settings/LibraryTab';
 import { ExportTab } from './settings/ExportTab';
 import { AppearanceTab } from './settings/AppearanceTab';
 import { DeveloperTab } from './settings/DeveloperTab';
+import { SpotifyTab } from './settings/SpotifyTab';
 
 interface SettingsPanelProps {
     isOpen: boolean;
@@ -36,11 +37,12 @@ interface LibraryConfig {
     itunes_deletion_behavior: 'Ask' | 'Keep' | 'Remove';
 }
 
-type TabId = 'general' | 'itunes' | 'library' | 'export' | 'appearance' | 'developer';
+type TabId = 'general' | 'itunes' | 'spotify' | 'library' | 'export' | 'appearance' | 'developer';
 
 const TABS: { id: TabId; label: string; icon: typeof Sliders }[] = [
     { id: 'general', label: 'General', icon: Sliders },
     { id: 'itunes', label: 'iTunes', icon: RefreshCw },
+    { id: 'spotify', label: 'Spotify', icon: AudioLines },
     { id: 'library', label: 'Library', icon: HardDrive },
     { id: 'export', label: 'Export', icon: Disc3 },
     { id: 'appearance', label: 'Appearance', icon: Palette },
@@ -201,6 +203,7 @@ export function SettingsPanel({
                             onRefresh={onRefresh}
                         />
                     )}
+                    {activeTab === 'spotify' && <SpotifyTab />}
                     {activeTab === 'library' && (
                         <LibraryTab
                             libraryConfig={libraryConfig}
