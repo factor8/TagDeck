@@ -9,10 +9,12 @@ interface SpotifySettings {
     account_name: string | null;
 }
 
+let connectInFlight = false;
+
 export function SpotifyTab() {
     const [settings, setSettings] = useState<SpotifySettings | null>(null);
     const [clientId, setClientId] = useState('');
-    const [busy, setBusy] = useState(false);
+    const [busy, setBusy] = useState(connectInFlight);
     const { showSuccess, showError } = useToast();
 
     const load = () => {
@@ -31,6 +33,11 @@ export function SpotifyTab() {
     };
 
     const connect = async () => {
+        if (connectInFlight) {
+            showError('A Spotify connection attempt is already in progress — check your browser.');
+            return;
+        }
+        connectInFlight = true;
         setBusy(true);
         try {
             if (clientId !== (settings?.client_id ?? '')) {
@@ -40,7 +47,7 @@ export function SpotifyTab() {
             showSuccess(`Connected to Spotify as ${name}`);
             load();
         } catch (e) { showError(String(e)); }
-        finally { setBusy(false); }
+        finally { connectInFlight = false; setBusy(false); }
     };
 
     const disconnect = async () => {
