@@ -55,6 +55,8 @@ pub struct SyncReport {
     pub checked: usize,
     pub updated: usize,
     pub ghosts_removed: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
 }
 
 /// Re-sync every imported Spotify playlist whose snapshot_id changed,
@@ -97,14 +99,39 @@ pub async fn sync_all(
             }
         }
     }
-    if !to_update.is_empty() {
-        // Preserve names for playlists found in the live listing.
-        let updated = import_playlists(spotify, client_id, db, to_update).await?;
-        report.updated = updated.playlists;
+    // Import each changed playlist independently so one failure (rate limit,
+    // transient network) doesn't abort the rest of the batch or skip GC below.
+    for pl in &to_update {
+        match import_playlists(spotify, client_id, db, vec![pl.clone()]).await {
+            Ok(r) => report.updated += r.playlists,
+            Err(e) => {
+                report.failed += 1;
+                report.errors.push(format!("{}: {}", pl.name, e));
+            }
+        }
     }
     {
         let db = db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         report.ghosts_removed = db.gc_orphan_ghosts().map_err(|e| e.to_string())?;
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_report_serializes_failed_and_errors() {
+        let report = SyncReport {
+            checked: 3,
+            updated: 2,
+            ghosts_removed: 1,
+            failed: 1,
+            errors: vec!["Bad Playlist: rate limited".to_string()],
+        };
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"failed\":1"));
+        assert!(json.contains("\"errors\":[\"Bad Playlist: rate limited\"]"));
+    }
 }

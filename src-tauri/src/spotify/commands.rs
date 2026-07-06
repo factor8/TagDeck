@@ -124,17 +124,36 @@ pub async fn spotify_sync_now(
     spotify: State<'_, SpotifyState>,
 ) -> Result<super::sync::SyncReport, String> {
     let client_id = get_client_id(&state)?;
-    let report = super::sync::sync_all(&spotify, &client_id, &state.db).await?;
+    let report = match super::sync::sync_all(&spotify, &client_id, &state.db).await {
+        Ok(r) => r,
+        Err(e) => {
+            app.state::<crate::logging::LogState>().add_log(
+                "ERROR",
+                &format!("Spotify sync failed: {}", e),
+                &app,
+            );
+            return Err(e);
+        }
+    };
     if report.updated > 0 {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         let _ = db.sync_tags();
     }
-    app.state::<crate::logging::LogState>().add_log(
-        "INFO",
-        &format!("Spotify sync: {}/{} playlists updated, {} ghosts GC'd",
-                 report.updated, report.checked, report.ghosts_removed),
-        &app,
-    );
+    for err in &report.errors {
+        app.state::<crate::logging::LogState>().add_log(
+            "ERROR",
+            &format!("Spotify sync: playlist failed: {}", err),
+            &app,
+        );
+    }
+    let summary = if report.failed > 0 {
+        format!("Spotify sync: {}/{} playlists updated, {} ghosts GC'd ({} playlists failed)",
+                report.updated, report.checked, report.ghosts_removed, report.failed)
+    } else {
+        format!("Spotify sync: {}/{} playlists updated, {} ghosts GC'd",
+                report.updated, report.checked, report.ghosts_removed)
+    };
+    app.state::<crate::logging::LogState>().add_log("INFO", &summary, &app);
     Ok(report)
 }
 
