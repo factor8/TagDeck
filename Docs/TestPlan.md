@@ -77,6 +77,30 @@ Items marked ⚠️ touch Music.app or files on disk — save those for last, on
 - [ ] ⌘K → pick an iTunes playlist while the iTunes section is collapsed → section un-collapses and reveals it
 - [ ] Escape and clicking the backdrop both close the palette; ⌘K toggles it closed too
 
+## Spotify Integration
+
+- [ ] Settings → Spotify tab: paste a Client ID from your own Spotify Developer Dashboard app (redirect URI set to exactly `http://127.0.0.1:43110/callback`) → **Connect to Spotify** opens your browser; approve access → the tab shows Connected as your account name
+- [ ] Quit and relaunch TagDeck → Settings → Spotify still shows Connected with no browser round-trip, and the sidebar's Spotify section shows up on its own (no need to revisit Settings first)
+- [ ] Paste an invalid or mismatched Client ID and click **Connect to Spotify** → the browser shows Spotify's own error page instead of a login prompt; TagDeck still resolves to a clear failure (denied right away, or a ~2-minute timeout) rather than hanging or crashing
+- [ ] **Disconnect** → toast confirms; every imported playlist, ghost track, and tag is untouched — only the tab reverts to **Connect to Spotify**
+- [ ] Sidebar's Spotify section → **Import playlists…** → checkbox list of your Spotify playlists with track counts; import a subset → toast reports the playlist/track counts and only the chosen playlists appear under the sidebar's Spotify section, rows dimmed with a small green Spotify glyph
+- [ ] Reopen the import picker → a playlist you already imported shows an *Imported* tag instead of being offered as a plain new import
+- [ ] Add or remove a track on an imported playlist in Spotify itself → within 15 minutes, or immediately after relaunching TagDeck, the change appears on that playlist's tracks with no action needed
+- [ ] Select a ghost track inside a Spotify playlist → add a tag from the tag deck → it appears on the row right away and is still there after switching playlists (or relaunching)
+- [ ] Select All Tracks → none of your imported Spotify ghost tracks appear there, even ones just imported
+- [ ] Export a playlist containing ghosts to both Rekordbox XML and M3U8 → both exports quietly skip the ghosts (not counted as missing or failed) while including everything else
+- [ ] Move a local file within the library root (as in Phase 5) so the watcher fires a verify pass → ghost tracks are never flagged missing (they have no file to check)
+- [ ] Quit the Spotify desktop app entirely (and make sure no other device on your account is active), then double-click a ghost track → Spotify launches on its own (allow up to ~15s) and playback starts; the footer switches to the Spotify Connect transport (needs Spotify Premium)
+- [ ] With Spotify already open and playing something else, double-click a different ghost track → it takes over playback on the active device
+- [ ] While a ghost is playing: pause/resume with the transport button, drag (or arrow-key) the seek bar — the position only commits on release — and step Next/Previous to adjacent tracks in the playlist
+- [ ] ⚠️ Drag in (or import) a local file whose artist, title, and duration closely match an imported ghost → auto-merges: a toast confirms it, the ghost disappears, its tags land in the file's comment, and it keeps its spot in the Spotify playlist as an ordinary (non-ghost) row
+- [ ] ⚠️ Same, but the local file's title carries a remaster/version suffix the ghost's title doesn't have (e.g. "(2011 Remaster)") → still auto-merges
+- [ ] Import a local file that's a plausible-but-uncertain match (matching title, a slightly different artist credit) → instead of merging it lands in the review queue: a toast flags a possible match and a numbered badge appears on the sidebar's Spotify header
+- [ ] Click that badge → confirm one queued match → tags merge in and it drops off the list; reject another → it drops off without merging and the ghost is untouched
+- [ ] Right-click a ghost with nothing queued for it → **Link to local track…** → the picker shows the ghost's album/duration and a searchable list of local tracks, with any candidate whose duration differs from the ghost's by more than 3 seconds highlighted in red → pick one → merges immediately (no confirmation step, and like all merges it isn't undoable — recover from a bad pick by re-importing the playlist and re-tagging)
+- [ ] Remove an untagged ghost's track from its source playlist in Spotify, then sync (wait, or right-click a Spotify playlist → **Sync Now**) → the ghost disappears entirely; do the same with a *tagged* ghost instead → it drops out of the playlist but the ghost itself is kept
+- [ ] Go offline (or otherwise make sync fail) and let auto-sync run → it fails quietly: no toast, just a cloud-off glyph on the sidebar's Spotify header (hover it for the reason) and an entry in Logs; right-click a Spotify playlist → **Sync Now** in that same offline state → this one does raise an error toast
+
 ## Cross-cutting
 
 - [ ] Settings → Library → Playlist Backup: export writes a JSON file; Restore… opens the picker and recreates the chosen playlists (merged from main during the tab refactor — worth a smoke test)

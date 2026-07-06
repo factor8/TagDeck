@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Spotify integration** (Settings → Spotify): import playlists selectively, tag Spotify tracks before you own the files, play them back via Spotify Connect, and automatically merge your tags into the file once you buy the track. Requires Spotify Premium.
 - **Playlist search**: a filter bar at the top of the sidebar narrows the playlist tree as you type (matches keep their folder context, folders auto-expand while filtering), and **⌘K** opens a quick switcher — fuzzy-search all playlists and folders with parent-path breadcrumbs and iTunes badges, then hit ↩ to jump straight to one (it's selected, revealed, and flashed in the sidebar).
 - **Playlist backup and restore** (Settings → Library): export all playlists — folder tree and track references — to a versioned JSON file, and restore from one with a picker (choose which playlists, folders auto-include parents). Restored tracks match by ID with a file-path fallback.
 - **Drag tracks out of the app** (⌥-drag): hold Option while dragging a track row to drag the actual audio file(s) out of TagDeck — drop into Finder to copy, onto Mail to attach, or into a Rekordbox playlist to import. Works with multi-selection; missing tracks are skipped. Plain drag still adds to playlists / reorders as before.
