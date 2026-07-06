@@ -1634,6 +1634,15 @@ pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppStat
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
 
     if missing {
+        // Ghost tracks (Spotify, no file) must never be marked missing — a ghost
+        // play attempt fails at readFile("") and would otherwise get wrongly
+        // flagged with no automatic recovery. missing:false is still allowed
+        // through below so a wrongly-flagged ghost can be healed.
+        let is_ghost = db.get_track(id).ok().flatten().map(|t| t.is_ghost()).unwrap_or(false);
+        if is_ghost {
+            return Ok(());
+        }
+
          if let Ok(path) = db.get_track_path(id) {
              println!("Debug: Marking track {} missing. Path: '{}'", id, path);
              // Check if it exists
@@ -2867,10 +2876,13 @@ pub async fn restore_playlist_backup(
 // no command-level tests anywhere else in this file. These tests instead
 // exercise the DB-level contract each ghost guard relies on: (1) ghost tag
 // edits update comment_raw/tags vocabulary without ever touching file_path,
-// and (2) file_path.is_empty() is a safe stand-in for Track::is_ghost() in
+// (2) file_path.is_empty() is a safe stand-in for Track::is_ghost() in
 // the commands whose track loop only has a raw `(id, file_path, ...)` tuple
 // (no `Track`) to work with — verify_library_files, consolidate_library,
-// export_tracks_to_music, export_playlist_m3u8. The guards' control flow
+// export_tracks_to_music, export_playlist_m3u8 — and (3) for
+// mark_track_missing, that `set_track_missing` itself has no ghost
+// awareness, so the command's early-return guard is the only thing standing
+// between a ghost and a wrongly-set `missing` flag. The guards' control flow
 // itself (early `return`/`continue` placed before any file IO or Music.app
 // call) is structural and reviewed by inspection.
 #[cfg(test)]
@@ -2998,5 +3010,31 @@ mod tests {
             assert_eq!(*id == ghost_id, is_ghost_row);
             assert_eq!(file_path.is_empty(), is_ghost_row);
         }
+    }
+
+    /// mark_track_missing's ghost guard checks `track.is_ghost()` and, when
+    /// `missing` is true, returns early *before* ever calling
+    /// `db.set_track_missing`. That control flow lives in the
+    /// `#[tauri::command]` fn and can't be exercised here (no public `State`
+    /// constructor) — reviewed by inspection, like the other guards in this
+    /// file. What IS testable at the DB level is the precondition the guard
+    /// exists to compensate for: `set_track_missing` itself is a blind
+    /// UPDATE with no ghost awareness, so calling it directly on a ghost
+    /// (bypassing the command, as this test does) happily flips `missing`
+    /// to true. That's exactly the outcome the command-layer early-return
+    /// prevents in production.
+    #[test]
+    fn ghost_set_track_missing_has_no_db_level_guard_of_its_own() {
+        let db = Database::new(":memory:").unwrap();
+        let id = db.insert_imported_track(&ghost("missing-guard"), None, None).unwrap();
+
+        let track = db.get_track(id).unwrap().unwrap();
+        assert!(track.is_ghost());
+        assert!(!track.missing);
+
+        // The exact DB call mark_track_missing makes after its ghost guard —
+        // shown here to have no ghost exception baked into the DB layer.
+        db.set_track_missing(id, true).unwrap();
+        assert!(db.get_track(id).unwrap().unwrap().missing);
     }
 }
