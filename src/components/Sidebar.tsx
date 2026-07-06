@@ -6,6 +6,7 @@ import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2
 import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
 import { SpotifyImportModal } from './SpotifyImportModal';
+import { SpotifyMatchReview } from './SpotifyMatchReview';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
@@ -347,6 +348,8 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
   const [spotifyImportOpen, setSpotifyImportOpen] = useState(false);
   const [spotifyConnected, setSpotifyConnected] = useState(false);
   const [spotifySyncError, setSpotifySyncError] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   // Whether Spotify is connected — the section (with its import button) shows
   // even before anything has been imported. Only sets the error indicator on
@@ -369,6 +372,14 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
     window.addEventListener('spotify-sync-error', handleSyncError);
     return () => window.removeEventListener('spotify-sync-error', handleSyncError);
   }, []);
+
+  // Count of Spotify ghost/local matches awaiting manual review, shown as a badge
+  // on the section header. Refreshes on any refreshTrigger bump (confirm/reject/
+  // manual-link/merge all funnel through it — see App.tsx's handleRefresh).
+  useEffect(() => {
+    invoke<unknown[]>('spotify_get_pending_matches')
+        .then(m => setPendingCount(m.length)).catch(() => {});
+  }, [refreshTrigger]);
 
   useEffect(() => {
     loadPlaylists();
@@ -1106,6 +1117,14 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   <CloudOff size={12} style={{ color: 'var(--text-secondary)', opacity: 0.7 }} />
                 </span>
               )}
+              {pendingCount > 0 && (
+                <button className="sidebar-add-btn" title={`${pendingCount} matches to review`}
+                        onClick={(e) => { e.stopPropagation(); setReviewOpen(true); }}
+                        style={{ background: 'var(--accent-color)', color: '#fff', borderRadius: 8,
+                                 fontSize: 10, padding: '0 6px', minWidth: 16 }}>
+                  {pendingCount}
+                </button>
+              )}
               <button
                   className="sidebar-add-btn"
                   title="Import playlists…"
@@ -1156,6 +1175,12 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           isOpen={spotifyImportOpen}
           onClose={() => setSpotifyImportOpen(false)}
           onImported={() => { onPlaylistsChanged?.(); }}
+      />
+
+      <SpotifyMatchReview
+          isOpen={reviewOpen}
+          onClose={() => setReviewOpen(false)}
+          onChanged={() => onPlaylistsChanged?.()}
       />
 
       {showArtwork && selectedTrack && (

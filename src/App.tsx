@@ -24,7 +24,7 @@ import { useToast } from './components/Toast';
 import { useDebug } from './components/DebugContext';
 
 function App() {
-  const { showSuccess, showError } = useToast();
+  const { showSuccess, showError, showToast } = useToast();
   const { debugMode, log } = useDebug();
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [selectedTrack, setSelectedTrack] = useState<Track | null>(null);
@@ -366,6 +366,19 @@ function App() {
       if (unlistenFn) unlistenFn();
     };
   }, [syncEnabledTrigger, appleMusicAvailable, syncMode]);
+
+  // Spotify ghost/local merges (auto-matched on import/purchase-file-drop) and any
+  // newly-surfaced ambiguous matches land here — toast the outcome and refresh so
+  // the merged track/sidebar badge reflect it immediately.
+  useEffect(() => {
+    const un = listen<{ merged: number; pending: number }>('spotify-merge-completed', (e) => {
+        const { merged, pending } = e.payload;
+        if (merged > 0) showSuccess(`Merged Spotify tags into ${merged} purchased track${merged === 1 ? '' : 's'}`);
+        if (pending > 0) showToast(`${pending} possible Spotify match${pending === 1 ? '' : 'es'} to review`, 'info');
+        handleRefresh();
+    });
+    return () => { un.then(f => f()); };
+  }, []);
 
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;

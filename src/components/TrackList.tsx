@@ -36,9 +36,10 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, FileAudio, X } from 'lucide-react';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
+import { useToast } from './Toast';
 import { startTrackDragOut, isNativeDragOutActive } from '../utils/dragOut';
 
 interface Props {
@@ -722,6 +723,9 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [contextMenuPlaylists, setContextMenuPlaylists] = useState<{id: number; name: string}[] | null>(null);
     const [showPlaylistsFlyout, setShowPlaylistsFlyout] = useState(false);
+    // Ghost track (source === 'spotify') currently targeted by the manual "Link to
+    // local track…" picker, opened from the context menu below.
+    const [linkPickerGhost, setLinkPickerGhost] = useState<Track | null>(null);
     const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
     
     // Cancel editing when selection changes (iTunes behavior)
@@ -2067,6 +2071,22 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         </div>
                         )}
                         <div className="context-menu-separator" />
+                        {/* Ghost rows (source === 'spotify') have no local file yet — offer a manual
+                            link to an existing local track for cases the auto-matcher missed. Placed
+                            here (no separator of its own) to avoid compounding the known double-separator
+                            glitch on ghost rows above — deferred, not fixed by this change. */}
+                        {contextMenu.track.source === 'spotify' && (
+                        <div
+                            className="context-menu-item"
+                            onClick={() => {
+                                setLinkPickerGhost(contextMenu.track);
+                                setContextMenu(null);
+                            }}
+                        >
+                            <Link2 size={14} className="context-menu-icon" />
+                            <span>Link to local track…</span>
+                        </div>
+                        )}
                         {/* Playlists submenu */}
                         <div
                             className="context-menu-item context-menu-submenu-trigger"
@@ -2180,6 +2200,109 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                     </div>
                 </>
             )}
+
+            {linkPickerGhost && (
+                <GhostLinkPicker
+                    ghost={linkPickerGhost}
+                    tracks={tracks}
+                    onClose={() => setLinkPickerGhost(null)}
+                    onLinked={() => onRefresh?.()}
+                />
+            )}
         </div>
     );
 });
+
+// ── GhostLinkPicker ───────────────────────────────────────────
+// Small search-and-pick modal for manually linking a Spotify ghost row to an
+// existing local track, for cases the automatic matcher missed (e.g. a file
+// renamed enough that title/artist/duration heuristics don't score it as a match).
+function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
+    ghost: Track;
+    tracks: Track[];
+    onClose: () => void;
+    onLinked: () => void;
+}) {
+    const [search, setSearch] = useState('');
+    const [linking, setLinking] = useState(false);
+    const { showSuccess, showError } = useToast();
+
+    // Close on Escape, matching other modals in the app (e.g. SettingsPanel).
+    useEffect(() => {
+        const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+    }, [onClose]);
+
+    const results = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        const candidates = tracks.filter(t => t.source !== 'spotify');
+        const filtered = q
+            ? candidates.filter(t => (t.artist || '').toLowerCase().includes(q) || (t.title || '').toLowerCase().includes(q))
+            : candidates;
+        return filtered.slice(0, 20);
+    }, [tracks, search]);
+
+    const pick = async (local: Track) => {
+        if (linking) return;
+        setLinking(true);
+        try {
+            await invoke('spotify_manual_link', { ghostTrackId: ghost.id, localTrackId: local.id });
+            showSuccess(`Merged tags into "${local.title ?? 'track'}"`);
+            onLinked();
+            onClose();
+        } catch (e) {
+            // Usually means the row went stale (target already linked elsewhere) — surface
+            // the error and refresh/close so the user isn't left staring at a dead ghost row.
+            showError(String(e));
+            onLinked();
+            onClose();
+        } finally {
+            setLinking(false);
+        }
+    };
+
+    return (
+        <>
+            <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10000 }} onClick={onClose} />
+            <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+                          width: 440, maxHeight: '70vh', display: 'flex', flexDirection: 'column',
+                          background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                          borderRadius: 10, zIndex: 10001, padding: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <h3 style={{ margin: 0 }}>Link to Local Track</h3>
+                    <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)' }}><X size={16} /></button>
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {ghost.artist || '?'} — {ghost.title || '?'}
+                </div>
+                <input
+                    autoFocus
+                    type="text"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="Search by artist or title…"
+                    style={{ marginBottom: 8, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-color)',
+                             background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
+                />
+                <div style={{ flex: 1, overflowY: 'auto', minHeight: 120 }}>
+                    {results.length === 0 ? (
+                        <p style={{ color: 'var(--text-secondary)' }}>No matching local tracks.</p>
+                    ) : results.map(t => (
+                        <div
+                            key={t.id}
+                            onClick={() => pick(t)}
+                            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 4px',
+                                     cursor: linking ? 'default' : 'pointer', opacity: linking ? 0.6 : 1 }}
+                        >
+                            <FileAudio size={13} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+                                {t.artist || '?'} — {t.title || '?'}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </>
+    );
+}
