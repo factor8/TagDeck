@@ -1659,6 +1659,27 @@ impl Database {
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
+
+    /// Stored name for an imported Spotify playlist, keyed by Spotify's playlist id.
+    pub fn get_spotify_playlist_name(&self, spotify_playlist_id: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        Ok(self.conn.query_row(
+            "SELECT name FROM playlists WHERE spotify_playlist_id = ?1",
+            params![spotify_playlist_id], |row| row.get(0),
+        ).optional()?)
+    }
+
+    /// Delete ghosts that are in no playlist and carry no tags/comment.
+    /// Tagged orphans are kept — they're still purchase candidates.
+    pub fn gc_orphan_ghosts(&self) -> Result<usize> {
+        let n = self.conn.execute(
+            "DELETE FROM tracks WHERE source = 'spotify'
+             AND (comment_raw IS NULL OR TRIM(comment_raw) = '')
+             AND id NOT IN (SELECT track_id FROM playlist_tracks)",
+            [],
+        )?;
+        Ok(n)
+    }
 }
 
 /// A single playlist in a backup, with its track references.
@@ -1776,5 +1797,21 @@ mod tests {
             stmt.query_map([pl], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
         };
         assert_eq!(ids, vec![t2]);
+    }
+
+    #[test]
+    fn gc_removes_untagged_orphan_ghosts_only() {
+        let db = Database::new(":memory:").unwrap();
+        let orphan_untagged = db.upsert_ghost_track("g1", "u", "A", "T", "", 100.0).unwrap();
+        let orphan_tagged = db.upsert_ghost_track("g2", "u", "A", "T", "", 100.0).unwrap();
+        db.conn.execute("UPDATE tracks SET comment_raw = ' && energetic' WHERE id = ?1",
+            rusqlite::params![orphan_tagged]).unwrap();
+        let member = db.upsert_ghost_track("g3", "u", "A", "T", "", 100.0).unwrap();
+        db.upsert_spotify_playlist("pl", "P", "s", &[member]).unwrap();
+        let removed = db.gc_orphan_ghosts().unwrap();
+        assert_eq!(removed, 1);
+        assert!(db.get_track(orphan_untagged).unwrap().is_none());
+        assert!(db.get_track(orphan_tagged).unwrap().is_some());
+        assert!(db.get_track(member).unwrap().is_some());
     }
 }

@@ -117,6 +117,27 @@ pub async fn spotify_import_playlists(
     Ok(report)
 }
 
+#[tauri::command]
+pub async fn spotify_sync_now(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    spotify: State<'_, SpotifyState>,
+) -> Result<super::sync::SyncReport, String> {
+    let client_id = get_client_id(&state)?;
+    let report = super::sync::sync_all(&spotify, &client_id, &state.db).await?;
+    if report.updated > 0 {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let _ = db.sync_tags();
+    }
+    app.state::<crate::logging::LogState>().add_log(
+        "INFO",
+        &format!("Spotify sync: {}/{} playlists updated, {} ghosts GC'd",
+                 report.updated, report.checked, report.ghosts_removed),
+        &app,
+    );
+    Ok(report)
+}
+
 /// Shared helper for commands needing the configured client id.
 fn get_client_id(state: &State<'_, AppState>) -> Result<String, String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;

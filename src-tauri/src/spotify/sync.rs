@@ -37,10 +37,74 @@ pub async fn import_playlists(
                 }
                 track_ids.push(id);
             }
-            db.upsert_spotify_playlist(&pl.id, &pl.name, &pl.snapshot_id, &track_ids)
+            let name = if pl.name.is_empty() {
+                db.get_spotify_playlist_name(&pl.id).map_err(|e| e.to_string())?.unwrap_or_default()
+            } else {
+                pl.name.clone()
+            };
+            db.upsert_spotify_playlist(&pl.id, &name, &pl.snapshot_id, &track_ids)
                 .map_err(|e| e.to_string())?;
         }
         report.playlists += 1;
+    }
+    Ok(report)
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct SyncReport {
+    pub checked: usize,
+    pub updated: usize,
+    pub ghosts_removed: usize,
+}
+
+/// Re-sync every imported Spotify playlist whose snapshot_id changed,
+/// then GC untagged orphan ghosts.
+pub async fn sync_all(
+    spotify: &SpotifyState,
+    client_id: &str,
+    db: &std::sync::Mutex<Database>,
+) -> Result<SyncReport, String> {
+    let imported = {
+        let db = db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.get_spotify_playlists().map_err(|e| e.to_string())?
+    };
+    let mut report = SyncReport { checked: imported.len(), ..Default::default() };
+    if imported.is_empty() {
+        return Ok(report);
+    }
+    // One playlist-list call covers snapshot comparison for all imported lists
+    // (and playlist renames); fall back to per-playlist snapshot fetch for any
+    // imported playlist not in the listing (e.g. followed playlist unfollowed).
+    let live = client::list_my_playlists(spotify, client_id).await?;
+    let mut to_update = Vec::new();
+    for (_db_id, sp_id, snapshot) in &imported {
+        match live.iter().find(|p| &p.id == sp_id) {
+            Some(p) if Some(p.snapshot_id.as_str()) != snapshot.as_deref() => to_update.push(p.clone()),
+            Some(_) => {}
+            None => {
+                if let Ok(snap) = client::get_playlist_snapshot(spotify, client_id, sp_id).await {
+                    if Some(snap.as_str()) != snapshot.as_deref() {
+                        // Minimal summary; name/count refreshed on import.
+                        to_update.push(client::SpotifyPlaylistSummary {
+                            id: sp_id.clone(),
+                            name: String::new(),
+                            snapshot_id: snap,
+                            track_count: 0,
+                            owner_name: String::new(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    if !to_update.is_empty() {
+        // Preserve names for playlists found in the live listing.
+        let updated = import_playlists(spotify, client_id, db, to_update).await?;
+        report.updated = updated.playlists;
+    }
+    {
+        let db = db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        report.ghosts_removed = db.gc_orphan_ghosts().map_err(|e| e.to_string())?;
     }
     Ok(report)
 }
