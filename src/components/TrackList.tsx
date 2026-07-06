@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines } from 'lucide-react';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
 import { startTrackDragOut, isNativeDragOutActive } from '../utils/dragOut';
@@ -419,6 +419,7 @@ const TrackRowContent = ({
     fileDropIndicator, onFileDropIndicatorChange, onFileDrop, prevTrackId, onDragOut,
 }: TrackRowContentProps) => {
     const trackId = row.original.id;
+    const isGhost = row.original.source === 'spotify';
 
     // Wrap dnd-kit's pointer-down listener: Option-click starts a native file drag
     // instead of the normal in-app dnd-kit drag (add-to-playlist/reorder).
@@ -449,7 +450,7 @@ const TrackRowContent = ({
                 ? 'var(--accent-color)'
                 : (isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'),
         fontWeight: isPlaying ? '600' : 'normal',
-        opacity: isDragging ? 0.5 : (isMissing ? 0.5 : 1),
+        opacity: isDragging ? 0.5 : (isMissing ? 0.5 : (isGhost ? 0.75 : 1)),
         cursor: 'default',
         userSelect: 'none',
         WebkitUserSelect: 'none',
@@ -869,8 +870,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             }
         }
 
+        // Ghosts (Spotify imports) only appear inside their playlists —
+        // the main library view stays local-files-only.
+        if (playlistId == null) {
+            result = result.filter(t => t.source !== 'spotify');
+        }
+
         if (!searchTerm) return result;
-        
+
         const query = parseSearchQuery(searchTerm);
 
         return result.filter(track => {
@@ -977,7 +984,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
 
             return true;
         });
-    }, [tracks, searchTerm, allowedTrackIds, playlistOrderMap]);
+    }, [tracks, searchTerm, allowedTrackIds, playlistOrderMap, playlistId]);
 
     // Remove selected tracks from current playlist
     const handleRemoveFromPlaylist = useCallback(async () => {
@@ -1044,7 +1051,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             // Cmd+R or Cmd+Shift+R -> Reveal in Finder
             if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R') && lastSelectedTrackId) {
                 const trackToReveal = filteredTracks.find(t => t.id === lastSelectedTrackId);
-                if (trackToReveal && trackToReveal.file_path) {
+                if (trackToReveal && trackToReveal.file_path && trackToReveal.source !== 'spotify') {
                     e.preventDefault();
                     invoke('show_in_finder', { path: trackToReveal.file_path })
                         .catch(err => console.error('Failed to reveal in Finder:', err));
@@ -1310,6 +1317,12 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             >
                                 unlinked
                             </span>
+                        )}
+                        {info.row.original.source === 'spotify' && (
+                          <span title="Spotify track — not in your library yet"
+                                style={{ display: 'inline-flex', flexShrink: 0 }}>
+                            <AudioLines size={12} style={{ color: '#1DB954', opacity: 0.7 }} />
+                          </span>
                         )}
                     </div>
                 );
@@ -2006,6 +2019,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             top: Math.min(contextMenu.y, window.innerHeight - 200),
                         }}
                     >
+                        {contextMenu.track.source !== 'spotify' && (
                         <div
                             className="context-menu-item"
                             onClick={() => {
@@ -2016,20 +2030,22 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             <Folder size={14} className="context-menu-icon" />
                             <span>Show in Finder</span>
                         </div>
+                        )}
                         <div className="context-menu-separator" />
+                        {contextMenu.track.source !== 'spotify' && (
                         <div
                             className="context-menu-item"
                             onClick={async () => {
-                                const tracksToAnalyze = selectedTrackIds.has(contextMenu.track.id)
+                                const tracksToAnalyze = (selectedTrackIds.has(contextMenu.track.id)
                                     ? tracks.filter(t => selectedTrackIds.has(t.id))
-                                    : [contextMenu.track];
-                                
+                                    : [contextMenu.track]).filter(t => t.source !== 'spotify');
+
                                 const trackIds = tracksToAnalyze.map(t => t.id);
                                 const filePaths = tracksToAnalyze.map(t => t.file_path);
                                 const count = filePaths.length;
-                                
+
                                 setContextMenu(null);
-                                
+
                                 try {
                                     await invoke('analyze_with_mixed_in_key', { trackIds, filePaths });
                                     console.log(`Mixed In Key analysis complete for ${count} track${count > 1 ? 's' : ''}. Refreshing...`);
@@ -2047,6 +2063,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                     : 'Analyze with Mixed In Key'}
                             </span>
                         </div>
+                        )}
                         <div className="context-menu-separator" />
                         {/* Playlists submenu */}
                         <div
