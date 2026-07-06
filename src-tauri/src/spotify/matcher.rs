@@ -11,32 +11,52 @@ const DURATION_TOLERANCE_SECS: f64 = 3.0;
 pub fn normalize(s: &str) -> String {
     let lower = s.to_lowercase();
 
-    // Cut "feat."/"ft."/"featuring" and everything after.
-    let lower = ["feat.", "feat ", "ft.", "ft ", "featuring"]
-        .iter()
-        .fold(lower, |acc, marker| match acc.find(marker) {
-            Some(idx) => acc[..idx].to_string(),
-            None => acc,
-        });
+    // Cut "feat"/"ft"/"featuring" at a word boundary and drop everything
+    // after — but only when the *whole token* (modulo a trailing '.') is the
+    // marker, so words that merely contain "ft"/"feat" as a substring
+    // ("Left Alone", "Daft Punk", "Defeat of Napoleon") survive intact.
+    let lower = {
+        let mut tokens: Vec<&str> = Vec::new();
+        for token in lower.split_whitespace() {
+            let stripped = token.trim_end_matches('.');
+            if stripped == "feat" || stripped == "ft" || stripped == "featuring" {
+                break;
+            }
+            tokens.push(token);
+        }
+        tokens.join(" ")
+    };
 
     // Remove parenthesized/bracketed chunks that are remaster/version noise.
+    // Nested brackets accumulate into the same outermost chunk (a space is
+    // pushed in place of the inner delimiter) so an inner bracket can't wipe
+    // out outer-chunk text already collected; the whole outermost chunk is
+    // judged for noise only once it fully closes.
     let mut out = String::with_capacity(lower.len());
     let mut depth = 0usize;
     let mut chunk = String::new();
     for c in lower.chars() {
         match c {
             '(' | '[' => {
+                if depth == 0 {
+                    chunk.clear();
+                } else {
+                    chunk.push(' ');
+                }
                 depth += 1;
-                chunk.clear();
             }
             ')' | ']' => {
                 if depth > 0 {
                     depth -= 1;
-                    if !is_version_noise(&chunk) {
-                        out.push(' ');
-                        out.push_str(&chunk);
+                    if depth == 0 {
+                        if !is_version_noise(&chunk) {
+                            out.push(' ');
+                            out.push_str(&chunk);
+                        }
+                        chunk.clear();
+                    } else {
+                        chunk.push(' ');
                     }
-                    chunk.clear();
                 }
             }
             _ => {
@@ -48,11 +68,25 @@ pub fn normalize(s: &str) -> String {
             }
         }
     }
+    // An unterminated bracket left the tail sitting in `chunk` — it was
+    // dropped on the floor before; now it gets the same noise check and is
+    // flushed back in when it isn't noise.
+    if depth > 0 && !is_version_noise(&chunk) {
+        out.push(' ');
+        out.push_str(&chunk);
+    }
 
-    // Remove "- 2014 remastered version"-style dash suffixes.
-    let out = match out.find(" - ") {
-        Some(idx) if is_version_noise(&out[idx + 3..]) => out[..idx].to_string(),
-        _ => out,
+    // Remove "- 2014 remastered version"-style dash suffixes. Split on every
+    // " - " so each segment is judged independently — a noise keyword in one
+    // segment ("Remastered") no longer eats distinguishing content in an
+    // earlier segment ("Part 1" vs "Part 2").
+    let out = if out.contains(" - ") {
+        out.split(" - ")
+            .filter(|segment| !is_version_noise(segment))
+            .collect::<Vec<_>>()
+            .join(" - ")
+    } else {
+        out
     };
 
     // Strip punctuation, collapse whitespace.
@@ -66,10 +100,12 @@ pub fn normalize(s: &str) -> String {
 
 fn is_version_noise(s: &str) -> bool {
     let s = s.trim();
+    // A bare 4-digit year is NOT noise on its own (different live dates/mixes
+    // must stay distinguishable) — only a real noise keyword marks a segment
+    // as removable, year or no year.
     ["remaster", "remastered", "re-master", "deluxe", "bonus", "single version", "album version", "radio edit"]
         .iter()
         .any(|k| s.contains(k))
-        || s.chars().filter(|c| c.is_ascii_digit()).count() == 4 && s.len() <= 24 // "2011 remaster"-ish
 }
 
 fn levenshtein(a: &str, b: &str) -> usize {
@@ -116,7 +152,7 @@ pub fn match_score(
     local_duration_secs: f64,
 ) -> f64 {
     let dur_delta = (ghost_duration_secs - local_duration_secs).abs();
-    if dur_delta > DURATION_TOLERANCE_SECS {
+    if dur_delta.is_nan() || dur_delta > DURATION_TOLERANCE_SECS {
         return 0.0;
     }
     let duration_score = 1.0 - (dur_delta / DURATION_TOLERANCE_SECS);
@@ -169,5 +205,76 @@ mod tests {
         // Same title, different-but-overlapping artist credit → mid confidence
         let s = match_score("Calvin Harris, Dua Lipa", "One Kiss", 214.0, "Calvin Harris", "One Kiss", 214.5);
         assert!(s >= REVIEW_THRESHOLD && s < 1.0, "score was {}", s);
+    }
+
+    // --- Regression tests for review findings (false-positive collision risks
+    // ahead of Task 13's auto-merge-at->=0.90 write path). ---
+
+    #[test]
+    fn feat_cut_requires_word_boundary() {
+        // Critical 1: substring search for "ft "/"feat " truncated on any word
+        // containing that substring, not just the featured-artist marker.
+        assert_eq!(normalize("Left Alone"), "left alone");
+        assert_eq!(normalize("Daft Punk"), "daft punk");
+        assert_eq!(normalize("Defeat of Napoleon"), "defeat of napoleon");
+        // Still cuts the real marker at a word boundary.
+        assert_eq!(normalize("Artist feat. Someone"), "artist");
+        assert_eq!(normalize("Artist ft. Someone"), "artist");
+    }
+
+    #[test]
+    fn live_year_not_treated_as_noise() {
+        // Critical 2: a bare 4-digit run was noise regardless of context, so
+        // different live recordings (and dated mixes) collapsed together.
+        assert_ne!(normalize("Song (Live 1999)"), normalize("Song (Live 2005)"));
+        assert_eq!(normalize("Song (Live 1999)"), "song live 1999");
+        assert_eq!(normalize("Song (1999 Mix)"), "song 1999 mix");
+        // Keyword-bearing years are still eaten.
+        assert_eq!(normalize("Song Title (2011 Remaster)"), "song title");
+    }
+
+    #[test]
+    fn dash_segments_filtered_independently() {
+        // Critical 3: is_version_noise ran on the whole dash-tail as one
+        // blob, so any noise keyword anywhere in it ate distinguishing
+        // content earlier in the tail (e.g. "Part 1" vs "Part 2").
+        assert_eq!(normalize("A Tale - Part 1 - Remastered"), "a tale part 1");
+        assert_eq!(normalize("A Tale - Part 2 - Remastered"), "a tale part 2");
+        assert_ne!(
+            normalize("A Tale - Part 1 - Remastered"),
+            normalize("A Tale - Part 2 - Remastered")
+        );
+        // Still eats a genuine dash-suffix.
+        assert_eq!(normalize("Song - 2014 Remastered Version"), "song");
+    }
+
+    #[test]
+    fn unclosed_bracket_flushes_pending_chunk() {
+        // Critical 4: an unterminated '(' left `chunk` accumulating forever
+        // and it was dropped on the floor instead of being flushed.
+        assert_eq!(normalize("Prelude (Part 1"), "prelude part 1");
+        assert_eq!(normalize("Song (2011 Remaster"), "song");
+    }
+
+    #[test]
+    fn nested_bracket_preserves_outer_word() {
+        // Important 6: '(' | '[' unconditionally cleared `chunk`, so an
+        // inner bracket destroyed already-accumulated outer-chunk text.
+        assert_eq!(
+            normalize("Song (Live (Acoustic) Version)"),
+            "song live acoustic version"
+        );
+    }
+
+    #[test]
+    fn duration_nan_is_hard_zero() {
+        // Important 5: NaN > DURATION_TOLERANCE_SECS is false, so a NaN
+        // duration delta slipped past the hard gate and propagated NaN
+        // through the final weighted score instead of returning 0.0.
+        let s = match_score(
+            "Daft Punk", "One More Time", f64::NAN,
+            "Daft Punk", "One More Time", 320.0,
+        );
+        assert_eq!(s, 0.0);
     }
 }
