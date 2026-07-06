@@ -163,10 +163,11 @@ async fn request(
 ) -> Result<(reqwest::StatusCode, String), String> {
     for attempt in 0..2 {
         let token = auth::get_valid_access_token(spotify, client_id).await?;
-        let mut req = spotify.http.request(method.clone(), url).bearer_auth(&token);
-        if let Some(b) = &body {
-            req = req.json(b);
-        }
+        let req = attach_body(
+            spotify.http.request(method.clone(), url).bearer_auth(&token),
+            &method,
+            &body,
+        );
         let resp = req.send().await.map_err(|e| format!("Spotify request failed: {}", e))?;
         let status = resp.status();
         if status.as_u16() == 429 && attempt < 1 {
@@ -192,6 +193,24 @@ async fn request(
         return Ok((status, text));
     }
     Err("Spotify API retries exhausted".into())
+}
+
+/// Attach the JSON body, or an explicit empty one for bodyless PUT/POST —
+/// reqwest omits Content-Length entirely when there's no body, and Spotify's
+/// edge proxy rejects such requests with "411 Length Required" (seek, pause,
+/// resume, next, previous are all bodyless PUT/POST).
+fn attach_body(
+    req: reqwest::RequestBuilder,
+    method: &reqwest::Method,
+    body: &Option<serde_json::Value>,
+) -> reqwest::RequestBuilder {
+    match body {
+        Some(b) => req.json(b),
+        None if *method == reqwest::Method::PUT || *method == reqwest::Method::POST => {
+            req.header(reqwest::header::CONTENT_LENGTH, 0).body("")
+        }
+        None => req,
+    }
 }
 
 fn ensure_ok(status: reqwest::StatusCode, body: &str, what: &str) -> Result<(), String> {
@@ -394,6 +413,50 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bodyless_put_and_post_carry_content_length_zero() {
+        // Spotify's edge proxy 411s a PUT/POST with no Content-Length header,
+        // which reqwest omits for bodyless requests (breaks seek/pause/etc).
+        let client = reqwest::Client::new();
+        for method in [reqwest::Method::PUT, reqwest::Method::POST] {
+            let req = attach_body(
+                client.request(method.clone(), "https://api.spotify.com/v1/me/player/seek"),
+                &method,
+                &None,
+            )
+            .build()
+            .unwrap();
+            assert_eq!(
+                req.headers().get(reqwest::header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()),
+                Some("0"),
+                "{} without body must send Content-Length: 0",
+                method
+            );
+        }
+    }
+
+    #[test]
+    fn get_stays_bodyless_and_json_body_still_attached() {
+        let client = reqwest::Client::new();
+        let get = attach_body(
+            client.get("https://api.spotify.com/v1/me/player"),
+            &reqwest::Method::GET,
+            &None,
+        )
+        .build()
+        .unwrap();
+        assert!(get.headers().get(reqwest::header::CONTENT_LENGTH).is_none());
+
+        let put = attach_body(
+            client.put("https://api.spotify.com/v1/me/player/play"),
+            &reqwest::Method::PUT,
+            &Some(serde_json::json!({"uris": ["spotify:track:x"]})),
+        )
+        .build()
+        .unwrap();
+        assert!(put.body().is_some());
+    }
+
+    #[test]
     fn parses_playlist_page() {
         let json = r#"{
             "items": [{"id":"pl1","name":"Crate","snapshot_id":"snapA",
@@ -472,5 +535,9 @@ mod tests {
         assert!((metas[0].duration_secs - 200.0).abs() < 0.001);
     }
 }
+
+
+
+
 
 
