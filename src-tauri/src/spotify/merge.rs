@@ -36,8 +36,10 @@ fn split_comment(raw: &str) -> (&str, Vec<String>) {
 }
 
 /// Union of local + ghost tag blocks (local order first, case-insensitive
-/// dedupe). Returns only the tag-block string; the caller's file write goes
-/// through metadata::write_tags which preserves the local user comment.
+/// dedupe). Returns only the tag-block string; the caller combines it with
+/// the local user-comment into one final string and writes that exact same
+/// string to both the file (via metadata::write_metadata) and the DB, so the
+/// two can never diverge.
 pub fn union_tags(ghost_comment: &str, local_comment: &str) -> String {
     let (_, ghost_tags) = split_comment(ghost_comment);
     let (_, local_tags) = split_comment(local_comment);
@@ -62,19 +64,17 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
     if local.is_ghost() {
         return Err("Target track has no local file".into());
     }
+    if local.spotify_id.is_some() {
+        return Err("Local track is already linked to a Spotify track".into());
+    }
 
     let ghost_comment = ghost.comment_raw.clone().unwrap_or_default();
     let local_comment = local.comment_raw.clone().unwrap_or_default();
     let merged_tag_block = union_tags(&ghost_comment, &local_comment);
 
-    // 1. File write (best-effort — write_tags preserves the user-comment side)
-    if !merged_tag_block.is_empty() {
-        if let Err(e) = crate::metadata::write_tags(&local.file_path, &merged_tag_block) {
-            eprintln!("Spotify merge: file tag write failed ({}), DB still updated", e);
-        }
-    }
-
-    // 2. DB comment: rebuild "user && tags" from the local user part
+    // Rebuild "user && tags" from the local user part — DB-derived, never
+    // re-read from the file — so the string written to disk and the string
+    // stored in comment_raw are always identical (single source of truth).
     let (local_user, _) = split_comment(&local_comment);
     let new_comment = if merged_tag_block.is_empty() {
         local_user.to_string()
@@ -83,6 +83,18 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
     } else {
         format!("{}{}{}", local_user, DELIMITER, merged_tag_block)
     };
+
+    // 1. File write (best-effort — DB is authoritative). Writes `new_comment`
+    // verbatim via metadata::write_metadata — the same call pattern the rest
+    // of the app's comment-writing commands use (write_tags, batch_add_tag/
+    // batch_remove_tag, undo) — which never touches Grouping/ContentGroup.
+    if !merged_tag_block.is_empty() {
+        if let Err(e) = crate::metadata::write_metadata(&local.file_path, &new_comment) {
+            eprintln!("Spotify merge: file tag write failed ({}), DB still updated", e);
+        }
+    }
+
+    // 2. DB comment
     let mut updated = local.clone();
     updated.comment_raw = if new_comment.is_empty() { None } else { Some(new_comment) };
     db.update_track(&updated).map_err(|e| e.to_string())?;
@@ -96,6 +108,15 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
     db.delete_track(ghost_id).map_err(|e| e.to_string())?;
     let _ = db.sync_tags();
     Ok(())
+}
+
+/// A local track is eligible for ghost matching only if it actually has a
+/// file (not itself a ghost) and isn't already linked to a Spotify track.
+/// Re-scoring an already-linked track risks a near-duplicate ghost
+/// outscoring its true match and clobbering the correct spotify_id/comment
+/// (see `merge_ghost_into_local`'s matching guard — Fix 1 / Critical 1).
+fn is_match_candidate(local: &crate::models::Track) -> bool {
+    !local.is_ghost() && local.spotify_id.is_none()
 }
 
 /// Match freshly imported local tracks against all ghosts. High confidence →
@@ -113,7 +134,7 @@ pub fn process_new_local_tracks(
     }
     for &local_id in new_track_ids {
         let Ok(Some(local)) = db.get_track(local_id) else { continue };
-        if local.is_ghost() { continue; }
+        if !is_match_candidate(&local) { continue; }
         // Best ghost for this new file
         let mut best: Option<(i64, f64)> = None;
         for g in &ghosts {
@@ -204,5 +225,76 @@ mod tests {
         let member: i64 = dbm.conn.query_row(
             "SELECT track_id FROM playlist_tracks LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(member, local, "playlist membership repointed");
+    }
+
+    /// Fix 1 / Critical 1: nothing previously stopped re-merging a ghost
+    /// into a local track that's ALREADY linked to a different Spotify
+    /// track — a re-fed already-linked track scoring high against an
+    /// unrelated ghost would clobber its correct spotify_id and comment.
+    #[test]
+    fn merge_rejects_already_linked_local_track() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g2", "u2", "Artist", "Title", "Al", 200.0).unwrap();
+        dbm.conn.execute("UPDATE tracks SET comment_raw = ' && energetic' WHERE id = ?1",
+            rusqlite::params![ghost]).unwrap();
+
+        let tmp = std::env::temp_dir().join("tagdeck_merge_test_linked.mp3");
+        std::fs::write(&tmp, b"").unwrap();
+        let local = dbm.insert_imported_track(&crate::models::Track {
+            id: 0, persistent_id: "TD-linked".into(), file_path: tmp.to_string_lossy().into_owned(),
+            artist: Some("Artist".into()), title: Some("Title".into()), album: None,
+            comment_raw: Some("keep-me".into()), grouping_raw: None, duration_secs: 200.0, format: "MP3".into(),
+            size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
+            missing: false, itunes_pid: None, unlinked_at: None,
+            source: "local".into(), spotify_id: Some("already-linked-id".into()),
+        }, None, None).unwrap();
+
+        let result = merge_ghost_into_local(&dbm, ghost, local);
+
+        assert!(result.is_err(), "must reject merging into an already-linked local track");
+        assert!(dbm.get_track(ghost).unwrap().is_some(), "ghost must survive a rejected merge");
+        let local_row = dbm.get_track(local).unwrap().unwrap();
+        assert_eq!(local_row.comment_raw.as_deref(), Some("keep-me"), "comment must be untouched");
+        assert_eq!(local_row.spotify_id.as_deref(), Some("already-linked-id"), "spotify_id must be untouched");
+    }
+
+    /// Fix 1 / Critical 1, `process_new_local_tracks` layer: direct unit
+    /// test of the skip predicate (an `AppHandle` isn't mockable here — the
+    /// `tauri` dep has no `test` feature enabled — so the full function
+    /// isn't exercised end-to-end; see task-13-report.md Fix 1 notes).
+    #[test]
+    fn is_match_candidate_excludes_ghosts_and_already_linked_tracks() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+
+        let ghost_id = dbm.upsert_ghost_track("g3", "u3", "A", "T", "Al", 200.0).unwrap();
+        let ghost = dbm.get_track(ghost_id).unwrap().unwrap();
+        assert!(!is_match_candidate(&ghost), "ghost tracks are never match candidates");
+
+        let base = crate::models::Track {
+            id: 0, persistent_id: "TD-x".into(), file_path: "/tmp/x.mp3".into(),
+            artist: Some("A".into()), title: Some("T".into()), album: None,
+            comment_raw: None, grouping_raw: None, duration_secs: 200.0, format: "MP3".into(),
+            size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
+            missing: false, itunes_pid: None, unlinked_at: None,
+            source: "local".into(), spotify_id: None,
+        };
+
+        let unlinked_id = dbm.insert_imported_track(
+            &crate::models::Track { persistent_id: "TD-unlinked".into(), ..base.clone() },
+            None, None,
+        ).unwrap();
+        let unlinked = dbm.get_track(unlinked_id).unwrap().unwrap();
+        assert!(is_match_candidate(&unlinked), "an unlinked local track is a match candidate");
+
+        let linked_id = dbm.insert_imported_track(
+            &crate::models::Track {
+                persistent_id: "TD-linked2".into(),
+                spotify_id: Some("already-linked".into()),
+                ..base
+            },
+            None, None,
+        ).unwrap();
+        let linked = dbm.get_track(linked_id).unwrap().unwrap();
+        assert!(!is_match_candidate(&linked), "an already-linked local track must not be re-scored");
     }
 }
