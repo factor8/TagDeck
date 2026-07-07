@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Play queue**: right-click any track (or a multi-selection) for **Play Next** / **Play Later**, or press **⇧Q** / **Q** with tracks selected. Queued songs play before the tracklist resumes where you left off (Spotify-style). The new **Queue** tab in the right panel shows what's playing, the queue itself (drag to reorder, hover-X to remove, double-click to jump, Clear), and what's coming up next from the current playlist. The queue survives app restarts.
 - **Elapsed / total time in the player bar**: elapsed time sits left of the waveform, total duration on the right — click the total to toggle it to remaining time (shown with a `-` prefix), and the choice is remembered. Works in both player modes.
 - **Find Library Matches**: right-click an imported Spotify playlist to scan its unmatched (Spotify-only) tracks against your local library — likely matches are queued in the match review panel for you to confirm or reject; nothing is ever merged automatically. Works offline and reports what it found in a toast.
 - **Open in Spotify**: Spotify tracks show an external-link icon in the actions column (where local tracks have the Finder folder icon) that jumps to the song in the Spotify app — highlighted, not auto-played.
