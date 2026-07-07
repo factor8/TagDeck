@@ -23,6 +23,7 @@ import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 import { useDebug } from './components/DebugContext';
 import { usePlayQueue } from './hooks/usePlayQueue';
+import { QueuePane } from './components/QueuePane';
 
 function App() {
   const { showSuccess, showError, showToast } = useToast();
@@ -77,6 +78,7 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+  const [rightPanelTab, setRightPanelTab] = useState<'tags' | 'queue'>('tags');
   const playQueue = usePlayQueue();
 
   useEffect(() => {
@@ -1215,36 +1217,96 @@ function App() {
               setIsRightCollapsed(isCollapsed);
             }}
         >
-            <div style={{ 
+            <div style={{
                 height: '100%',
                 display: 'flex',
                 flexDirection: 'column',
                 background: 'var(--bg-secondary)'
             }}>
-            {/* Editor Panel (Fixed at top of sidebar) */}
-            {selectedTrack ? (
+            {/* Tags / Queue tab bar */}
+            <div style={{ display: 'flex', flexShrink: 0, borderBottom: '1px solid var(--border-color)' }}>
+                {(['tags', 'queue'] as const).map(tab => (
+                    <button
+                        key={tab}
+                        onClick={() => setRightPanelTab(tab)}
+                        style={{
+                            flex: 1,
+                            padding: '8px 0',
+                            background: 'transparent',
+                            border: 'none',
+                            borderBottom: rightPanelTab === tab ? '2px solid var(--accent-color)' : '2px solid transparent',
+                            color: rightPanelTab === tab ? 'var(--text-primary)' : 'var(--text-secondary)',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '6px',
+                        }}
+                    >
+                        {tab === 'tags' ? 'Tags' : 'Queue'}
+                        {tab === 'queue' && playQueue.queue.length > 0 && (
+                            <span style={{
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                padding: '1px 6px',
+                                borderRadius: '8px',
+                                background: 'var(--accent-color)',
+                                color: '#fff',
+                            }}>
+                                {playQueue.queue.length}
+                            </span>
+                        )}
+                    </button>
+                ))}
+            </div>
+
+            {rightPanelTab === 'tags' ? (
                 <>
-                    <TagEditor 
-                        track={selectedTrack} 
-                        onUpdate={handleRefresh} 
-                        selectedTrackIds={selectedTrackIds}
-                        commonTags={currentTags}
-                    />
+                    {/* Editor Panel (Fixed at top of sidebar) */}
+                    {selectedTrack ? (
+                        <TagEditor
+                            track={selectedTrack}
+                            onUpdate={handleRefresh}
+                            selectedTrackIds={selectedTrackIds}
+                            commonTags={currentTags}
+                        />
+                    ) : (
+                        <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>
+                            Select a track to edit tags
+                        </div>
+                    )}
+
+                    {/* Tag Deck (Takes remaining space) */}
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <TagDeck
+                            onTagClick={handleDeckTagClick}
+                            currentTrackTags={currentTags}
+                            refreshTrigger={refreshTrigger}
+                        />
+                    </div>
                 </>
             ) : (
-                <div style={{ padding: '20px', color: 'var(--text-secondary)', textAlign: 'center', fontSize: '13px' }}>
-                    Select a track to edit tags
+                <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <QueuePane
+                        nowPlaying={playingTrack}
+                        queue={playQueue.queue}
+                        upcoming={trackListRef.current?.getUpcomingTracks(playingTrack?.id ?? null, 20) ?? []}
+                        sourceName={playingPlaylistId != null ? (playlistNames.get(playingPlaylistId) ?? 'Playlist') : 'Library'}
+                        onRemoveAt={playQueue.removeAt}
+                        onMoveItem={playQueue.moveItem}
+                        onClear={playQueue.clear}
+                        onJumpTo={(index) => {
+                            const target = playQueue.jumpTo(index);
+                            if (target) {
+                                setPlayingTrack(target);
+                                setShouldAutoPlay(true);
+                            }
+                        }}
+                    />
                 </div>
             )}
-
-            {/* Tag Deck (Takes remaining space) */}
-            <div style={{ flex: 1, overflow: 'hidden' }}>
-                <TagDeck 
-                        onTagClick={handleDeckTagClick} 
-                        currentTrackTags={currentTags}
-                        refreshTrigger={refreshTrigger}
-                    />
-            </div>
             </div>
         </Panel>
       
