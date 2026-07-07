@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Search, X, Music, ListMusic, ChevronRight, Check, Loader2 } from 'lucide-react';
 import { Track } from '../types';
+import { matchesAllTokens } from '../utils/searchParser';
 
 interface PlaylistInfo {
     id: number;
@@ -48,16 +49,9 @@ export function CopyPlaylistsModal({ targetTrack, onClose, onComplete, onError, 
 
     // Filter tracks for the picker (exclude the target track itself)
     const filteredTracks = useMemo(() => {
-        const term = searchTerm.toLowerCase().trim();
         return allTracks
             .filter(t => t.id !== targetTrack.id)
-            .filter(t => {
-                if (!term) return true;
-                const artist = (t.artist || '').toLowerCase();
-                const title = (t.title || '').toLowerCase();
-                const album = (t.album || '').toLowerCase();
-                return artist.includes(term) || title.includes(term) || album.includes(term);
-            })
+            .filter(t => matchesAllTokens(searchTerm, [t.title, t.artist, t.album]))
             .slice(0, 200); // Cap results for performance
     }, [allTracks, targetTrack.id, searchTerm]);
 

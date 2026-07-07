@@ -23,6 +23,7 @@
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
 
 ### Fixed
+- The Link to Local Track and Copy Playlists search boxes now match the library filter's behavior: each word matches independently across title, artist, and album, so e.g. "daft around" finds "Around the World" by Daft Punk (previously the whole query had to appear literally in one field).
 - Text fields no longer trigger macOS autocorrect, spell-check underlines, auto-capitalization, or autocomplete suggestions — search/filter bars, inline track editing (titles, artists, etc.), tag entry, and rename fields now take exactly what you type.
 - Spotify tracks are no longer falsely reported as "removed from Music.app": a startup migration was stamping them with a fake iTunes link, which made deletion detection offer to remove them from TagDeck. Existing affected tracks are healed automatically on next launch.
 - Tags no longer vanish after a Spotify track is matched to a purchased track: the merged tags are now pushed to Music.app (or flagged as a conflict when the sync mode doesn't allow pushing), so the next iTunes sync can't overwrite them with Music.app's stale copy of the comment.

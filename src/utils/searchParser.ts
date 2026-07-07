@@ -193,3 +193,16 @@ function parseNumericToken(field: NumericField, valueStr: string, query: SearchQ
         if (!isNaN(val)) query.numericFilters.push({ field, operator: '=', value: val });
     }
 }
+
+/**
+ * Tokenized free-text matching for the simple track pickers (Spotify link
+ * dialog, Copy Playlists). Mirrors the library filter's unquoted-token
+ * behavior: every whitespace-separated word must appear somewhere in the
+ * track's combined fields, so "part of title + part of artist" matches.
+ */
+export function matchesAllTokens(query: string, fields: (string | null | undefined)[]): boolean {
+  const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+  const haystack = fields.filter(Boolean).join(' ').toLowerCase();
+  return tokens.every(t => haystack.includes(t));
+}

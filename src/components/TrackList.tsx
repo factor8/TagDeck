@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { StarRating } from './StarRating';
-import { parseSearchQuery } from '../utils/searchParser';
+import { parseSearchQuery, matchesAllTokens } from '../utils/searchParser';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
@@ -2271,11 +2271,8 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
     }, [onClose]);
 
     const results = useMemo(() => {
-        const q = search.trim().toLowerCase();
         const candidates = tracks.filter(t => t.source !== 'spotify');
-        const filtered = q
-            ? candidates.filter(t => (t.artist || '').toLowerCase().includes(q) || (t.title || '').toLowerCase().includes(q))
-            : candidates;
+        const filtered = candidates.filter(t => matchesAllTokens(search, [t.title, t.artist, t.album]));
         return filtered.slice(0, 20);
     }, [tracks, search]);
 
@@ -2336,7 +2333,7 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
                     spellCheck={false}
                     value={search}
                     onChange={e => setSearch(e.target.value)}
-                    placeholder="Search by artist or title…"
+                    placeholder="Search by artist, title, or album…"
                     style={{ marginBottom: 8, padding: '6px 8px', borderRadius: 6, border: '1px solid var(--border-color)',
                              background: 'var(--bg-primary)', color: 'var(--text-primary)' }}
                 />
