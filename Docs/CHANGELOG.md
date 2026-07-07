@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Open in Spotify**: Spotify tracks show an external-link icon in the actions column (where local tracks have the Finder folder icon) that opens the song on open.spotify.com.
 - **⌘L — Link to local track**: with a Spotify track selected, press ⌘L to open the Link to Local Track picker (same as the right-click menu item, which now shows the shortcut).
 - **Spotify integration** (Settings → Spotify): import playlists selectively, tag Spotify tracks before you own the files, play them back via Spotify Connect, and automatically merge your tags into the file once you buy the track. Requires Spotify Premium.
 - **Unlink from Spotify**: right-click a wrongly matched track to undo its Spotify link — the Spotify-only entry reappears with its tags, rating, and playlist memberships, and the local track gets back the exact tags it had before the match.

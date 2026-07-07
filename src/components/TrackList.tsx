@@ -36,7 +36,8 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink } from 'lucide-react';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
 import { useToast } from './Toast';
@@ -1519,6 +1520,33 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         onMouseLeave={e => e.currentTarget.style.opacity = '0.5'}
                     >
                         <Folder size={16} />
+                    </button>
+                    )}
+                    {/* Ghosts have no file to reveal — offer the Spotify page instead. */}
+                    {row.original.source === 'spotify' && row.original.spotify_id && (
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            openUrl(`https://open.spotify.com/track/${row.original.spotify_id}`)
+                                .catch(err => console.error('Failed to open Spotify link:', err));
+                        }}
+                        title="Open in Spotify"
+                        style={{
+                            background: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            color: 'var(--text-secondary)',
+                            fontSize: '14px',
+                            opacity: 0.5,
+                            padding: '4px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={e => e.currentTarget.style.opacity = '0.5'}
+                    >
+                        <ExternalLink size={16} />
                     </button>
                     )}
                 </div>
