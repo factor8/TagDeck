@@ -460,6 +460,7 @@ const TrackRowContent = ({
         cursor: 'default',
         userSelect: 'none',
         WebkitUserSelect: 'none',
+        outline: 'none',
         position: 'relative',
         zIndex: isDragging ? 100 : 'auto',
         boxShadow: isDropAbove
@@ -530,6 +531,11 @@ const TrackRowContent = ({
             onDrop={onFileDrop ? handleFileDrop : undefined}
             {...attributes}
             {...wrappedListeners}
+            // dnd-kit's attributes make the row focusable (tabIndex 0, role
+            // button) for its keyboard sensor — which we don't use (pointer
+            // only). A clicked row would otherwise hold the browser focus
+            // ring after arrow keys move the app's own selection elsewhere.
+            tabIndex={-1}
         >
             {row.getVisibleCells().map(cell => (
                 <td 
