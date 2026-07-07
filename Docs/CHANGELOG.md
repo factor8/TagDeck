@@ -22,6 +22,7 @@
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
 
 ### Fixed
+- Spotify tracks are no longer falsely reported as "removed from Music.app": a startup migration was stamping them with a fake iTunes link, which made deletion detection offer to remove them from TagDeck. Existing affected tracks are healed automatically on next launch.
 - Tags no longer vanish after a Spotify track is matched to a purchased track: the merged tags are now pushed to Music.app (or flagged as a conflict when the sync mode doesn't allow pushing), so the next iTunes sync can't overwrite them with Music.app's stale copy of the comment.
 - Loading Spotify playlists no longer fails with "missing field `tracks`": the Spotify API now reports playlist track counts under `items` instead of `tracks`, and TagDeck accepts both (a playlist missing the count entirely shows 0 instead of failing the whole list).
 - Importing a Spotify playlist no longer produces an empty playlist: the same Spotify API rename also changed the per-row track wrapper from `track` to `item`, which TagDeck was silently skipping. Both names are accepted now — re-import any playlist that came in empty to backfill its tracks.

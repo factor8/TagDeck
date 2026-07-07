@@ -108,11 +108,16 @@ impl Database {
         // Identity decoupling: persistent_id is TagDeck's internal ID; itunes_pid is
         // the optional link to Music.app. Backfill assumes existing non-TD tracks
         // came from iTunes; the unlinked_at guard keeps unlinked tracks unlinked.
+        // Spotify ghosts (SP-…) must never be stamped: a bogus itunes_pid makes
+        // deletion detection report them as "removed from Music.app". (Can't
+        // guard on `source` here — that column is added further down, so it may
+        // not exist yet the first time this runs on an upgraded DB.)
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN itunes_pid TEXT", []);
         let _ = conn.execute("ALTER TABLE tracks ADD COLUMN unlinked_at INTEGER", []);
         let _ = conn.execute(
             "UPDATE tracks SET itunes_pid = persistent_id
-             WHERE itunes_pid IS NULL AND unlinked_at IS NULL AND persistent_id NOT LIKE 'TD-%'",
+             WHERE itunes_pid IS NULL AND unlinked_at IS NULL
+               AND persistent_id NOT LIKE 'TD-%' AND persistent_id NOT LIKE 'SP-%'",
             [],
         );
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_itunes_pid ON tracks(itunes_pid)", []);
@@ -129,6 +134,14 @@ impl Database {
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_spotify_id ON tracks(spotify_id)", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_playlist_id TEXT", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_snapshot_id TEXT", []);
+
+        // Heal ghosts already stamped with a bogus itunes_pid by the backfill
+        // above before it excluded SP-% (they showed up in Sync Review as
+        // "removed from Music.app").
+        let _ = conn.execute(
+            "UPDATE tracks SET itunes_pid = NULL WHERE source = 'spotify' AND itunes_pid IS NOT NULL",
+            [],
+        );
 
         // Pending-match queue: mid-confidence ghost/local pairs awaiting user
         // review before merge (see spotify::merge).
@@ -2003,6 +2016,35 @@ mod tests {
         // local tracks default to source='local'
         let all = db.get_all_tracks().unwrap();
         assert_eq!(all.len(), 1);
+    }
+
+    /// The every-startup itunes_pid backfill must never stamp a ghost
+    /// (SP-… persistent_id): a bogus pid makes deletion detection report
+    /// the ghost as "removed from Music.app". Also verifies the healing
+    /// migration clears pids already stamped by the old backfill.
+    #[test]
+    fn migrations_never_stamp_itunes_pid_on_ghosts() {
+        let path = std::env::temp_dir().join("tagdeck_ghost_pid_migration.db");
+        let _ = std::fs::remove_file(&path);
+
+        let db = Database::new(&path).unwrap();
+        let id = db.upsert_ghost_track("mig1", "u", "A", "T", "Al", 200.0).unwrap();
+        // Simulate a DB damaged by the old backfill.
+        let stamped_id = db.upsert_ghost_track("mig2", "u", "A", "T", "Al", 200.0).unwrap();
+        db.conn.execute(
+            "UPDATE tracks SET itunes_pid = persistent_id WHERE id = ?1",
+            params![stamped_id],
+        ).unwrap();
+        drop(db);
+
+        // Second launch: migrations re-run.
+        let db = Database::new(&path).unwrap();
+        for tid in [id, stamped_id] {
+            let t = db.get_track(tid).unwrap().unwrap();
+            assert_eq!(t.itunes_pid, None, "ghost {} must have no itunes_pid", t.persistent_id);
+        }
+        drop(db);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
