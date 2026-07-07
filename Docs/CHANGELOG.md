@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Find Library Matches**: right-click an imported Spotify playlist to scan its unmatched (Spotify-only) tracks against your local library — likely matches are queued in the match review panel for you to confirm or reject; nothing is ever merged automatically. Works offline and reports what it found in a toast.
 - **Open in Spotify**: Spotify tracks show an external-link icon in the actions column (where local tracks have the Finder folder icon) that jumps to the song in the Spotify app — highlighted, not auto-played.
 - **⌘L — Link to local track**: with a Spotify track selected, press ⌘L to open the Link to Local Track picker (same as the right-click menu item, which now shows the shortcut).
 - **Spotify integration** (Settings → Spotify): import playlists selectively, tag Spotify tracks before you own the files, play them back via Spotify Connect, and automatically merge your tags into the file once you buy the track. Requires Spotify Premium.
