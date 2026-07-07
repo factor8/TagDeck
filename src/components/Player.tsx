@@ -6,6 +6,7 @@ import WaveSurfer from 'wavesurfer.js';
 import { Play, Pause, Volume2, VolumeX, SkipBack, SkipForward, RotateCcw, RotateCw, Music, AlertTriangle } from 'lucide-react';
 import { useDebug } from './DebugContext';
 import { SpotifyPlayer } from './SpotifyPlayer';
+import { isTextEntryFocused } from '../utils/keyboard';
 import { playerStyles } from './playerStyles';
 
 function formatFileSize(bytes: number): string {
@@ -596,11 +597,10 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.code === 'Space') {
-                const activeTag = document.activeElement?.tagName.toLowerCase();
-                const isInput = activeTag === 'input' || activeTag === 'textarea' || (document.activeElement as HTMLElement).isContentEditable;
-                
-                if (!isInput) {
+            if (e.code === 'Space' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.repeat) {
+                // Only a real text-entry surface owns the spacebar — focused
+                // buttons/checkboxes/sliders don't block play/pause.
+                if (!isTextEntryFocused()) {
                     e.preventDefault();
                     togglePlayPause();
                 }

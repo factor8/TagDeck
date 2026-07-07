@@ -28,7 +28,5 @@
 - **Cmd + Enter**: Save changes (Single track mode)
 
 ## Player
-*(Coming Soon)*
-- **Space**: Play / Pause
-- **Left / Right**: Seek -5s / +5s
-- **Cmd + Left / Right**: Prev / Next Track
+- **Space**: Play / Pause — works anywhere in the app (local and Spotify tracks) unless you're typing in a text field
+- **Left / Right**: Previous / Next track (while a track is playing)

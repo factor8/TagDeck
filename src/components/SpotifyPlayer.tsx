@@ -3,6 +3,7 @@ import { Pause, Play, SkipBack, SkipForward, AudioLines } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { Track } from '../types';
 import { playerStyles } from './playerStyles';
+import { isTextEntryFocused } from '../utils/keyboard';
 
 // Keys that actually move a range input's value — the keyboard seek path.
 // Anything else (Tab, ⌘K, plain letters) must neither arm a scrub nor commit one.
@@ -105,6 +106,24 @@ export function SpotifyPlayer({ track, autoPlay, onAutoPlayProcessed, onNext, on
             else { await invoke('spotify_resume'); setIsPlaying(true); onPlayStateChange?.(true); }
         } catch (e) { setError(String(e)); }
     };
+
+    // Space toggles play/pause, same as the local player. Via a ref because
+    // togglePlay closes over isPlaying and is recreated every render — the
+    // listener itself binds once.
+    const togglePlayRef = useRef(togglePlay);
+    useEffect(() => { togglePlayRef.current = togglePlay; });
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.code === 'Space' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.repeat) {
+                if (!isTextEntryFocused()) {
+                    e.preventDefault();
+                    togglePlayRef.current();
+                }
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
 
     // Dragging (or arrow-keying) the seek handle must not fire a network call
     // per tick — onChange only updates local UI while scrubbing; the actual
