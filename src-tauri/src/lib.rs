@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod commands;
 pub mod apple_music;
 pub mod db;

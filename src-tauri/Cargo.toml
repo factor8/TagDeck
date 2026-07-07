@@ -33,9 +33,16 @@ notify = "8.0.0"
 dirs = "6.0.0"
 sha2 = "0.10"
 tauri-plugin-drag = "2.1.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 keyring = { version = "3", features = ["apple-native"] }
 base64 = "0.22"
 rand = "0.8"
 tokio = { version = "1", features = ["time"] }
+symphonia = { version = "0.6.0", default-features = false, features = ["mp3", "aac", "alac", "flac", "pcm", "isomp4", "wav", "aiff"] }
+rubato = "0.16"
+rustfft = "6"
+ndarray = "0.16"
+futures-util = "0.3"
+ort = { version = "2.0.0-rc.10", features = ["download-binaries", "ndarray"] }
+tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
 
