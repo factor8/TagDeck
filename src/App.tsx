@@ -22,6 +22,7 @@ import { SyncReviewModal, SyncPreview, RemovedTrack, AppliedSummary } from './co
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
 import { useDebug } from './components/DebugContext';
+import { usePlayQueue } from './hooks/usePlayQueue';
 
 function App() {
   const { showSuccess, showError, showToast } = useToast();
@@ -76,6 +77,7 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
+  const playQueue = usePlayQueue();
 
   useEffect(() => {
     const handlePlayerModeChange = () => {
@@ -138,6 +140,39 @@ function App() {
     // No recorded sync yet — default to 30 days ago.
     return Math.floor(Date.now() / 1000) - 30 * 24 * 3600;
   }, []);
+
+  // Advance playback: manual queue first, then fall through to the tracklist.
+  const handleNextTrack = useCallback(() => {
+    const queued = playQueue.popNext();
+    if (queued) {
+        setPlayingTrack(queued);
+        setShouldAutoPlay(true);
+        return;
+    }
+    if (playingTrack) {
+        const next = trackListRef.current?.getNextTrack(playingTrack.id);
+        if (next) {
+            setPlayingTrack(next);
+            setShouldAutoPlay(true);
+        }
+    }
+  }, [playQueue.popNext, playingTrack]);
+
+  const handlePlayNext = useCallback((tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    playQueue.playNext(tracks);
+    showSuccess(tracks.length === 1
+        ? `"${tracks[0].title ?? 'Track'}" will play next`
+        : `${tracks.length} tracks will play next`);
+  }, [playQueue.playNext, showSuccess]);
+
+  const handlePlayLater = useCallback((tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    playQueue.playLater(tracks);
+    showSuccess(tracks.length === 1
+        ? `Added "${tracks[0].title ?? 'Track'}" to queue`
+        : `Added ${tracks.length} tracks to queue`);
+  }, [playQueue.playLater, showSuccess]);
 
   const hasAnySyncChanges = (preview: SyncPreview) =>
     preview.added.length > 0 ||
@@ -611,13 +646,9 @@ function App() {
                 return;
             }
             if (e.key === 'ArrowRight') {
-                if (playingTrack) {
+                if (playingTrack || playQueue.queue.length > 0) {
                     e.preventDefault();
-                    const next = trackListRef.current?.getNextTrack(playingTrack.id);
-                    if (next) {
-                        setPlayingTrack(next);
-                        setShouldAutoPlay(true);
-                    }
+                    handleNextTrack();
                     return;
                 }
             }
@@ -631,6 +662,20 @@ function App() {
                     }
                     return;
                 }
+            }
+
+            // Q / ⇧Q — queue the selected tracks (Play Later / Play Next)
+            if (e.key.toLowerCase() === 'q' && !e.repeat) {
+                const selected = trackListRef.current?.getSelectedTracks() ?? [];
+                if (selected.length > 0) {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        handlePlayNext(selected);
+                    } else {
+                        handlePlayLater(selected);
+                    }
+                }
+                return;
             }
         }
 
@@ -672,7 +717,7 @@ function App() {
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [showSuccess, showError, playingTrack]);
+  }, [showSuccess, showError, playingTrack, handleNextTrack, handlePlayNext, handlePlayLater, playQueue.queue.length]);
 
   useEffect(() => {
     const handleLogsSnapshot = (e: KeyboardEvent) => {
@@ -1150,6 +1195,8 @@ function App() {
               scrollToTrackId={scrollToTrackId}
               onScrollToTrackComplete={() => setScrollToTrackId(null)}
               onFileDrop={selectedPlaylistId != null ? handleTrackListFileDrop : undefined}
+              onPlayNext={handlePlayNext}
+              onPlayLater={handlePlayLater}
             />
             </div>
         </Panel>
@@ -1210,15 +1257,7 @@ function App() {
         playlistId={playingPlaylistId}
         playlistName={playingPlaylistId ? playlistNames.get(playingPlaylistId) : undefined}
         onPlaylistClick={() => setSelectedPlaylistId(playingPlaylistId)}
-        onNext={() => {
-             if (playingTrack) {
-                 const next = trackListRef.current?.getNextTrack(playingTrack.id);
-                 if (next) {
-                     setPlayingTrack(next);
-                     setShouldAutoPlay(true);
-                 }
-             }
-        }}
+        onNext={handleNextTrack}
         onPrev={() => {
             if (playingTrack) {
                 const prev = trackListRef.current?.getPrevTrack(playingTrack.id);
