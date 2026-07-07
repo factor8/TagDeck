@@ -178,6 +178,17 @@ impl Database {
             [],
         );
 
+        // Play queue: the user's manual "play next" overlay. `position` is a
+        // plain ordering column; the whole table is rewritten on every queue
+        // change (queues are tiny), so no incremental updates are needed.
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS play_queue (
+                position INTEGER PRIMARY KEY,
+                track_id INTEGER NOT NULL
+            )",
+            [],
+        );
+
         // One-time backfill for per-playlist sync: playlists that came from
         // iTunes keep syncing by default; TagDeck-native ones stay local-only.
         let backfill_done = conn
@@ -1073,6 +1084,65 @@ impl Database {
             tracks.push(track?);
         }
         Ok(tracks)
+    }
+
+    /// Returns the persisted play queue in order. Queue entries whose track
+    /// no longer exists in the library are silently dropped.
+    pub fn get_play_queue(&self) -> Result<Vec<crate::models::Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.persistent_id, t.file_path, t.artist, t.title, t.album,
+             t.comment_raw, t.grouping_raw, t.duration_secs, t.format, t.size_bytes, t.bit_rate, t.modified_date,
+             t.rating, t.date_added, t.bpm, t.missing, t.itunes_pid, t.unlinked_at, t.source, t.spotify_id
+             FROM play_queue q JOIN tracks t ON t.id = q.track_id
+             ORDER BY q.position",
+        )?;
+
+        let track_iter = stmt.query_map([], |row| {
+            Ok(crate::models::Track {
+                id: row.get(0)?,
+                persistent_id: row.get(1)?,
+                file_path: row.get(2)?,
+                artist: row.get(3)?,
+                title: row.get(4)?,
+                album: row.get(5)?,
+                comment_raw: row.get(6)?,
+                grouping_raw: row.get(7)?,
+                duration_secs: row.get(8)?,
+                format: row.get(9)?,
+                size_bytes: row.get(10)?,
+                bit_rate: row.get(11)?,
+                modified_date: row.get(12)?,
+                rating: row.get(13)?,
+                date_added: row.get(14)?,
+                bpm: row.get(15)?,
+                missing: row.get(16).unwrap_or(false),
+                itunes_pid: row.get(17).unwrap_or(None),
+                unlinked_at: row.get(18).unwrap_or(None),
+                source: row.get(19).unwrap_or_else(|_| "local".to_string()),
+                spotify_id: row.get(20).unwrap_or(None),
+            })
+        })?;
+
+        let mut tracks = Vec::new();
+        for track in track_iter {
+            tracks.push(track?);
+        }
+        Ok(tracks)
+    }
+
+    /// Replaces the persisted play queue with `track_ids` in order, in one
+    /// transaction. Duplicate ids are allowed (queueing a song twice is fine).
+    pub fn set_play_queue(&self, track_ids: &[i64]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM play_queue", [])?;
+        {
+            let mut stmt = tx.prepare("INSERT INTO play_queue (position, track_id) VALUES (?1, ?2)")?;
+            for (i, tid) in track_ids.iter().enumerate() {
+                stmt.execute(params![i as i64, tid])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn remove_track_from_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
@@ -2003,6 +2073,29 @@ mod tests {
             source: "spotify".into(),
             spotify_id: Some(spotify_id.to_string()),
         }
+    }
+
+    #[test]
+    fn play_queue_roundtrip_preserves_order_and_duplicates() {
+        let db = Database::new(":memory:").unwrap();
+        let a = db.insert_imported_track(&ghost("pq-a"), None, None).unwrap();
+        let b = db.insert_imported_track(&ghost("pq-b"), None, None).unwrap();
+        db.set_play_queue(&[b, a, b]).unwrap();
+        let q = db.get_play_queue().unwrap();
+        assert_eq!(q.iter().map(|t| t.id).collect::<Vec<_>>(), vec![b, a, b]);
+    }
+
+    #[test]
+    fn play_queue_set_replaces_and_drops_missing_ids() {
+        let db = Database::new(":memory:").unwrap();
+        let a = db.insert_imported_track(&ghost("pq-c"), None, None).unwrap();
+        // Unknown track ids are persisted but silently dropped on read.
+        db.set_play_queue(&[a, 99_999]).unwrap();
+        let q = db.get_play_queue().unwrap();
+        assert_eq!(q.iter().map(|t| t.id).collect::<Vec<_>>(), vec![a]);
+        // set_play_queue fully replaces the previous queue.
+        db.set_play_queue(&[]).unwrap();
+        assert!(db.get_play_queue().unwrap().is_empty());
     }
 
     #[test]

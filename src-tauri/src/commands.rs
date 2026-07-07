@@ -80,8 +80,26 @@ pub async fn get_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String
         .lock()
         .map_err(|_| "Failed to lock DB".to_string())?;
     let tracks = db.get_all_tracks().map_err(|e| e.to_string())?;
-    
+
     Ok(tracks)
+}
+
+#[tauri::command]
+pub async fn get_play_queue(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| "Failed to lock DB".to_string())?;
+    db.get_play_queue().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_play_queue(track_ids: Vec<i64>, state: State<'_, AppState>) -> Result<(), String> {
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| "Failed to lock DB".to_string())?;
+    db.set_play_queue(&track_ids).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

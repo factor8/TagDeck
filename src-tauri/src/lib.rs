@@ -148,6 +148,8 @@ pub fn run() {
             toggle_logs::toggle_logs,
             commands::import_library,
             commands::get_tracks,
+            commands::get_play_queue,
+            commands::set_play_queue,
             commands::get_global_tags,
             commands::show_in_finder,
             commands::analyze_with_mixed_in_key,
