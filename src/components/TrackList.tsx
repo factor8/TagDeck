@@ -1522,12 +1522,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         <Folder size={16} />
                     </button>
                     )}
-                    {/* Ghosts have no file to reveal — offer the Spotify page instead. */}
+                    {/* Ghosts have no file to reveal — jump to the track in the Spotify app
+                        instead. The spotify: URI (not open.spotify.com) is deliberate: the web
+                        player autoplays the song on load, the app just highlights it. */}
                     {row.original.source === 'spotify' && row.original.spotify_id && (
                     <button
                         onClick={(e) => {
                             e.stopPropagation();
-                            openUrl(`https://open.spotify.com/track/${row.original.spotify_id}`)
+                            openUrl(`spotify:track:${row.original.spotify_id}`)
                                 .catch(err => console.error('Failed to open Spotify link:', err));
                         }}
                         title="Open in Spotify"

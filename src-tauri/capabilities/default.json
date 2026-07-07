@@ -9,6 +9,12 @@
   "permissions": [
     "core:default",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "spotify:*" }
+      ]
+    },
     "dialog:default",
     "drag:default",
     "fs:default",
