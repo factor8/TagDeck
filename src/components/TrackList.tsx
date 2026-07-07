@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
@@ -60,6 +60,10 @@ interface Props {
     onScrollToTrackComplete?: () => void;
     /** Called when files from the OS are dropped onto a specific row position. */
     onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
+    /** Insert tracks at the front of the manual play queue (plays right after the current song). */
+    onPlayNext?: (tracks: Track[]) => void;
+    /** Append tracks to the end of the manual play queue. */
+    onPlayLater?: (tracks: Track[]) => void;
 }
 
 interface ContextMenuState {
@@ -239,6 +243,10 @@ export interface TrackListHandle {
     handleReorderDragEnd: (event: DragEndEvent) => void;
     /** Returns current visible track IDs in display order. Used for post-import reorder. */
     getOrderedTrackIds: () => number[];
+    /** Selected tracks in current visible row order. Used by the Q/⇧Q queue hotkeys. */
+    getSelectedTracks: () => Track[];
+    /** The next `limit` visible tracks after `fromId` (top of list when null). Feeds the Queue pane's "Next up" section. */
+    getUpcomingTracks: (fromId: number | null, limit: number) => Track[];
 }
 
 interface TrackRowProps {
@@ -723,7 +731,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater }, ref) => {
     const { debugMode } = useDebug();
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
@@ -1688,6 +1696,13 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         }
     }, [scrollToTrackId, rows, rowVirtualizer, onScrollToTrackComplete]);
 
+    // Tracks a context-menu/queue action applies to: the whole selection (in
+    // visible row order) when the right-clicked row is part of it, else just that row.
+    const getActionTracks = (track: Track): Track[] =>
+        selectedTrackIds.has(track.id)
+            ? rows.filter(r => selectedTrackIds.has(r.original.id)).map(r => r.original)
+            : [track];
+
     useImperativeHandle(ref, () => ({
         selectNext: () => {
             const currentIndex = rows.findIndex(r => r.original.id === lastSelectedTrackId);
@@ -1749,6 +1764,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             handleReorderDragEnd(event);
         },
         getOrderedTrackIds: () => rows.map(r => r.original.id),
+        getSelectedTracks: () =>
+            rows.filter(r => selectedTrackIds.has(r.original.id)).map(r => r.original),
+        getUpcomingTracks: (fromId: number | null, limit: number) => {
+            if (fromId === null) return rows.slice(0, limit).map(r => r.original);
+            const currentIndex = rows.findIndex(r => r.original.id === fromId);
+            if (currentIndex === -1) return [];
+            return rows.slice(currentIndex + 1, currentIndex + 1 + limit).map(r => r.original);
+        },
     }));
 
     return (
@@ -2074,6 +2097,37 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             top: Math.min(contextMenu.y, window.innerHeight - 200),
                         }}
                     >
+                        <div
+                            className="context-menu-item"
+                            onClick={() => {
+                                onPlayNext?.(getActionTracks(contextMenu.track));
+                                setContextMenu(null);
+                            }}
+                        >
+                            <ListStart size={14} className="context-menu-icon" />
+                            <span>
+                                {selectedTrackIds.has(contextMenu.track.id) && selectedTrackIds.size > 1
+                                    ? `Play Next (${selectedTrackIds.size} tracks)`
+                                    : 'Play Next'}
+                            </span>
+                            <span style={{ marginLeft: 'auto', fontSize: '11px', opacity: 0.6 }}>⇧Q</span>
+                        </div>
+                        <div
+                            className="context-menu-item"
+                            onClick={() => {
+                                onPlayLater?.(getActionTracks(contextMenu.track));
+                                setContextMenu(null);
+                            }}
+                        >
+                            <ListEnd size={14} className="context-menu-icon" />
+                            <span>
+                                {selectedTrackIds.has(contextMenu.track.id) && selectedTrackIds.size > 1
+                                    ? `Play Later (${selectedTrackIds.size} tracks)`
+                                    : 'Play Later'}
+                            </span>
+                            <span style={{ marginLeft: 'auto', fontSize: '11px', opacity: 0.6 }}>Q</span>
+                        </div>
+                        <div className="context-menu-separator" />
                         {contextMenu.track.source !== 'spotify' && (
                         <div
                             className="context-menu-item"
