@@ -19,11 +19,14 @@ export function usePlayQueue() {
     useEffect(() => {
         invoke<Track[]>('get_play_queue')
             .then(q => {
-                setQueue(q);
-                loadedRef.current = true;
+                // If the user queued something before the load resolved, keep
+                // their state instead of clobbering it with the persisted
+                // snapshot. Copy it so the persist effect (armed below via
+                // loadedRef) re-fires and writes the kept mutation to the DB.
+                setQueue(prev => (prev.length > 0 ? [...prev] : q));
             })
-            .catch(err => {
-                console.error('Failed to load play queue:', err);
+            .catch(err => console.error('Failed to load play queue:', err))
+            .finally(() => {
                 loadedRef.current = true;
             });
     }, []);
