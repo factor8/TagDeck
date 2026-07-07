@@ -1,5 +1,5 @@
-import { readFile } from '@tauri-apps/plugin-fs';
-import { invoke } from '@tauri-apps/api/core';
+import { stat } from '@tauri-apps/plugin-fs';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { Track } from '../types';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import WaveSurfer from 'wavesurfer.js';
@@ -21,18 +21,6 @@ function formatTime(seconds: number): string {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
-
-function getMimeType(format: string): string {
-    switch (format?.toLowerCase()) {
-        case 'mp3': return 'audio/mpeg';
-        case 'm4a': case 'aac': return 'audio/mp4';
-        case 'wav': return 'audio/wav';
-        case 'aiff': case 'aif': return 'audio/aiff';
-        case 'flac': return 'audio/flac';
-        case 'ogg': return 'audio/ogg';
-        default: return 'audio/mpeg';
-    }
 }
 
 interface Props {
@@ -97,16 +85,16 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
     const wavesurferRef = useRef<WaveSurfer | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [currentUrl, setCurrentUrl] = useState<string | null>(null);
     const [isMuted, setIsMuted] = useState(false);
     const [volume, setVolume] = useState(1);
     const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
     const [usingMediaFallback, setUsingMediaFallback] = useState(false);
-    const [fallbackProgress, setFallbackProgress] = useState(0);
-    const [fallbackDuration, setFallbackDuration] = useState(0);
-    const [fallbackCurrentTime, setFallbackCurrentTime] = useState(0);
+    const [waveformRevealed, setWaveformRevealed] = useState(false);
+    const [showRemaining, setShowRemaining] = useState(() => localStorage.getItem('app_time_display') === 'remaining');
+    const [playbackProgress, setPlaybackProgress] = useState(0);
+    const [playbackDuration, setPlaybackDuration] = useState(0);
+    const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
     const mediaElementRef = useRef<HTMLAudioElement | null>(null);
-    const fallbackInProgressRef = useRef(false);
     const userPausedRef = useRef(false);
     const prevPlayerModeRef = useRef(playerMode);
     const [reloadCounter, setReloadCounter] = useState(0);
@@ -152,6 +140,19 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         }
     }, [error]);
 
+    // Helper: dispose the current <audio> element without firing a spurious
+    // error — setting src = '' makes WebKit emit MEDIA_ERR_SRC_NOT_SUPPORTED
+    // (code 4) on the discarded element; removing the attribute doesn't.
+    const disposeMediaElement = useCallback(() => {
+        const el = mediaElementRef.current;
+        if (el) {
+            el.pause();
+            el.removeAttribute('src');
+            try { el.load(); } catch (_) { /* ignore */ }
+            mediaElementRef.current = null;
+        }
+    }, []);
+
     // Cleanup on unmount: destroy any active WaveSurfer and audio element
     useEffect(() => {
         return () => {
@@ -159,16 +160,14 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                 try { wavesurferRef.current.destroy(); } catch (_) { /* ignore */ }
                 wavesurferRef.current = null;
             }
-            if (mediaElementRef.current) {
-                mediaElementRef.current.pause();
-                mediaElementRef.current.src = '';
-                mediaElementRef.current = null;
-            }
+            disposeMediaElement();
         };
-    }, []);
+    }, [disposeMediaElement]);
 
     // Update WaveSurfer colors when accent/theme changes
+    const accentColorRef = useRef(accentColor);
     useEffect(() => {
+        accentColorRef.current = accentColor;
         if (wavesurferRef.current) {
             wavesurferRef.current.setOptions({
                 progressColor: accentColor
@@ -196,59 +195,32 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         setWavesurfer(ws);
     }, []);
 
-    // Helper: create a standard WaveSurfer with all event listeners
-    const createStandardWaveSurfer = useCallback(() => {
+    // Helper: create a media-element-backed WaveSurfer. Playback streams through
+    // the <audio> element and starts on 'canplay' — never gated on waveform decode.
+    // When showWaveform is true the canvas is visible and WaveSurfer decodes peaks
+    // in the background; when false (standard mode) the canvas is hidden (height: 0)
+    // and only the scrub bar overlay shows.
+    const createMediaWaveSurfer = useCallback((audioEl: HTMLAudioElement, showWaveform: boolean) => {
         if (!waveformRef.current) return null;
         const ws = WaveSurfer.create({
             container: waveformRef.current,
-            waveColor: '#475569',
-            progressColor: accentColor,
-            cursorColor: '#f1f5f9',
-            barWidth: 2,
-            barGap: 1,
-            barRadius: 2,
-            height: 40,
+            ...(showWaveform ? {
+                waveColor: '#475569',
+                progressColor: accentColorRef.current,
+                cursorColor: '#f1f5f9',
+                barWidth: 2,
+                barGap: 1,
+                barRadius: 2,
+                height: 40,
+                interact: true,
+            } : {
+                waveColor: 'transparent',
+                progressColor: 'transparent',
+                cursorColor: 'transparent',
+                height: 0,
+                interact: false, // scrub bar handles interaction
+            }),
             normalize: true,
-            interact: true,
-        });
-        ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
-        ws.on('pause', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); });
-        ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
-        ws.on('ready', () => { 
-            // Restore saved playback state if available
-            if (savedPlaybackStateRef.current) {
-                const { position, wasPlaying } = savedPlaybackStateRef.current;
-                console.log(`[Player] Restoring playback state: position=${position.toFixed(2)}s, wasPlaying=${wasPlaying}`);
-                ws.seekTo(position / ws.getDuration());
-                if (wasPlaying) {
-                    ws.play().catch(() => {});
-                }
-                savedPlaybackStateRef.current = null;
-            } else if (autoPlayRef.current) { 
-                ws.play().catch(() => {}); 
-            }
-            // Notify parent that autoplay has been processed
-            if (autoPlayRef.current) {
-                onAutoPlayProcessedRef.current?.();
-            }
-        });
-        // Don't set error toast from WaveSurfer's error event — loadAudio handles errors
-        ws.on('error', (err: any) => { console.warn('WaveSurfer error event (handled by loadAudio):', err); });
-        return ws;
-    }, [accentColor]);
-
-    // Helper: create a MediaElement-backed WaveSurfer (used in standard mode and as fallback)
-    // In standard mode, the waveform canvas is hidden (height: 0) — only the scrub bar overlay shows.
-    const createFallbackWaveSurfer = useCallback((audioEl: HTMLAudioElement) => {
-        if (!waveformRef.current) return null;
-        const ws = WaveSurfer.create({
-            container: waveformRef.current,
-            waveColor: 'transparent',
-            progressColor: 'transparent',
-            cursorColor: 'transparent',
-            height: 0,
-            normalize: true,
-            interact: false, // scrub bar handles interaction
             media: audioEl,
         });
         ws.on('play', () => { setIsPlaying(true); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(true); });
@@ -256,21 +228,31 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         ws.on('finish', () => { setIsPlaying(false); if (onPlayStateChangeRef.current) onPlayStateChangeRef.current(false); if (onNextRef.current) onNextRef.current(); });
         ws.on('timeupdate', (currentTime: number) => {
             const dur = ws.getDuration();
-            setFallbackCurrentTime(currentTime);
-            setFallbackDuration(dur);
-            setFallbackProgress(dur > 0 ? currentTime / dur : 0);
+            setPlaybackCurrentTime(currentTime);
+            setPlaybackDuration(dur);
+            setPlaybackProgress(dur > 0 ? currentTime / dur : 0);
         });
-        // WaveSurfer may still attempt a Web Audio decode for waveform rendering,
-        // which will fail (that's why we're in fallback). Suppress — playback
-        // goes through the <audio> element and works fine.
-        ws.on('error', (fallbackErr: any) => {
-            console.warn('Fallback WaveSurfer waveform decode error (expected, playback unaffected):', fallbackErr);
+        if (showWaveform) {
+            // Peaks are decoded — roll the waveform out left to right
+            ws.on('ready', () => setWaveformRevealed(true));
+        }
+        // The background peaks decode can fail (e.g. ALAC — Web Audio can't decode
+        // it) while the <audio> element still plays natively. Playback is
+        // unaffected; in waveform mode drop to the scrub-bar UI.
+        ws.on('error', (decodeErr: any) => {
+            if (showWaveform) {
+                console.warn('Waveform decode failed (playback unaffected), using scrub bar:', decodeErr);
+                invoke('log_from_frontend', { level: 'WARN', message: `Waveform decode failed, using scrub bar: ${decodeErr}` }).catch(console.error);
+                setUsingMediaFallback(true);
+            } else {
+                console.warn('Hidden waveform decode error (playback unaffected):', decodeErr);
+            }
         });
 
-        // Drive playback from the <audio> element directly — WaveSurfer's 'ready'
-        // event is unreliable when the waveform decode fails.
+        // Drive playback from the <audio> element directly — never wait for
+        // WaveSurfer's 'ready' (that's the waveform decode, not the audio).
         const startPlayback = () => {
-            setFallbackDuration(audioEl.duration || 0);
+            setPlaybackDuration(audioEl.duration || 0);
             
             // Restore saved playback state if available
             if (savedPlaybackStateRef.current) {
@@ -301,7 +283,7 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         }
 
         return ws;
-    }, []); // No deps — standard mode hides the waveform canvas, no accentColor needed
+    }, []); // No deps — accent color is read via ref so instances aren't recreated on theme change
 
 
     // When playerMode changes, force-reload the current track
@@ -324,40 +306,31 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                 }
 
                 // Stop current playback and clean up
-                if (mediaElementRef.current) {
-                    mediaElementRef.current.pause();
-                    mediaElementRef.current.src = '';
-                    mediaElementRef.current = null;
-                }
+                disposeMediaElement();
                 destroyCurrentWaveSurfer();
                 setIsPlaying(false);
                 setUsingMediaFallback(false);
-                setFallbackProgress(0);
-                setFallbackDuration(0);
-                setFallbackCurrentTime(0);
+                setPlaybackProgress(0);
+                setPlaybackDuration(0);
+                setPlaybackCurrentTime(0);
                 // Reset the track ID ref so the load effect treats this as a new track
                 prevTrackIdRef.current = null;
                 // Bump counter to force the load effect to re-run
                 setReloadCounter(c => c + 1);
             }
         }
-    }, [playerMode, track, destroyCurrentWaveSurfer]);
+    }, [playerMode, track, destroyCurrentWaveSurfer, disposeMediaElement]);
 
     // Load audio when track changes
     useEffect(() => {
         // If track is null, clear player
         if (!track) {
-            setCurrentUrl(null);
             prevTrackIdRef.current = null;
             if (wavesurferRef.current) {
                 try { wavesurferRef.current.stop(); } catch (_) { /* ignore */ }
             }
             // Also stop any orphaned <audio> element
-            if (mediaElementRef.current) {
-                mediaElementRef.current.pause();
-                mediaElementRef.current.src = '';
-                mediaElementRef.current = null;
-            }
+            disposeMediaElement();
             return;
         }
 
@@ -373,148 +346,60 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
             const useWaveform = playerModeRef.current === 'waveform';
 
             // Clean up everything from previous track
-            if (mediaElementRef.current) {
-                mediaElementRef.current.pause();
-                mediaElementRef.current.src = '';
-                mediaElementRef.current = null;
-            }
-            setFallbackProgress(0);
-            setFallbackDuration(0);
-            setFallbackCurrentTime(0);
-            fallbackInProgressRef.current = false;
+            disposeMediaElement();
+            setPlaybackProgress(0);
+            setPlaybackDuration(0);
+            setPlaybackCurrentTime(0);
+            setWaveformRevealed(false);
 
             // Destroy previous WaveSurfer and clear container DOM
             destroyCurrentWaveSurfer();
-            
-            // --- Standard mode: MediaElement path (instant playback) ---
-            const loadAudioStandard = async () => {
-                const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
-                try {
-                    console.log(`[Standard] Reading file: ${track.file_path}`);
-                    const contents = await readFile(track.file_path);
-                    const mimeType = getMimeType(track.format);
-                    const blob = new Blob([contents], { type: mimeType });
-                    const blobUrl = URL.createObjectURL(blob);
 
-                    const audioEl = new Audio();
-                    audioEl.src = blobUrl;
-                    mediaElementRef.current = audioEl;
+            // Stream directly from disk via the asset protocol — no full-file
+            // read into memory before playback can start. Both modes share the
+            // media-element path; waveform mode just shows the canvas and lets
+            // peaks decode in the background.
+            const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
+            const assetUrl = convertFileSrc(track.file_path);
 
-                    const ws = createFallbackWaveSurfer(audioEl);
-                    if (!ws) {
-                        setError('Playback Error: Could not create player.');
-                        return;
-                    }
+            const audioEl = new Audio();
+            audioEl.preload = 'auto';
+            audioEl.src = assetUrl;
+            mediaElementRef.current = audioEl;
 
-                    setCurrentUrl(blobUrl);
-                    setUsingMediaFallback(true);
-                    setActiveWaveSurfer(ws);
-
-                    console.log(`[Standard] Loaded: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
-                } catch (err) {
-                    const errStr = String(err);
-                    console.error(`Error loading ${trackLabel}:`, err);
-                    setError(`Failed to load audio: ${errStr}`);
-                    invoke('log_from_frontend', {
-                        level: 'ERROR',
-                        message: `Audio load failed — ${trackLabel} | Format: ${track.format} | Path: ${track.file_path} | Error: ${errStr}`
-                    }).catch(console.error);
-
+            // Load failures now surface on the element instead of a readFile
+            // throw — distinguish a missing file from an undecodable one.
+            audioEl.addEventListener('error', async () => {
+                // Stale element (track switched / disposed mid-load) — not the
+                // one currently playing, so its errors are meaningless.
+                if (mediaElementRef.current !== audioEl) return;
+                const mediaErr = audioEl.error;
+                const errStr = `MediaError code=${mediaErr?.code ?? '?'} ${mediaErr?.message ?? ''}`.trim();
+                console.error(`Error loading ${trackLabel}:`, errStr);
+                let fileMissing = false;
+                try { await stat(track.file_path); } catch { fileMissing = true; }
+                setError(`Failed to load audio: ${errStr}`);
+                invoke('log_from_frontend', {
+                    level: 'ERROR',
+                    message: `Audio load failed — ${trackLabel} | Format: ${track.format} | Path: ${track.file_path} | Error: ${errStr}${fileMissing ? ' (file missing)' : ''}`
+                }).catch(console.error);
+                if (fileMissing) {
                     invoke('mark_track_missing', { id: track.id, missing: true })
                         .then(() => { onTrackError?.(); })
                         .catch(e => console.error("Failed to mark track missing:", e));
                 }
-            };
+            }, { once: true });
 
-            // --- Waveform mode: full decode path ---
-            const loadAudioWaveform = async () => {
-                const trackLabel = `${track.artist || 'Unknown'} — ${track.title || 'Unknown'}`;
-                try {
-                    console.log('[Waveform] Reading file:', track.file_path);
-                    const contents = await readFile(track.file_path);
-                    const mimeType = getMimeType(track.format);
-                    
-                    const blob = new Blob([contents], { type: mimeType });
-                    const blobUrl = URL.createObjectURL(blob);
-                    
-                    console.log(`[Waveform] Loading audio: ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
-
-                    const ws = createStandardWaveSurfer();
-                    if (!ws) return;
-
-                    setCurrentUrl(blobUrl);
-                    setUsingMediaFallback(false);
-                    setActiveWaveSurfer(ws);
-                    
-                    await ws.load(blobUrl);
-                    
-                } catch (err) {
-                    const errStr = String(err);
-                    const isDecodeError = errStr.includes('EncodingError') || 
-                                          errStr.includes('Decoding failed') ||
-                                          errStr.includes('Unable to decode');
-
-                    if (isDecodeError) {
-                        // Fall back to MediaElement (same as standard mode)
-                        const msg = `Web Audio decode failed for ${trackLabel} (${track.format}). Switching to native decoder...`;
-                        console.warn(msg);
-                        invoke('log_from_frontend', { level: 'WARN', message: msg }).catch(console.error);
-
-                        try {
-                            const contents = await readFile(track.file_path);
-                            const mimeType = getMimeType(track.format);
-                            const blob = new Blob([contents], { type: mimeType });
-                            const blobUrl = URL.createObjectURL(blob);
-
-                            const audioEl = new Audio();
-                            audioEl.src = blobUrl;
-                            mediaElementRef.current = audioEl;
-
-                            // Destroy the failed waveform WaveSurfer
-                            destroyCurrentWaveSurfer();
-
-                            const fallbackWs = createFallbackWaveSurfer(audioEl);
-                            if (!fallbackWs) {
-                                setError('Playback Error: Could not create fallback player.');
-                                return;
-                            }
-
-                            setCurrentUrl(blobUrl);
-                            setUsingMediaFallback(true);
-                            setActiveWaveSurfer(fallbackWs);
-
-                            invoke('log_from_frontend', { level: 'INFO', message: `MediaElement fallback loaded for: ${track.title}` }).catch(console.error);
-                        } catch (fallbackErr) {
-                            console.error('MediaElement fallback failed:', fallbackErr);
-                            invoke('log_from_frontend', { level: 'ERROR', message: `MediaElement fallback failed for ${trackLabel}: ${fallbackErr}` }).catch(console.error);
-                            setError('Playback Error: Could not load audio file.');
-                        }
-                    } else {
-                        const errorMessage = `Failed to load audio: ${errStr}`;
-                        console.error(`Error loading ${trackLabel}:`, err);
-                        setError(errorMessage);
-
-                        invoke('log_from_frontend', { 
-                            level: 'ERROR', 
-                            message: `Audio load failed — ${trackLabel} | Format: ${track.format} | Path: ${track.file_path} | Error: ${errStr}` 
-                        }).catch(console.error);
-                        
-                        invoke('mark_track_missing', { id: track.id, missing: true })
-                            .then(() => {
-                                console.log(`Marked track ${track.id} as missing`);
-                                onTrackError?.();
-                            })
-                            .catch(e => console.error("Failed to mark track missing:", e));
-                    }
-                }
-            };
-
-            // Dispatch based on player mode
-            if (useWaveform) {
-                loadAudioWaveform();
-            } else {
-                loadAudioStandard();
+            const ws = createMediaWaveSurfer(audioEl, useWaveform);
+            if (!ws) {
+                setError('Playback Error: Could not create player.');
+                return;
             }
+
+            setUsingMediaFallback(!useWaveform);
+            setActiveWaveSurfer(ws);
+
+            console.log(`[Player] Streaming (${useWaveform ? 'waveform' : 'standard'}): ${trackLabel} (${track.format}, ${formatFileSize(track.size_bytes)})`);
         } else {
              // Exact same track ID. Handle "AutoPlay on existing track" (e.g. double click trigger)
              if (autoPlay) {
@@ -532,17 +417,7 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         }
         
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [track, autoPlay, reloadCounter, createStandardWaveSurfer, createFallbackWaveSurfer, destroyCurrentWaveSurfer, setActiveWaveSurfer, onTrackError]);
-    
-    // Revoke Blob URL when currentUrl changes if it was a blob
-    useEffect(() => {
-        const prevUrl = currentUrl;
-        return () => {
-             if (prevUrl && prevUrl.startsWith('blob:')) {
-                URL.revokeObjectURL(prevUrl);
-            }
-        };
-    }, [currentUrl]);
+    }, [track, autoPlay, reloadCounter, createMediaWaveSurfer, destroyCurrentWaveSurfer, setActiveWaveSurfer, onTrackError]);
 
     // Handle Play/Pause — use ref for synchronous access (no stale closure issues)
     // Don't manually set isPlaying here — let WaveSurfer's play/pause events
@@ -761,10 +636,23 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                     </button>
                 </div>
 
-                <div 
+                {/* Elapsed time */}
+                <span style={{
+                    fontSize: '11px',
+                    fontFamily: 'monospace',
+                    fontVariantNumeric: 'tabular-nums',
+                    color: 'var(--text-secondary)',
+                    minWidth: '38px',
+                    textAlign: 'right',
+                    flexShrink: 0,
+                }}>
+                    {formatTime(playbackCurrentTime)}
+                </span>
+
+                <div
                     id="waveform"
-                    ref={containerRef} 
-                    style={{ 
+                    ref={containerRef}
+                    style={{
                         flex: 1, 
                         minWidth: 0, // Fix flexbox overflow/sizing
                         height: '40px', 
@@ -775,8 +663,16 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                         width: '100%',
                     }} 
                 >
-                    {/* WaveSurfer renders its canvases here — separate from React children */}
-                    <div ref={waveformRef} style={{ position: 'absolute', inset: 0, zIndex: 1 }} />
+                    {/* WaveSurfer renders its canvases here — separate from React children.
+                        clip-path rolls the waveform out left-to-right once peaks are decoded
+                        (reset instantly, no reverse wipe, when a new track loads). */}
+                    <div ref={waveformRef} style={{
+                        position: 'absolute',
+                        inset: 0,
+                        zIndex: 1,
+                        clipPath: waveformRevealed ? 'inset(0 0% 0 0)' : 'inset(0 100% 0 0)',
+                        transition: waveformRevealed ? 'clip-path 900ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
+                    }} />
                     {/* Fallback scrub bar for MediaElement-decoded tracks (no waveform data) */}
                     {usingMediaFallback && (
                         <div
@@ -813,7 +709,7 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                                         left: 0,
                                         top: 0,
                                         bottom: 0,
-                                        width: `${fallbackProgress * 100}%`,
+                                        width: `${playbackProgress * 100}%`,
                                         background: accentColor,
                                         borderRadius: '3px',
                                         transition: 'width 0.1s linear',
@@ -824,7 +720,7 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                                     style={{
                                         position: 'absolute',
                                         top: '50%',
-                                        left: `${fallbackProgress * 100}%`,
+                                        left: `${playbackProgress * 100}%`,
                                         transform: 'translate(-50%, -50%)',
                                         width: '12px',
                                         height: '12px',
@@ -835,14 +731,34 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                                     }}
                                 />
                             </div>
-                            {/* Time labels */}
-                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '10px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                                <span>{formatTime(fallbackCurrentTime)}</span>
-                                <span>{formatTime(fallbackDuration)}</span>
-                            </div>
                         </div>
                     )}
                 </div>
+
+                {/* Total / remaining time — click to toggle, like most players */}
+                <span
+                    onClick={() => {
+                        const next = !showRemaining;
+                        setShowRemaining(next);
+                        localStorage.setItem('app_time_display', next ? 'remaining' : 'total');
+                    }}
+                    title={showRemaining ? 'Show total duration' : 'Show remaining time'}
+                    style={{
+                        fontSize: '11px',
+                        fontFamily: 'monospace',
+                        fontVariantNumeric: 'tabular-nums',
+                        color: 'var(--text-secondary)',
+                        minWidth: '38px',
+                        textAlign: 'left',
+                        flexShrink: 0,
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                    }}
+                >
+                    {showRemaining
+                        ? `-${formatTime(Math.max(0, playbackDuration - playbackCurrentTime))}`
+                        : formatTime(playbackDuration)}
+                </span>
             </div>
 
             {/* Right: Volume/Spacer */}

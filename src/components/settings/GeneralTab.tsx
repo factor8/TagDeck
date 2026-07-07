@@ -61,7 +61,7 @@ export function GeneralTab({ syncInfo, appleMusicAvailable }: GeneralTabProps) {
                     <div>
                         <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Waveform Player</span>
                         <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                            {playerMode === 'waveform' ? 'Full waveform — slower to load' : 'Instant playback — simple progress bar'}
+                            {playerMode === 'waveform' ? 'Full waveform — loads in background' : 'Simple progress bar'}
                         </div>
                     </div>
                     <ToggleSwitch

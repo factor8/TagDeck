@@ -19,7 +19,13 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: data: blob: file: http://asset.localhost https://asset.localhost;"
+      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' asset: data: blob: file: http://asset.localhost https://asset.localhost;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/**"
+        ]
+      }
     }
   },
   "bundle": {

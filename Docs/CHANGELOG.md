@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Elapsed / total time in the player bar**: elapsed time sits left of the waveform, total duration on the right — click the total to toggle it to remaining time (shown with a `-` prefix), and the choice is remembered. Works in both player modes.
 - **Find Library Matches**: right-click an imported Spotify playlist to scan its unmatched (Spotify-only) tracks against your local library — likely matches are queued in the match review panel for you to confirm or reject; nothing is ever merged automatically. Works offline and reports what it found in a toast.
 - **Open in Spotify**: Spotify tracks show an external-link icon in the actions column (where local tracks have the Finder folder icon) that jumps to the song in the Spotify app — highlighted, not auto-played.
 - **⌘L — Link to local track**: with a Spotify track selected, press ⌘L to open the Link to Local Track picker (same as the right-click menu item, which now shows the shortcut).
@@ -38,6 +39,7 @@
 - In Import-only mode, syncing no longer overwrites tags with iTunes' stale copy of the comment field (TagDeck stops pushing comments in that mode, so the file/TagDeck copy is authoritative).
 
 ### Changed
+- **Faster playback start**: audio now streams straight from disk instead of being read fully into memory first, so playback begins almost immediately — noticeable on long or lossless files. In Waveform mode, playback no longer waits for the waveform: the track starts right away and the waveform rolls out left-to-right once it's ready (if a file's waveform can't be decoded, a plain progress bar is shown instead — playback is unaffected).
 - **Settings reorganized into tabs**: the settings panel now uses a sidebar of categories — General, iTunes, Library, Export, Appearance, Developer — instead of one long two-column list. All settings are unchanged, just easier to find; the panel remembers your last open tab.
 - **Library Management settings are always visible** in Settings, including under Two-way sync (with a note that Music.app currently handles imports in that mode).
 - **Tracks removed from iTunes are no longer deleted from TagDeck.** They are now "unlinked": the track, its tags, and its playlist memberships stay in TagDeck, marked with an *unlinked* badge in the track list. Re-adding the track to Music.app relinks it automatically. (Previously, deleting a track in Music.app silently deleted it from TagDeck on the next sync.)
