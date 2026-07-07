@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, X, AudioLines, CloudOff, RefreshCw } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, SearchCheck, X, AudioLines, CloudOff, RefreshCw } from 'lucide-react';
 import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
 import { SpotifyImportModal } from './SpotifyImportModal';
@@ -703,6 +703,29 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
       }
   }, [refreshPlaylists, showError]);
 
+  // On-demand "Find library matches" for one Spotify playlist: scans its
+  // ghosts against the local library; every candidate goes to the review
+  // queue (never auto-merged). Backend does no Spotify API calls.
+  const handleScanMatches = useCallback(async (node: PlaylistNode) => {
+      try {
+          const r = await invoke<{ ghosts_scanned: number; candidates_queued: number; already_pending: number }>(
+              'spotify_scan_playlist_matches', { playlistId: node.id });
+          const tracks = `${r.ghosts_scanned} track${r.ghosts_scanned !== 1 ? 's' : ''}`;
+          if (r.ghosts_scanned === 0) {
+              showSuccess('All tracks in this playlist are already matched');
+          } else if (r.candidates_queued > 0) {
+              showSuccess(`Scanned ${tracks} — ${r.candidates_queued} match candidate${r.candidates_queued !== 1 ? 's' : ''} ready for review`);
+              onPlaylistsChanged?.();
+          } else if (r.already_pending > 0) {
+              showSuccess(`Scanned ${tracks} — ${r.already_pending} match${r.already_pending !== 1 ? 'es' : ''} already awaiting review`);
+          } else {
+              showSuccess(`Scanned ${tracks} — no new matches found`);
+          }
+      } catch (err) {
+          showError(`Match scan failed: ${err}`);
+      }
+  }, [showSuccess, showError, onPlaylistsChanged]);
+
   const handleExportM3u8 = useCallback(async (node: PlaylistNode) => {
       try {
           const { save } = await import('@tauri-apps/plugin-dialog');
@@ -1222,6 +1245,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                               {/* Spotify playlists: rename/duplicate/iTunes-sync/export/move don't apply. */}
                               <button className="ctx-item" onClick={() => { setContextMenu(null); handleSpotifySyncNow(); }}>
                                   <RefreshCw size={14} /> Sync Now
+                              </button>
+                              <button className="ctx-item" onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleScanMatches(n); }}>
+                                  <SearchCheck size={14} /> Find Library Matches
                               </button>
                               <div className="ctx-separator" />
                               <button className="ctx-item ctx-danger" onClick={() => { setContextMenu(null); setDeleteTarget(contextMenu.node!); }}>
