@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
@@ -733,6 +733,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
 
 export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater }, ref) => {
     const { debugMode } = useDebug();
+    const { showSuccess, showError } = useToast();
     const [tracks, setTracks] = useState<Track[]>([]);
     const [allowedTrackIds, setAllowedTrackIds] = useState<Set<number> | null>(null);
     const [playlistTrackOrder, setPlaylistTrackOrder] = useState<number[] | null>(null);
@@ -2170,6 +2171,37 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                 {selectedTrackIds.has(contextMenu.track.id) && selectedTrackIds.size > 1
                                     ? `Analyze with Mixed In Key (${selectedTrackIds.size} tracks)`
                                     : 'Analyze with Mixed In Key'}
+                            </span>
+                        </div>
+                        )}
+                        {contextMenu.track.source !== 'spotify' && (
+                        <div
+                            className="context-menu-item"
+                            onClick={async () => {
+                                const targets = (selectedTrackIds.has(contextMenu.track.id)
+                                    ? tracks.filter(t => selectedTrackIds.has(t.id))
+                                    : [contextMenu.track]).filter(t => t.source !== 'spotify');
+                                const trackIds = targets.map(t => t.id);
+                                const count = trackIds.length;
+                                setContextMenu(null);
+                                try {
+                                    await invoke('analyze_tracks', { trackIds, force: false });
+                                    showSuccess(`Analyzing ${count} track${count > 1 ? 's' : ''} for tag suggestions…`);
+                                } catch (err) {
+                                    const msg = String(err);
+                                    if (msg.includes('not downloaded')) {
+                                        showError('Enable AI suggestions in Settings → AI Tags first.');
+                                    } else {
+                                        showError(`Analysis failed: ${msg}`);
+                                    }
+                                }
+                            }}
+                        >
+                            <Sparkles size={14} className="context-menu-icon" />
+                            <span>
+                                {selectedTrackIds.has(contextMenu.track.id) && selectedTrackIds.size > 1
+                                    ? `Suggest tags (AI) · ${selectedTrackIds.size} tracks`
+                                    : 'Suggest tags (AI)'}
                             </span>
                         </div>
                         )}

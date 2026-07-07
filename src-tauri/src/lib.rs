@@ -230,7 +230,9 @@ pub fn run() {
             analysis::commands::cancel_analysis,
             analysis::commands::get_analysis_status,
             analysis::commands::get_tag_suggestions,
-            analysis::commands::set_tag_description
+            analysis::commands::set_tag_description,
+            analysis::commands::get_suggestion_threshold,
+            analysis::commands::set_suggestion_threshold
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

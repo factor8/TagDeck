@@ -12,6 +12,7 @@
 - **Tag Editor:** Pill-based editing sidebar with autocomplete, auto-save, and batch tagging across multi-selected tracks.
 - **CDJ-safe metadata writes:** Tags are written to each file's Comment field as `{Original Comment} && {Tag1}; {Tag2}`, preserving Mixed In Key results and existing notes. Every write is verified by re-reading the file.
 - **Tag groups**, global **undo/redo** for tag and playlist edits, and iTunes-style **star ratings** with half-star precision.
+- **AI tag suggestions:** Optionally analyze a track's audio locally (CLAP audio embeddings via ONNX Runtime) and get suggested tags from your own vocabulary as dashed chips in the tag editor — click to accept. Blends zero-shot audio↔text matching with similarity to tracks you've already tagged. Fully on-device; the model is an opt-in one-time download and the app works unchanged without it.
 
 ### Apple Music / iTunes Sync
 
@@ -56,7 +57,7 @@
 ### UI & Power-User Details
 
 - Virtualized track list that stays smooth on large libraries, with column reorder/resize/visibility, inline editing, and multi-select.
-- Tabbed Settings (General, iTunes, Library, Export, Appearance, Spotify, Developer) with themes and custom accent colors.
+- Tabbed Settings (General, iTunes, Spotify, Library, Export, Appearance, AI Tags, Developer) with themes and custom accent colors.
 - Extensive keyboard shortcuts — see [Docs/KeyCommands.md](Docs/KeyCommands.md).
 - Persistent rotating logs, a searchable Logs window (`⌘⌥L`), and a Debug Mode for troubleshooting.
 

@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Info } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
+import { Info, Sparkles, Loader2 } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
@@ -11,6 +12,19 @@ interface Props {
     onUpdate: () => void;
     selectedTrackIds?: Set<number>;
     commonTags?: string[];
+}
+
+interface Suggestion {
+    tag_id: number;
+    name: string;
+    group_id?: number | null;
+    score: number;
+    source: string;
+}
+
+interface SuggestionsResponse {
+    analyzed: boolean;
+    suggestions: Suggestion[];
 }
 
 export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Props) {
@@ -24,8 +38,81 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [tagInput, setTagInput] = useState('');
     
     const [showInfo, setShowInfo] = useState(false);
-    
+
+    // AI tag suggestions (single-select only).
+    const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+    const [analyzed, setAnalyzed] = useState(true);
+    const [dismissed, setDismissed] = useState<Set<number>>(new Set());
+    const [analyzing, setAnalyzing] = useState(false);
+
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
+
+    const fetchSuggestions = useCallback(async (trackId: number) => {
+        try {
+            const resp = await invoke<SuggestionsResponse>('get_tag_suggestions', { trackId });
+            setAnalyzed(resp.analyzed);
+            setSuggestions(resp.suggestions);
+        } catch (e) {
+            // No model / no embeddings yet — stay silent, just show nothing.
+            console.debug('get_tag_suggestions:', e);
+            setSuggestions([]);
+        }
+    }, []);
+
+    // Load suggestions when a single track is selected; clear on multi/none.
+    useEffect(() => {
+        setDismissed(new Set());
+        if (track && !isMultiSelect) {
+            fetchSuggestions(track.id);
+        } else {
+            setSuggestions([]);
+            setAnalyzed(true);
+        }
+    }, [track, isMultiSelect, fetchSuggestions]);
+
+    // Refresh suggestions for the current track when a batch analysis finishes
+    // (its embedding may have just been created).
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        let active = true;
+        listen('analysis-complete', () => {
+            setAnalyzing(false);
+            if (track && !isMultiSelect) fetchSuggestions(track.id);
+        }).then((u) => {
+            if (active) unlisten = u;
+            else u();
+        });
+        return () => {
+            active = false;
+            unlisten?.();
+        };
+    }, [track, isMultiSelect, fetchSuggestions]);
+
+    const acceptSuggestion = async (s: Suggestion) => {
+        setSuggestions((prev) => prev.filter((x) => x.tag_id !== s.tag_id));
+        await addTag(s.name);
+    };
+
+    const dismissSuggestion = (tagId: number) => {
+        setDismissed((prev) => new Set(prev).add(tagId));
+    };
+
+    const analyzeThisTrack = async () => {
+        if (!track) return;
+        setAnalyzing(true);
+        try {
+            await invoke('analyze_tracks', { trackIds: [track.id], force: false });
+            // `analysis-complete` listener refetches and clears `analyzing`.
+        } catch (e) {
+            setAnalyzing(false);
+            const msg = String(e);
+            if (msg.includes('not downloaded')) {
+                showError('Enable AI suggestions in Settings → AI Tags first.');
+            } else {
+                showError(`Analysis failed: ${msg}`);
+            }
+        }
+    };
 
     useEffect(() => {
         if (isMultiSelect) {
@@ -382,7 +469,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                             >×</span>
                         </div>
                     ))}
-                    <input 
+                    <input
                         id="tag-input"
                         type="text"
                         autoComplete="off"
@@ -396,6 +483,53 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                         placeholder={tags.length === 0 ? "Add tags..." : ""}
                     />
                 </div>
+
+                {!isMultiSelect && (() => {
+                    const applied = new Set(tags.map(t => t.toLowerCase()));
+                    const visible = suggestions.filter(
+                        s => !dismissed.has(s.tag_id) && !applied.has(s.name.toLowerCase())
+                    );
+                    if (visible.length > 0) {
+                        return (
+                            <div style={styles.suggestRow}>
+                                <span style={styles.suggestLabel}>
+                                    <Sparkles size={11} /> Suggested
+                                </span>
+                                {visible.map(s => (
+                                    <div
+                                        key={s.tag_id}
+                                        style={styles.ghostChip}
+                                        onClick={() => acceptSuggestion(s)}
+                                        title={`${Math.round(s.score * 100)}% match — click to add`}
+                                    >
+                                        {s.name}
+                                        <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
+                                        <span
+                                            style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
+                                            onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                                        >×</span>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    }
+                    if (!analyzed) {
+                        return (
+                            <div style={styles.suggestRow}>
+                                <button
+                                    onClick={analyzeThisTrack}
+                                    disabled={analyzing}
+                                    style={styles.analyzeBtn}
+                                    title="Analyze this track's audio to suggest tags"
+                                >
+                                    {analyzing ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
+                                    {analyzing ? 'Analyzing…' : 'Suggest tags'}
+                                </button>
+                            </div>
+                        );
+                    }
+                    return null;
+                })()}
             </div>
         </div>
     );
@@ -466,5 +600,54 @@ const styles = {
         padding: 0,
         height: '20px'
     },
-    button: {} 
+    suggestRow: {
+        display: 'flex',
+        flexWrap: 'wrap' as const,
+        alignItems: 'center',
+        gap: '4px',
+        marginTop: '6px',
+    },
+    suggestLabel: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '3px',
+        fontSize: '10px',
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.04em',
+        color: 'var(--text-secondary)',
+        fontWeight: 600,
+        marginRight: '2px',
+    },
+    ghostChip: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '1px 8px',
+        borderRadius: '10px',
+        fontSize: '12px',
+        fontWeight: 500,
+        color: 'var(--text-secondary)',
+        background: 'transparent',
+        border: '1px dashed var(--accent-color)',
+        cursor: 'pointer',
+        userSelect: 'none' as const,
+    },
+    ghostPct: {
+        fontSize: '10px',
+        opacity: 0.6,
+        fontVariantNumeric: 'tabular-nums' as const,
+    },
+    analyzeBtn: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '3px 10px',
+        borderRadius: '10px',
+        fontSize: '11px',
+        color: 'var(--text-secondary)',
+        background: 'transparent',
+        border: '1px dashed var(--border-color)',
+        cursor: 'pointer',
+    },
+    button: {}
 };

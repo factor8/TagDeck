@@ -573,3 +573,27 @@ pub async fn set_tag_description(
     let desc = description.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
     db.set_tag_description(tag_id, desc).map_err(|e| e.to_string())
 }
+
+/// Minimum blended confidence a suggestion must clear to be shown, persisted in
+/// `library_config`. Mirrors the value `get_tag_suggestions` reads.
+#[tauri::command]
+pub async fn get_suggestion_threshold(state: State<'_, AppState>) -> Result<f32, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    Ok(db
+        .get_config("suggestion_threshold")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(DEFAULT_THRESHOLD))
+}
+
+#[tauri::command]
+pub async fn set_suggestion_threshold(
+    state: State<'_, AppState>,
+    threshold: f32,
+) -> Result<(), String> {
+    let clamped = threshold.clamp(0.0, 1.0);
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    db.set_config("suggestion_threshold", &clamped.to_string())
+        .map_err(|e| e.to_string())
+}

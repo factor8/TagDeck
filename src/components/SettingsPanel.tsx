@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from 'react';
-import { X, Sliders, RefreshCw, HardDrive, Disc3, Palette, Bug, AudioLines } from 'lucide-react';
+import { X, Sliders, RefreshCw, HardDrive, Disc3, Palette, Bug, AudioLines, Sparkles } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { GeneralTab } from './settings/GeneralTab';
 import { ITunesTab } from './settings/ITunesTab';
@@ -8,6 +8,7 @@ import { ExportTab } from './settings/ExportTab';
 import { AppearanceTab } from './settings/AppearanceTab';
 import { DeveloperTab } from './settings/DeveloperTab';
 import { SpotifyTab } from './settings/SpotifyTab';
+import { AnalysisTab } from './settings/AnalysisTab';
 
 interface SettingsPanelProps {
     isOpen: boolean;
@@ -37,7 +38,7 @@ interface LibraryConfig {
     itunes_deletion_behavior: 'Ask' | 'Keep' | 'Remove';
 }
 
-type TabId = 'general' | 'itunes' | 'spotify' | 'library' | 'export' | 'appearance' | 'developer';
+type TabId = 'general' | 'itunes' | 'spotify' | 'library' | 'export' | 'appearance' | 'analysis' | 'developer';
 
 const TABS: { id: TabId; label: string; icon: typeof Sliders }[] = [
     { id: 'general', label: 'General', icon: Sliders },
@@ -46,6 +47,7 @@ const TABS: { id: TabId; label: string; icon: typeof Sliders }[] = [
     { id: 'library', label: 'Library', icon: HardDrive },
     { id: 'export', label: 'Export', icon: Disc3 },
     { id: 'appearance', label: 'Appearance', icon: Palette },
+    { id: 'analysis', label: 'AI Tags', icon: Sparkles },
     { id: 'developer', label: 'Developer', icon: Bug },
 ];
 
@@ -221,6 +223,7 @@ export function SettingsPanel({
                             onAccentChange={onAccentChange}
                         />
                     )}
+                    {activeTab === 'analysis' && <AnalysisTab />}
                     {activeTab === 'developer' && <DeveloperTab />}
                 </div>
 
