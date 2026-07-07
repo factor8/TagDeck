@@ -5,6 +5,10 @@
 //! shared space, so `cos(audio, text)` and `cos(audio, audio)` are both
 //! meaningful for the scorer.
 //!
+//! Split into two embedders so a batch job can hold N cheap [`AudioEmbedder`]s
+//! (34MB model each) across worker threads while the heavier [`TextEmbedder`]
+//! (127MB) is loaded once for tag prompts and dropped.
+//!
 //! IMPORTANT: the text export has no attention_mask input, so text must be run
 //! unpadded, one string at a time (padding tokens would corrupt the embedding).
 
@@ -15,42 +19,32 @@ use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
 
-use super::features::{fit_window, MelFrontend, MAX_SAMPLES, N_FRAMES, N_MELS, SAMPLE_RATE};
+use super::features::{fit_window, MelFrontend, MAX_SAMPLES, N_FRAMES, N_MELS};
 
 pub const EMBED_DIM: usize = 512;
 
-/// Filenames within a model directory.
 pub const AUDIO_MODEL_FILE: &str = "audio_model_quantized.onnx";
 pub const TEXT_MODEL_FILE: &str = "text_model_quantized.onnx";
 pub const TOKENIZER_FILE: &str = "tokenizer.json";
 
-pub struct ClapEngine {
+/// Audio tower + mel frontend. Cheap enough to hold one per worker thread.
+pub struct AudioEmbedder {
     audio: Session,
-    text: Session,
-    tokenizer: Tokenizer,
     mel: MelFrontend,
 }
 
-impl ClapEngine {
-    /// Load both towers + tokenizer from a model directory. Heavyweight
-    /// (hundreds of MB resident); construct once per batch job and drop after.
+impl AudioEmbedder {
     pub fn load(model_dir: &Path) -> Result<Self> {
-        let audio = build_session(&model_dir.join(AUDIO_MODEL_FILE))
-            .context("load audio model")?;
-        let text = build_session(&model_dir.join(TEXT_MODEL_FILE))
-            .context("load text model")?;
-        let tokenizer = Tokenizer::from_file(model_dir.join(TOKENIZER_FILE))
-            .map_err(|e| anyhow!("load tokenizer: {e}"))?;
-        Ok(Self { audio, text, tokenizer, mel: MelFrontend::new() })
+        let audio = build_session(&model_dir.join(AUDIO_MODEL_FILE)).context("load audio model")?;
+        Ok(Self { audio, mel: MelFrontend::new() })
     }
 
     /// Embed a decoded mono-48k waveform. Averages embeddings of up to three 10s
     /// windows (25/50/75% through the track) for a stable whole-track vector.
     pub fn embed_audio(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
-        let windows = window_offsets(samples.len());
         let mut acc = vec![0.0f32; EMBED_DIM];
         let mut count = 0;
-        for start in windows {
+        for start in window_offsets(samples.len()) {
             let slice = &samples[start..(start + MAX_SAMPLES).min(samples.len())];
             let fitted = fit_window(slice);
             let emb = self.embed_one_window(&fitted)?;
@@ -80,6 +74,21 @@ impl ClapEngine {
         let mut v = data[..EMBED_DIM].to_vec();
         l2_normalize(&mut v);
         Ok(v)
+    }
+}
+
+/// Text tower + tokenizer. Loaded once per job to embed tag prompts.
+pub struct TextEmbedder {
+    text: Session,
+    tokenizer: Tokenizer,
+}
+
+impl TextEmbedder {
+    pub fn load(model_dir: &Path) -> Result<Self> {
+        let text = build_session(&model_dir.join(TEXT_MODEL_FILE)).context("load text model")?;
+        let tokenizer = Tokenizer::from_file(model_dir.join(TOKENIZER_FILE))
+            .map_err(|e| anyhow!("load tokenizer: {e}"))?;
+        Ok(Self { text, tokenizer })
     }
 
     /// Embed a text prompt. Run unpadded (see module note).
@@ -141,6 +150,3 @@ fn l2_normalize(v: &mut [f32]) {
         }
     }
 }
-
-/// Sanity assertion used by callers/tests to keep the fixed-rate contract clear.
-pub const _ASSERT_RATE: u32 = SAMPLE_RATE;

@@ -189,6 +189,35 @@ impl Database {
             [],
         );
 
+        // AI tag suggestions: CLAP audio/text embeddings. Keyed by model_version
+        // so a model upgrade invalidates nothing automatically — old rows just
+        // stop matching the active version. Embeddings are f32 LE, L2-normalized.
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS track_embeddings (
+                track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+                model_version TEXT NOT NULL,
+                dims INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (track_id, model_version)
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS tag_text_embeddings (
+                tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                model_version TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                dims INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (tag_id, model_version)
+            )",
+            [],
+        );
+        // Optional per-tag prompt override for zero-shot text embedding.
+        let _ = conn.execute("ALTER TABLE tags ADD COLUMN description TEXT", []);
+
         // One-time backfill for per-playlist sync: playlists that came from
         // iTunes keep syncing by default; TagDeck-native ones stay local-only.
         let backfill_done = conn
@@ -1328,13 +1357,14 @@ impl Database {
     // TAG METHODS
 
     pub fn get_all_tags(&self) -> Result<Vec<crate::models::Tag>> {
-        let mut stmt = self.conn.prepare("SELECT id, name, usage_count, group_id FROM tags ORDER BY name ASC")?;
+        let mut stmt = self.conn.prepare("SELECT id, name, usage_count, group_id, description FROM tags ORDER BY name ASC")?;
         let tag_iter = stmt.query_map([], |row| {
             Ok(crate::models::Tag {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 usage_count: row.get(2)?,
                 group_id: row.get(3)?,
+                description: row.get(4)?,
             })
         })?;
 
@@ -1354,7 +1384,120 @@ impl Database {
         self.conn.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
         Ok(())
     }
-    
+
+    /// Set (or clear, with None) a tag's optional zero-shot prompt override.
+    pub fn set_tag_description(&self, tag_id: i64, description: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tags SET description = ?1 WHERE id = ?2",
+            params![description, tag_id],
+        )?;
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Analysis embeddings (CLAP)
+    // -----------------------------------------------------------------------
+
+    /// Insert or replace a track's audio embedding for the given model version.
+    pub fn upsert_track_embedding(
+        &self,
+        track_id: i64,
+        model_version: &str,
+        embedding: &[f32],
+        created_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO track_embeddings
+                (track_id, model_version, dims, embedding, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![track_id, model_version, embedding.len() as i64, f32_to_blob(embedding), created_at],
+        )?;
+        Ok(())
+    }
+
+    /// Track ids that already have an embedding for `model_version`.
+    pub fn embedded_track_ids(&self, model_version: &str) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT track_id FROM track_embeddings WHERE model_version = ?1")?;
+        let rows = stmt.query_map(params![model_version], |row| row.get::<_, i64>(0))?;
+        let mut ids = std::collections::HashSet::new();
+        for r in rows {
+            ids.insert(r?);
+        }
+        Ok(ids)
+    }
+
+    /// All track embeddings for a model version, as (track_id, vector).
+    pub fn all_track_embeddings(&self, model_version: &str) -> Result<Vec<(i64, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT track_id, embedding FROM track_embeddings WHERE model_version = ?1",
+        )?;
+        let rows = stmt.query_map(params![model_version], |row| {
+            let id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, blob_to_f32(&blob)))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// One track's embedding for a model version, if present.
+    pub fn get_track_embedding(&self, track_id: i64, model_version: &str) -> Result<Option<Vec<f32>>> {
+        use rusqlite::OptionalExtension;
+        let blob: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                "SELECT embedding FROM track_embeddings WHERE track_id = ?1 AND model_version = ?2",
+                params![track_id, model_version],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(blob.map(|b| blob_to_f32(&b)))
+    }
+
+    /// Insert or replace a tag's text embedding (and the exact prompt used).
+    pub fn upsert_tag_text_embedding(
+        &self,
+        tag_id: i64,
+        model_version: &str,
+        prompt: &str,
+        embedding: &[f32],
+        created_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tag_text_embeddings
+                (tag_id, model_version, prompt, dims, embedding, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![tag_id, model_version, prompt, embedding.len() as i64, f32_to_blob(embedding), created_at],
+        )?;
+        Ok(())
+    }
+
+    /// All tag text embeddings for a model version, as (tag_id, prompt, vector).
+    pub fn all_tag_text_embeddings(
+        &self,
+        model_version: &str,
+    ) -> Result<Vec<(i64, String, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tag_id, prompt, embedding FROM tag_text_embeddings WHERE model_version = ?1",
+        )?;
+        let rows = stmt.query_map(params![model_version], |row| {
+            let id: i64 = row.get(0)?;
+            let prompt: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((id, prompt, blob_to_f32(&blob)))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     pub fn sync_tags(&self) -> Result<()> {
          // First, reset all usage counts to 0
          self.conn.execute("UPDATE tags SET usage_count = 0", [])?;
@@ -1364,14 +1507,8 @@ impl Database {
          
          for track in tracks {
             if let Some(raw) = track.comment_raw {
-                if let Some(idx) = raw.find(" && ") {
-                    let tag_part = &raw[idx + 4..];
-                    for tag in tag_part.split(';') {
-                        let trimmed = tag.trim();
-                        if !trimmed.is_empty() {
-                           *tag_counts.entry(trimmed.to_string()).or_insert(0) += 1;
-                        }
-                    }
+                for tag in crate::models::parse_comment_tags(&raw) {
+                    *tag_counts.entry(tag).or_insert(0) += 1;
                 }
             }
          }
@@ -2043,6 +2180,23 @@ pub struct BackupTrackRef {
     pub file_path: String,
     pub title: Option<String>,
     pub artist: Option<String>,
+}
+
+/// Serialize an f32 embedding to a little-endian byte blob for SQLite storage.
+fn f32_to_blob(v: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(v.len() * 4);
+    for &x in v {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+    out
+}
+
+/// Inverse of [`f32_to_blob`]. Trailing bytes that don't form a full f32 are
+/// ignored (blobs are always written whole, so this only guards corruption).
+fn blob_to_f32(b: &[u8]) -> Vec<f32> {
+    b.chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
 }
 
 #[cfg(test)]

@@ -129,6 +129,8 @@ pub fn run() {
 
             app.manage(spotify::SpotifyState::new());
 
+            app.manage(analysis::AnalysisState::default());
+
             // Start Library Watcher
             library_watcher::start_library_watcher(app.handle().clone());
 
@@ -220,7 +222,15 @@ pub fn run() {
             spotify::commands::spotify_reject_match,
             spotify::commands::spotify_manual_link,
             spotify::commands::spotify_unlink_track,
-            spotify::commands::spotify_scan_playlist_matches
+            spotify::commands::spotify_scan_playlist_matches,
+            analysis::commands::get_model_status,
+            analysis::commands::download_analysis_model,
+            analysis::commands::remove_analysis_model,
+            analysis::commands::analyze_tracks,
+            analysis::commands::cancel_analysis,
+            analysis::commands::get_analysis_status,
+            analysis::commands::get_tag_suggestions,
+            analysis::commands::set_tag_description
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

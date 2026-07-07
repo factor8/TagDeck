@@ -46,6 +46,23 @@ impl Track {
     }
 }
 
+/// Extract the applied tag names from a `comment_raw` string.
+///
+/// The convention (shared across Rust and TS) is `"<user comment> && Tag1; Tag2"`
+/// — split on the FIRST `" && "`, then the tag block is `;`-separated and
+/// trimmed. Returns an empty vec when there is no tag block.
+pub fn parse_comment_tags(comment_raw: &str) -> Vec<String> {
+    match comment_raw.find(" && ") {
+        Some(idx) => comment_raw[idx + 4..]
+            .split(';')
+            .map(|t| t.trim())
+            .filter(|t| !t.is_empty())
+            .map(|t| t.to_string())
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Playlist {
     pub id: i64,               // Database ID
@@ -85,6 +102,9 @@ pub struct Tag {
     pub name: String,
     pub usage_count: i64,
     pub group_id: Option<i64>,
+    /// Optional user-authored prompt used for zero-shot tag suggestion.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
