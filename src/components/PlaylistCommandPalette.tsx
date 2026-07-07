@@ -173,6 +173,10 @@ export function PlaylistCommandPalette({ isOpen, onClose, onJump }: PlaylistComm
                     <input
                         ref={inputRef}
                         type="text"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={handleKeyDown}

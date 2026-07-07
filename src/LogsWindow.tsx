@@ -145,6 +145,10 @@ export function LogsWindow() {
         <input
           type="text"
           placeholder="Filter logs…"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="off"
+          spellCheck={false}
           value={filterText}
           onChange={(e) => setFilterText(e.target.value)}
           style={{

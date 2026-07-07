@@ -185,6 +185,10 @@ const EditableCell = ({
             <input
                 ref={inputRef}
                 type={isNumeric ? 'number' : 'text'}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 value={localValue}
                 onChange={e => setLocalValue(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -2316,6 +2320,10 @@ function GhostLinkPicker({ ghost, tracks, onClose, onLinked }: {
                 <input
                     autoFocus
                     type="text"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                     value={search}
                     onChange={e => setSearch(e.target.value)}
                     placeholder="Search by artist or title…"

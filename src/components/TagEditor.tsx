@@ -385,6 +385,10 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     <input 
                         id="tag-input"
                         type="text"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
                         value={tagInput}
                         onChange={handleTagInputChange}
                         onKeyDown={handleTagInputKeyDown}

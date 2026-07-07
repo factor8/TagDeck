@@ -204,6 +204,10 @@ const PlaylistRow = ({
                       <input
                           ref={renameInputRef}
                           className="sidebar-rename-input"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="off"
+                          spellCheck={false}
                           value={renameValue}
                           onChange={(e) => onRenameChange(e.target.value)}
                           onKeyDown={(e) => {
@@ -878,6 +882,10 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
           <Search size={13} style={{ position: 'absolute', left: 8, color: 'var(--text-secondary)', pointerEvents: 'none' }} />
           <input
             type="text"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
             onKeyDown={(e) => {

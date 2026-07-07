@@ -185,6 +185,10 @@ export function CopyPlaylistsModal({ targetTrack, onClose, onComplete, onError, 
                                 ref={searchInputRef}
                                 type="text"
                                 placeholder="Search by artist, title, or album…"
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="off"
+                                spellCheck={false}
                                 value={searchTerm}
                                 onChange={e => setSearchTerm(e.target.value)}
                                 className="cpm-search-input"

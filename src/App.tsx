@@ -936,8 +936,12 @@ function App() {
                 </div>
                 <input 
                     ref={searchInputRef}
-                    type="text" 
-                    placeholder="Search library..." 
+                    type="text"
+                    placeholder="Search library..."
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     style={{

@@ -263,6 +263,10 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
                             value={newGroupName}
                             onChange={e => setNewGroupName(e.target.value)}
                             placeholder="Group Name"
+                            autoComplete="off"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            spellCheck={false}
                             style={styles.searchInput}
                             onKeyDown={e => e.key === 'Enter' && handleCreateGroup()}
                             autoFocus
@@ -273,10 +277,14 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
 
                 <div style={{ position: 'relative', width: '100%', display: 'flex', gap: '8px' }}>
                      <input 
-                        type="text" 
+                        type="text"
                         value={filter}
                         onChange={(e) => setFilter(e.target.value)}
                         placeholder="Filter tags..."
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                        spellCheck={false}
                         style={{ ...styles.searchInput, flex: 1 }}
                     />
                     <button onClick={() => setIsAddingGroup(!isAddingGroup)} style={styles.iconBtn} title="Add Group">
@@ -489,11 +497,15 @@ function SortableGroupSection({ id, title, children, onDelete, onRename, collaps
                     {isEditing ? (
                         <div style={{display:'flex', alignItems: 'center', width: '100%'}}>
                              <input 
-                                value={editName} 
+                                value={editName}
                                 onChange={e => setEditName(e.target.value)}
                                 onBlur={handleSave}
                                 onKeyDown={handleKeyDown}
                                 autoFocus
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="off"
+                                spellCheck={false}
                                 style={{
                                     background: 'var(--bg-primary)', 
                                     border: '1px solid var(--accent-color)', 

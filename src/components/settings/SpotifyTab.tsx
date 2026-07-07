@@ -82,6 +82,9 @@ export function SpotifyTab() {
                         value={clientId}
                         onChange={e => setClientId(e.target.value)}
                         placeholder="Spotify app Client ID"
+                        autoComplete="off"
+                        autoCorrect="off"
+                        autoCapitalize="off"
                         spellCheck={false}
                         style={{
                             flex: 1, fontSize: '12px', padding: '6px 8px',
