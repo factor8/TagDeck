@@ -1056,6 +1056,15 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 handleRemoveFromPlaylist();
             }
 
+            // Cmd+L -> Link selected Spotify track to a local track
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'l' || e.key === 'L') && !e.altKey && lastSelectedTrackId) {
+                const track = filteredTracks.find(t => t.id === lastSelectedTrackId);
+                if (track && track.source === 'spotify') {
+                    e.preventDefault();
+                    setLinkPickerGhost(track);
+                }
+            }
+
             // Cmd+R or Cmd+Shift+R -> Reveal in Finder
             if ((e.metaKey || e.ctrlKey) && (e.key === 'r' || e.key === 'R') && lastSelectedTrackId) {
                 const trackToReveal = filteredTracks.find(t => t.id === lastSelectedTrackId);
@@ -2089,6 +2098,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         >
                             <Link2 size={14} className="context-menu-icon" />
                             <span>Link to local track…</span>
+                            <span style={{ marginLeft: 'auto', fontSize: '11px', opacity: 0.6 }}>⌘L</span>
                         </div>
                         )}
                         {/* Local tracks linked to a Spotify track can be unlinked — restores the

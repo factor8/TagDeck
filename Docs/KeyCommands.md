@@ -11,6 +11,10 @@
 - **Cmd + Click** (Mac) / **Ctrl + Click** (Win): Add/Remove track from selection
 - **Shift + Click**: Select Range of tracks
 - **Cmd + A** (Mac) / **Ctrl + A** (Win): Select All tracks in current view
+- **Cmd + L** (Mac) / **Ctrl + L** (Win): Link selected Spotify track to a local track (opens the Link to Local Track picker)
+- **Cmd + R** (Mac) / **Ctrl + R** (Win): Reveal selected track in Finder
+- **Enter**: Play selected track
+- **Delete / Backspace**: Remove selected track(s) from the current playlist
 - **Double Click**: Play Track (if implemented / future) 
 
 ## Tag Deck

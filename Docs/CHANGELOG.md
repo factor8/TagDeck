@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **⌘L — Link to local track**: with a Spotify track selected, press ⌘L to open the Link to Local Track picker (same as the right-click menu item, which now shows the shortcut).
 - **Spotify integration** (Settings → Spotify): import playlists selectively, tag Spotify tracks before you own the files, play them back via Spotify Connect, and automatically merge your tags into the file once you buy the track. Requires Spotify Premium.
 - **Unlink from Spotify**: right-click a wrongly matched track to undo its Spotify link — the Spotify-only entry reappears with its tags, rating, and playlist memberships, and the local track gets back the exact tags it had before the match.
 - **Playlist search**: a filter bar at the top of the sidebar narrows the playlist tree as you type (matches keep their folder context, folders auto-expand while filtering), and **⌘K** opens a quick switcher — fuzzy-search all playlists and folders with parent-path breadcrumbs and iTunes badges, then hit ↩ to jump straight to one (it's selected, revealed, and flashed in the sidebar).
