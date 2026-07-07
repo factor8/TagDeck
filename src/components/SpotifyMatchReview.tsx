@@ -68,7 +68,7 @@ export function SpotifyMatchReview({ isOpen, onClose, onChanged }: Props) {
         <>
             <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10000 }} onClick={onClose} />
             <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-                          width: 620, maxHeight: '70vh', overflowY: 'auto',
+                          width: 'min(1100px, 90vw)', maxHeight: '70vh', overflowY: 'auto',
                           background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
                           borderRadius: 10, zIndex: 10001, padding: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
