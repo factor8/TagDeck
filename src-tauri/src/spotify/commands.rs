@@ -255,13 +255,29 @@ pub async fn spotify_get_pending_matches(state: State<'_, AppState>) -> Result<V
     Ok(out)
 }
 
+/// Mirror a merged/restored comment to Music.app, lock-free (AppleScript can
+/// take seconds). Failure is logged, not fatal — the track is dirty-flagged
+/// only when the mode forbids pushing, so a transient push failure here can
+/// still be reconciled manually via Sync Review's drift audit.
+fn run_music_push(push: Option<super::merge::MusicPush>) {
+    if let Some(job) = push {
+        if let Err(e) = crate::apple_music::batch_update_track_comments(vec![job]) {
+            eprintln!("Spotify merge/unlink: Music.app comment push failed: {}", e);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn spotify_confirm_match(match_id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    let (ghost_id, local_id) = db.delete_pending_match(match_id)
-        .map_err(|e| e.to_string())?
-        .ok_or("Match not found")?;
-    super::merge::merge_ghost_into_local(&db, ghost_id, local_id)
+    let push = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let (ghost_id, local_id) = db.delete_pending_match(match_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Match not found")?;
+        super::merge::merge_ghost_into_local(&db, ghost_id, local_id)?
+    };
+    run_music_push(push);
+    Ok(())
 }
 
 #[tauri::command]
@@ -277,6 +293,20 @@ pub async fn spotify_manual_link(
     local_track_id: i64,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    super::merge::merge_ghost_into_local(&db, ghost_track_id, local_track_id)
+    let push = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        super::merge::merge_ghost_into_local(&db, ghost_track_id, local_track_id)?
+    };
+    run_music_push(push);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn spotify_unlink_track(track_id: i64, state: State<'_, AppState>) -> Result<(), String> {
+    let push = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        super::merge::unlink_local_track(&db, track_id)?
+    };
+    run_music_push(push);
+    Ok(())
 }

@@ -36,7 +36,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, FileAudio, X } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X } from 'lucide-react';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
 import { useToast } from './Toast';
@@ -2085,6 +2085,28 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         >
                             <Link2 size={14} className="context-menu-icon" />
                             <span>Link to local track…</span>
+                        </div>
+                        )}
+                        {/* Local tracks linked to a Spotify track can be unlinked — restores the
+                            ghost (and, for journaled merges, the pre-merge tags) so a wrong match
+                            can be redone. */}
+                        {contextMenu.track.source !== 'spotify' && contextMenu.track.spotify_id && (
+                        <div
+                            className="context-menu-item"
+                            onClick={async () => {
+                                const trackId = contextMenu.track.id;
+                                setContextMenu(null);
+                                try {
+                                    await invoke('spotify_unlink_track', { trackId });
+                                    onRefresh?.();
+                                } catch (err) {
+                                    console.error('Failed to unlink from Spotify:', err);
+                                    alert(`Error: ${err}`);
+                                }
+                            }}
+                        >
+                            <Unlink size={14} className="context-menu-icon" />
+                            <span>Unlink from Spotify</span>
                         </div>
                         )}
                         {/* Playlists submenu */}

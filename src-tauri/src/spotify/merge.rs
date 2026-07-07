@@ -52,10 +52,22 @@ pub fn union_tags(ghost_comment: &str, local_comment: &str) -> String {
     seen.join("; ")
 }
 
+/// A comment update that must be mirrored to Music.app: (itunes_pid, comment).
+/// Callers execute it via `apple_music::batch_update_track_comments` AFTER
+/// releasing the DB lock — the AppleScript round-trip can take seconds.
+pub type MusicPush = (String, String);
+
 /// Merge a ghost into a local track: union tags into the local file's comment
 /// (file write is best-effort; DB is authoritative), repoint playlist rows,
 /// transfer spotify_id, delete the ghost and its pending matches.
-pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Result<(), String> {
+///
+/// The merged comment must also reach Music.app, or the next iTunes sync
+/// pulls Music's stale copy back over it and the merged tags vanish (the
+/// original "tags get overwritten" bug). Same protocol as write_tags/
+/// batch_add_tag: push when the mode allows it (returned as a `MusicPush`
+/// for the caller to run lock-free), otherwise mark the track dirty so
+/// Sync Review treats the divergence as a conflict.
+pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Result<Option<MusicPush>, String> {
     let ghost = db.get_track(ghost_id).map_err(|e| e.to_string())?.ok_or("Ghost not found")?;
     let local = db.get_track(local_id).map_err(|e| e.to_string())?.ok_or("Local track not found")?;
     if !ghost.is_ghost() {
@@ -67,6 +79,11 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
     if local.spotify_id.is_some() {
         return Err("Local track is already linked to a Spotify track".into());
     }
+
+    // Journal what this merge destroys (ghost row + pre-merge local comment)
+    // so "Unlink from Spotify" can restore it exactly.
+    db.add_merge_log(local_id, &ghost, local.comment_raw.as_deref())
+        .map_err(|e| e.to_string())?;
 
     let ghost_comment = ghost.comment_raw.clone().unwrap_or_default();
     let local_comment = local.comment_raw.clone().unwrap_or_default();
@@ -96,8 +113,26 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
 
     // 2. DB comment
     let mut updated = local.clone();
-    updated.comment_raw = if new_comment.is_empty() { None } else { Some(new_comment) };
+    updated.comment_raw = if new_comment.is_empty() { None } else { Some(new_comment.clone()) };
     db.update_track(&updated).map_err(|e| e.to_string())?;
+
+    // 2b. Keep Music.app in agreement (see doc comment): push when allowed,
+    // dirty-flag when not, nothing when the comment didn't actually change
+    // or the track has no Music.app counterpart.
+    let mut push_job = None;
+    if new_comment != local_comment {
+        match &local.itunes_pid {
+            Some(pid) if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() => {
+                push_job = Some((pid.clone(), new_comment));
+            }
+            Some(_) => {
+                if let Err(e) = db.mark_tracks_dirty(&[local_id]) {
+                    eprintln!("Spotify merge: failed to mark track dirty: {}", e);
+                }
+            }
+            None => {}
+        }
+    }
 
     // 3. Repoint playlist membership (ignore rows where local is already a member)
     db.repoint_playlist_tracks(ghost_id, local_id).map_err(|e| e.to_string())?;
@@ -107,7 +142,88 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
     db.delete_pending_matches_for_ghost(ghost_id).map_err(|e| e.to_string())?;
     db.delete_track(ghost_id).map_err(|e| e.to_string())?;
     let _ = db.sync_tags();
-    Ok(())
+    Ok(push_job)
+}
+
+/// Reverse a ghost→local merge: recreate the ghost, hand its spotify_id and
+/// Spotify-playlist memberships back, and — when the merge was journaled —
+/// restore the local track's exact pre-merge comment and the ghost's own
+/// tags/rating. Unjournaled links (merges from before the journal existed)
+/// still unlink cleanly, but the local comment keeps the merged tags since
+/// there's no record of which ones the ghost brought in.
+pub fn unlink_local_track(db: &Database, local_id: i64) -> Result<Option<MusicPush>, String> {
+    let local = db.get_track(local_id).map_err(|e| e.to_string())?.ok_or("Track not found")?;
+    if local.is_ghost() {
+        return Err("Track is a Spotify ghost, not a linked local track".into());
+    }
+    let sid = local.spotify_id.clone().ok_or("Track is not linked to a Spotify track")?;
+
+    // A journal row from an older, different link must not be replayed here.
+    let journal = db.take_merge_log_for_local(local_id).map_err(|e| e.to_string())?
+        .filter(|j| j.spotify_id == sid);
+
+    // 1. Free the unique spotify_id index, then recreate the ghost — journal
+    // metadata when available, the local track's own otherwise (the next
+    // Spotify sync refreshes ghost metadata from the API).
+    db.clear_spotify_id(local_id).map_err(|e| e.to_string())?;
+    let (artist, title, album, duration) = match &journal {
+        Some(j) => (
+            j.ghost_artist.clone().unwrap_or_default(),
+            j.ghost_title.clone().unwrap_or_default(),
+            j.ghost_album.clone().unwrap_or_default(),
+            j.ghost_duration_secs,
+        ),
+        None => (
+            local.artist.clone().unwrap_or_default(),
+            local.title.clone().unwrap_or_default(),
+            local.album.clone().unwrap_or_default(),
+            local.duration_secs,
+        ),
+    };
+    let ghost_id = db
+        .upsert_ghost_track(&sid, "", &artist, &title, &album, duration)
+        .map_err(|e| e.to_string())?;
+    if let Some(j) = &journal {
+        if let Some(c) = &j.ghost_comment {
+            db.update_track_metadata(ghost_id, c).map_err(|e| e.to_string())?;
+        }
+        if j.ghost_rating > 0 {
+            db.update_track_rating(ghost_id, j.ghost_rating as u32).map_err(|e| e.to_string())?;
+        }
+    }
+
+    // 2. Spotify-playlist memberships can only have come from the ghost —
+    // point them back at it. The local track's other playlists are its own.
+    db.repoint_spotify_playlist_tracks(local_id, ghost_id).map_err(|e| e.to_string())?;
+
+    // 3. Restore the pre-merge comment (journaled merges only), following the
+    // same file + DB + Music.app protocol as the merge itself.
+    let mut push_job = None;
+    if let Some(j) = &journal {
+        if j.local_comment_before != local.comment_raw {
+            let restored = j.local_comment_before.clone().unwrap_or_default();
+            if let Err(e) = crate::metadata::write_metadata(&local.file_path, &restored) {
+                eprintln!("Spotify unlink: file tag write failed ({}), DB still updated", e);
+            }
+            let mut updated = local.clone();
+            updated.spotify_id = None;
+            updated.comment_raw = j.local_comment_before.clone();
+            db.update_track(&updated).map_err(|e| e.to_string())?;
+            match &local.itunes_pid {
+                Some(pid) if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() => {
+                    push_job = Some((pid.clone(), restored));
+                }
+                Some(_) => {
+                    if let Err(e) = db.mark_tracks_dirty(&[local_id]) {
+                        eprintln!("Spotify unlink: failed to mark track dirty: {}", e);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    let _ = db.sync_tags();
+    Ok(push_job)
 }
 
 /// A local track is eligible for ghost matching only if it actually has a
@@ -127,6 +243,7 @@ pub fn process_new_local_tracks(
     new_track_ids: &[i64],
 ) -> MergeOutcome {
     let mut outcome = MergeOutcome::default();
+    let mut pushes: Vec<MusicPush> = Vec::new();
     let Ok(db) = db.lock() else { return outcome };
     let Ok(ghosts) = db.get_ghost_tracks() else { return outcome };
     if ghosts.is_empty() {
@@ -152,8 +269,9 @@ pub fn process_new_local_tracks(
         }
         match best {
             Some((ghost_id, score)) if score >= matcher::AUTO_MERGE_THRESHOLD => {
-                if merge_ghost_into_local(&db, ghost_id, local_id).is_ok() {
+                if let Ok(push) = merge_ghost_into_local(&db, ghost_id, local_id) {
                     outcome.auto_merged += 1;
+                    pushes.extend(push);
                 }
             }
             Some((ghost_id, score)) if score >= matcher::REVIEW_THRESHOLD => {
@@ -162,6 +280,14 @@ pub fn process_new_local_tracks(
                 }
             }
             _ => {}
+        }
+    }
+    // Music.app pushes run lock-free: batch_update_track_comments is an
+    // AppleScript round-trip that can take seconds.
+    drop(db);
+    if !pushes.is_empty() {
+        if let Err(e) = crate::apple_music::batch_update_track_comments(pushes) {
+            eprintln!("Spotify merge: Music.app comment push failed: {}", e);
         }
     }
     if outcome.auto_merged > 0 || outcome.pending_review > 0 {
@@ -256,6 +382,120 @@ mod tests {
         let local_row = dbm.get_track(local).unwrap().unwrap();
         assert_eq!(local_row.comment_raw.as_deref(), Some("keep-me"), "comment must be untouched");
         assert_eq!(local_row.spotify_id.as_deref(), Some("already-linked-id"), "spotify_id must be untouched");
+    }
+
+    fn make_local(dbm: &crate::db::Database, pid: &str, comment: Option<&str>, file: &str) -> i64 {
+        let tmp = std::env::temp_dir().join(file);
+        std::fs::write(&tmp, b"").unwrap();
+        dbm.insert_imported_track(&crate::models::Track {
+            id: 0, persistent_id: pid.into(), file_path: tmp.to_string_lossy().into_owned(),
+            artist: Some("Artist".into()), title: Some("Title".into()), album: None,
+            comment_raw: comment.map(|c| c.to_string()), grouping_raw: None,
+            duration_secs: 200.0, format: "MP3".into(),
+            size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
+            missing: false, itunes_pid: None, unlinked_at: None,
+            source: "local".into(), spotify_id: None,
+        }, None, None).unwrap()
+    }
+
+    /// The "tags get overwritten" bug: a merged comment that never reaches
+    /// Music.app is clobbered by the next iTunes pull. In push-enabled mode
+    /// the merge must hand back a Music.app push job for the merged comment.
+    #[test]
+    fn merge_returns_music_push_for_itunes_linked_track_in_two_way_mode() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-push", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        dbm.conn.execute("UPDATE tracks SET comment_raw = ' && energetic' WHERE id = ?1",
+            rusqlite::params![ghost]).unwrap();
+        let local = make_local(&dbm, "TD-push", Some("note && house"), "tagdeck_merge_push.mp3");
+        dbm.conn.execute("UPDATE tracks SET itunes_pid = 'ITUNES-PID-1' WHERE id = ?1",
+            rusqlite::params![local]).unwrap();
+        // sync_mode unset → defaults to TwoWay (push enabled)
+
+        let push = merge_ghost_into_local(&dbm, ghost, local).unwrap();
+
+        let (pid, comment) = push.expect("two-way mode + linked track must produce a Music.app push");
+        assert_eq!(pid, "ITUNES-PID-1");
+        assert_eq!(comment, "note && house; energetic");
+        let dirty: i64 = dbm.conn.query_row(
+            "SELECT dirty_since_sync FROM tracks WHERE id = ?1",
+            rusqlite::params![local], |r| r.get(0)).unwrap();
+        assert_eq!(dirty, 0, "pushed tracks are in agreement with Music.app, not dirty");
+    }
+
+    /// Same bug, non-pushing mode: the merge must dirty-flag the track so the
+    /// iTunes pull treats the divergence as a conflict instead of overwriting.
+    #[test]
+    fn merge_marks_track_dirty_when_push_disabled() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        dbm.set_config("sync_mode", "import_only").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-dirty", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        dbm.conn.execute("UPDATE tracks SET comment_raw = ' && energetic' WHERE id = ?1",
+            rusqlite::params![ghost]).unwrap();
+        let local = make_local(&dbm, "TD-dirty", None, "tagdeck_merge_dirty.mp3");
+        dbm.conn.execute("UPDATE tracks SET itunes_pid = 'ITUNES-PID-2' WHERE id = ?1",
+            rusqlite::params![local]).unwrap();
+
+        let push = merge_ghost_into_local(&dbm, ghost, local).unwrap();
+
+        assert!(push.is_none(), "no Music.app push in import-only mode");
+        let dirty: i64 = dbm.conn.query_row(
+            "SELECT dirty_since_sync FROM tracks WHERE id = ?1",
+            rusqlite::params![local], |r| r.get(0)).unwrap();
+        assert_eq!(dirty, 1, "divergence from Music.app must be flagged as a conflict");
+    }
+
+    #[test]
+    fn unlink_restores_exact_premerge_state() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-undo", "u", "GArtist", "GTitle", "GAlbum", 199.0).unwrap();
+        dbm.conn.execute("UPDATE tracks SET comment_raw = ' && energetic; house', rating = 80 WHERE id = ?1",
+            rusqlite::params![ghost]).unwrap();
+        dbm.upsert_spotify_playlist("pl-undo", "P", "snap", &[ghost]).unwrap();
+        let local = make_local(&dbm, "TD-undo", Some("my note && classic"), "tagdeck_unlink_test.mp3");
+
+        merge_ghost_into_local(&dbm, ghost, local).unwrap();
+        let merged = dbm.get_track(local).unwrap().unwrap();
+        assert_eq!(merged.comment_raw.as_deref(), Some("my note && classic; energetic; house"));
+
+        unlink_local_track(&dbm, local).unwrap();
+
+        let restored = dbm.get_track(local).unwrap().unwrap();
+        assert_eq!(restored.spotify_id, None, "spotify link cleared");
+        assert_eq!(restored.comment_raw.as_deref(), Some("my note && classic"),
+            "pre-merge comment restored exactly");
+        let new_ghost_id = dbm.find_track_by_spotify_id("g-undo").unwrap()
+            .expect("ghost recreated with its spotify_id");
+        let new_ghost = dbm.get_track(new_ghost_id).unwrap().unwrap();
+        assert!(new_ghost.is_ghost());
+        assert_eq!(new_ghost.artist.as_deref(), Some("GArtist"));
+        assert_eq!(new_ghost.comment_raw.as_deref(), Some(" && energetic; house"),
+            "ghost tags restored");
+        assert_eq!(new_ghost.rating, 80, "ghost rating restored");
+        let member: i64 = dbm.conn.query_row(
+            "SELECT track_id FROM playlist_tracks LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(member, new_ghost_id, "spotify playlist membership repointed back to the ghost");
+        // Journal consumed — a second unlink must fail (no longer linked).
+        assert!(unlink_local_track(&dbm, local).is_err());
+    }
+
+    /// Links made before the journal existed can still be unlinked: the ghost
+    /// is rebuilt from the local track's metadata and the merged tags stay.
+    #[test]
+    fn unlink_without_journal_row_still_unlinks() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let local = make_local(&dbm, "TD-nojournal", Some("note && a; b"), "tagdeck_unlink_nj.mp3");
+        dbm.conn.execute("UPDATE tracks SET spotify_id = 'g-legacy' WHERE id = ?1",
+            rusqlite::params![local]).unwrap();
+
+        unlink_local_track(&dbm, local).unwrap();
+
+        let restored = dbm.get_track(local).unwrap().unwrap();
+        assert_eq!(restored.spotify_id, None);
+        assert_eq!(restored.comment_raw.as_deref(), Some("note && a; b"),
+            "without a journal the comment is left as-is");
+        let ghost_id = dbm.find_track_by_spotify_id("g-legacy").unwrap().expect("ghost recreated");
+        assert!(dbm.get_track(ghost_id).unwrap().unwrap().is_ghost());
     }
 
     /// Fix 1 / Critical 1, `process_new_local_tracks` layer: direct unit

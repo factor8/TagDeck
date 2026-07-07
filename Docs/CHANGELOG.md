@@ -4,6 +4,7 @@
 
 ### Added
 - **Spotify integration** (Settings → Spotify): import playlists selectively, tag Spotify tracks before you own the files, play them back via Spotify Connect, and automatically merge your tags into the file once you buy the track. Requires Spotify Premium.
+- **Unlink from Spotify**: right-click a wrongly matched track to undo its Spotify link — the Spotify-only entry reappears with its tags, rating, and playlist memberships, and the local track gets back the exact tags it had before the match.
 - **Playlist search**: a filter bar at the top of the sidebar narrows the playlist tree as you type (matches keep their folder context, folders auto-expand while filtering), and **⌘K** opens a quick switcher — fuzzy-search all playlists and folders with parent-path breadcrumbs and iTunes badges, then hit ↩ to jump straight to one (it's selected, revealed, and flashed in the sidebar).
 - **Playlist backup and restore** (Settings → Library): export all playlists — folder tree and track references — to a versioned JSON file, and restore from one with a picker (choose which playlists, folders auto-include parents). Restored tracks match by ID with a file-path fallback.
 - **Drag tracks out of the app** (⌥-drag): hold Option while dragging a track row to drag the actual audio file(s) out of TagDeck — drop into Finder to copy, onto Mail to attach, or into a Rekordbox playlist to import. Works with multi-selection; missing tracks are skipped. Plain drag still adds to playlists / reorders as before.
@@ -21,6 +22,7 @@
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
 
 ### Fixed
+- Tags no longer vanish after a Spotify track is matched to a purchased track: the merged tags are now pushed to Music.app (or flagged as a conflict when the sync mode doesn't allow pushing), so the next iTunes sync can't overwrite them with Music.app's stale copy of the comment.
 - Loading Spotify playlists no longer fails with "missing field `tracks`": the Spotify API now reports playlist track counts under `items` instead of `tracks`, and TagDeck accepts both (a playlist missing the count entirely shows 0 instead of failing the whole list).
 - Importing a Spotify playlist no longer produces an empty playlist: the same Spotify API rename also changed the per-row track wrapper from `track` to `item`, which TagDeck was silently skipping. Both names are accepted now — re-import any playlist that came in empty to backfill its tracks.
 - Seeking in the Spotify player now works (the handle no longer snaps back), and pause/resume/next/previous are no longer at risk of the same failure: Spotify's servers reject bodyless PUT/POST requests without a `Content-Length` header ("411 Length Required"), so TagDeck now sends an explicit empty body on those calls.

@@ -144,6 +144,27 @@ impl Database {
             [],
         );
 
+        // Merge journal: snapshot of what a ghost→local merge destroyed (the
+        // ghost row and the local track's pre-merge comment), so "Unlink from
+        // Spotify" can restore the exact pre-merge state. One row per linked
+        // local track — consumed (deleted) by the unlink.
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS spotify_merge_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                local_track_id INTEGER NOT NULL UNIQUE,
+                spotify_id TEXT NOT NULL,
+                ghost_artist TEXT,
+                ghost_title TEXT,
+                ghost_album TEXT,
+                ghost_duration_secs REAL NOT NULL DEFAULT 0,
+                ghost_comment TEXT,
+                ghost_rating INTEGER NOT NULL DEFAULT 0,
+                local_comment_before TEXT,
+                merged_at INTEGER NOT NULL
+            )",
+            [],
+        );
+
         // One-time backfill for per-playlist sync: playlists that came from
         // iTunes keep syncing by default; TagDeck-native ones stay local-only.
         let backfill_done = conn
@@ -1828,6 +1849,97 @@ impl Database {
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
+
+    /// Record what a ghost→local merge is about to destroy, keyed by the local
+    /// track. REPLACE: a re-link after an unlink just overwrites the old row.
+    pub fn add_merge_log(
+        &self,
+        local_track_id: i64,
+        ghost: &crate::models::Track,
+        local_comment_before: Option<&str>,
+    ) -> Result<()> {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO spotify_merge_log
+                (local_track_id, spotify_id, ghost_artist, ghost_title, ghost_album,
+                 ghost_duration_secs, ghost_comment, ghost_rating, local_comment_before, merged_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                local_track_id,
+                ghost.spotify_id.as_deref().unwrap_or_default(),
+                ghost.artist, ghost.title, ghost.album,
+                ghost.duration_secs, ghost.comment_raw, ghost.rating,
+                local_comment_before, now
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch-and-delete the merge journal row for a local track, if any.
+    pub fn take_merge_log_for_local(&self, local_track_id: i64) -> Result<Option<MergeLogEntry>> {
+        use rusqlite::OptionalExtension;
+        let entry: Option<MergeLogEntry> = self.conn.query_row(
+            "SELECT spotify_id, ghost_artist, ghost_title, ghost_album,
+                    ghost_duration_secs, ghost_comment, ghost_rating, local_comment_before
+             FROM spotify_merge_log WHERE local_track_id = ?1",
+            params![local_track_id],
+            |r| Ok(MergeLogEntry {
+                spotify_id: r.get(0)?,
+                ghost_artist: r.get(1)?,
+                ghost_title: r.get(2)?,
+                ghost_album: r.get(3)?,
+                ghost_duration_secs: r.get(4)?,
+                ghost_comment: r.get(5)?,
+                ghost_rating: r.get(6)?,
+                local_comment_before: r.get(7)?,
+            }),
+        ).optional()?;
+        self.conn.execute(
+            "DELETE FROM spotify_merge_log WHERE local_track_id = ?1",
+            params![local_track_id],
+        )?;
+        Ok(entry)
+    }
+
+    /// Clears a track's spotify_id (freeing the unique index so a ghost can
+    /// reclaim it).
+    pub fn clear_spotify_id(&self, track_id: i64) -> Result<()> {
+        self.conn.execute("UPDATE tracks SET spotify_id = NULL WHERE id = ?1", params![track_id])?;
+        Ok(())
+    }
+
+    /// Inverse of the merge's playlist repointing, scoped to Spotify-origin
+    /// playlists only: memberships there can only have come from the ghost,
+    /// while the local track's other playlist memberships are its own.
+    pub fn repoint_spotify_playlist_tracks(&self, from_track: i64, to_track: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE OR IGNORE playlist_tracks SET track_id = ?2
+             WHERE track_id = ?1
+               AND playlist_id IN (SELECT id FROM playlists WHERE origin = 'spotify')",
+            params![from_track, to_track],
+        )?;
+        self.conn.execute(
+            "DELETE FROM playlist_tracks
+             WHERE track_id = ?1
+               AND playlist_id IN (SELECT id FROM playlists WHERE origin = 'spotify')",
+            params![from_track],
+        )?;
+        Ok(())
+    }
+}
+
+/// Snapshot taken at ghost→local merge time, used by unlink to restore the
+/// pre-merge state (see `spotify::merge::unlink_local_track`).
+#[derive(Debug, Clone)]
+pub struct MergeLogEntry {
+    pub spotify_id: String,
+    pub ghost_artist: Option<String>,
+    pub ghost_title: Option<String>,
+    pub ghost_album: Option<String>,
+    pub ghost_duration_secs: f64,
+    pub ghost_comment: Option<String>,
+    pub ghost_rating: i64,
+    pub local_comment_before: Option<String>,
 }
 
 /// A single playlist in a backup, with its track references.
