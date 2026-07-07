@@ -1824,16 +1824,17 @@ impl Database {
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
-    /// Queue a mid-confidence ghost/local match for user review. No-op if the
-    /// pair is already queued (UNIQUE(ghost_track_id, local_track_id)).
-    pub fn add_pending_match(&self, ghost_id: i64, local_id: i64, score: f64) -> Result<()> {
+    /// Queue a mid-confidence ghost/local match for user review. Returns
+    /// whether a row was inserted — false means the pair was already queued
+    /// (UNIQUE(ghost_track_id, local_track_id)).
+    pub fn add_pending_match(&self, ghost_id: i64, local_id: i64, score: f64) -> Result<bool> {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
-        self.conn.execute(
+        let inserted = self.conn.execute(
             "INSERT OR IGNORE INTO spotify_pending_matches (ghost_track_id, local_track_id, score, created_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![ghost_id, local_id, score, now],
         )?;
-        Ok(())
+        Ok(inserted > 0)
     }
 
     /// Deletes a pending match by id, returning the (ghost_id, local_id) pair
