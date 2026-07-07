@@ -1,0 +1,4 @@
+# Re-sign dev binaries with a stable identity so macOS keychain
+# "Always Allow" grants survive rebuilds (see src-tauri/scripts/dev-sign-run.sh).
+[target.aarch64-apple-darwin]
+runner = "src-tauri/scripts/dev-sign-run.sh"
