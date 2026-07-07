@@ -5,11 +5,12 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, ListMusic, Music, Trash2, X } from 'lucide-react';
 import { Track } from '../types';
+import { QueueItem } from '../hooks/usePlayQueue';
 
 interface Props {
     nowPlaying: Track | null;
     /** The manual play queue, front = plays next. */
-    queue: Track[];
+    queue: QueueItem[];
     /** Display-only preview of what the tracklist plays after the queue empties. */
     upcoming: Track[];
     /** Name of the context the upcoming tracks come from (playlist name or "Library"). */
@@ -50,16 +51,15 @@ const TrackLabel = ({ track, dimmed }: { track: Track; dimmed?: boolean }) => (
     </div>
 );
 
-// One sortable row in the manual queue. Sortable id is index-based ("qi-3")
-// because the same track may be queued more than once.
-const QueueRow = ({ track, index, onRemove, onJump }: {
-    track: Track;
-    index: number;
+// One sortable row in the manual queue. uid is stable across reorders,
+// so rows keep DOM identity and dnd-kit can animate them.
+const QueueRow = ({ item, onRemove, onJump }: {
+    item: QueueItem;
     onRemove: () => void;
     onJump: () => void;
 }) => {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-        useSortable({ id: `qi-${index}` });
+        useSortable({ id: item.uid });
     const [hovered, setHovered] = useState(false);
 
     return (
@@ -88,7 +88,7 @@ const QueueRow = ({ track, index, onRemove, onJump }: {
             >
                 <GripVertical size={14} />
             </span>
-            <TrackLabel track={track} />
+            <TrackLabel track={item.track} />
             <button
                 onClick={(e) => { e.stopPropagation(); onRemove(); }}
                 style={{
@@ -130,9 +130,9 @@ export const QueuePane = ({ nowPlaying, queue, upcoming, sourceName, onRemoveAt,
     const handleDragEnd = (event: DragEndEvent) => {
         const { active, over } = event;
         if (!over || active.id === over.id) return;
-        const from = Number(String(active.id).replace('qi-', ''));
-        const to = Number(String(over.id).replace('qi-', ''));
-        if (!Number.isNaN(from) && !Number.isNaN(to)) onMoveItem(from, to);
+        const from = queue.findIndex(it => it.uid === active.id);
+        const to = queue.findIndex(it => it.uid === over.id);
+        if (from !== -1 && to !== -1) onMoveItem(from, to);
     };
 
     return (
@@ -182,13 +182,12 @@ export const QueuePane = ({ nowPlaying, queue, upcoming, sourceName, onRemoveAt,
                 </div>
             ) : (
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                    <SortableContext items={queue.map((_, i) => `qi-${i}`)} strategy={verticalListSortingStrategy}>
+                    <SortableContext items={queue.map(it => it.uid)} strategy={verticalListSortingStrategy}>
                         <div>
-                            {queue.map((track, i) => (
+                            {queue.map((item, i) => (
                                 <QueueRow
-                                    key={`qi-${i}-${track.id}`}
-                                    track={track}
-                                    index={i}
+                                    key={item.uid}
+                                    item={item}
                                     onRemove={() => onRemoveAt(i)}
                                     onJump={() => onJumpTo(i)}
                                 />
