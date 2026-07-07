@@ -216,7 +216,8 @@ pub fn run() {
             spotify::commands::spotify_confirm_match,
             spotify::commands::spotify_reject_match,
             spotify::commands::spotify_manual_link,
-            spotify::commands::spotify_unlink_track
+            spotify::commands::spotify_unlink_track,
+            spotify::commands::spotify_scan_playlist_matches
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

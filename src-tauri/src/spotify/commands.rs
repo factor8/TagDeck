@@ -310,3 +310,14 @@ pub async fn spotify_unlink_track(track_id: i64, state: State<'_, AppState>) -> 
     run_music_push(push);
     Ok(())
 }
+
+/// On-demand "Find library matches" for one imported Spotify playlist.
+/// Queues every candidate ≥ REVIEW_THRESHOLD for review; never auto-merges.
+#[tauri::command]
+pub async fn spotify_scan_playlist_matches(
+    playlist_id: i64,
+    state: State<'_, AppState>,
+) -> Result<super::merge::ScanResult, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    super::merge::scan_playlist_for_matches(&db, playlist_id)
+}
