@@ -304,6 +304,58 @@ pub fn process_new_local_tracks(
     outcome
 }
 
+#[derive(Debug, Default, Serialize)]
+pub struct ScanResult {
+    pub ghosts_scanned: usize,
+    pub candidates_queued: usize,
+    pub already_pending: usize,
+}
+
+/// On-demand sweep for one imported Spotify playlist: score each of its
+/// ghosts against every eligible local track and queue the best candidate
+/// (≥ REVIEW_THRESHOLD) for user review. Deliberately never auto-merges —
+/// the user chose review-everything for manual scans, unlike the automatic
+/// new-file flow above (process_new_local_tracks).
+pub fn scan_playlist_for_matches(db: &Database, playlist_id: i64) -> Result<ScanResult, String> {
+    let track_ids = db.get_playlist_track_ids(playlist_id).map_err(|e| e.to_string())?;
+    let all = db.get_all_tracks().map_err(|e| e.to_string())?;
+    let candidates: Vec<&crate::models::Track> =
+        all.iter().filter(|t| is_match_candidate(t)).collect();
+
+    let mut result = ScanResult::default();
+    for tid in track_ids {
+        let Ok(Some(ghost)) = db.get_track(tid) else { continue };
+        if !ghost.is_ghost() {
+            continue;
+        }
+        result.ghosts_scanned += 1;
+        let mut best: Option<(i64, f64)> = None;
+        for local in &candidates {
+            let score = matcher::match_score(
+                ghost.artist.as_deref().unwrap_or(""),
+                ghost.title.as_deref().unwrap_or(""),
+                ghost.duration_secs,
+                local.artist.as_deref().unwrap_or(""),
+                local.title.as_deref().unwrap_or(""),
+                local.duration_secs,
+            );
+            if best.map(|(_, s)| score > s).unwrap_or(score > 0.0) {
+                best = Some((local.id, score));
+            }
+        }
+        if let Some((local_id, score)) = best {
+            if score >= matcher::REVIEW_THRESHOLD {
+                match db.add_pending_match(ghost.id, local_id, score) {
+                    Ok(true) => result.candidates_queued += 1,
+                    Ok(false) => result.already_pending += 1,
+                    Err(e) => eprintln!("Spotify scan: failed to queue match: {}", e),
+                }
+            }
+        }
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +588,95 @@ mod tests {
         ).unwrap();
         let linked = dbm.get_track(linked_id).unwrap().unwrap();
         assert!(!is_match_candidate(&linked), "an already-linked local track must not be re-scored");
+    }
+
+    fn pending_rows(dbm: &crate::db::Database) -> Vec<(i64, i64, f64)> {
+        dbm.get_pending_match_rows().unwrap()
+            .into_iter().map(|(_, g, l, s)| (g, l, s)).collect()
+    }
+
+    /// Core behavior: a ghost with a clear local match is queued for review —
+    /// NOT auto-merged, even though the score is well above 0.90.
+    #[test]
+    fn scan_queues_high_confidence_match_without_merging() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-scan1", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        let pl = dbm.upsert_spotify_playlist("pl-scan1", "P", "s", &[ghost]).unwrap();
+        let local = make_local(&dbm, "TD-scan1", None, "tagdeck_scan1.mp3");
+
+        let r = scan_playlist_for_matches(&dbm, pl).unwrap();
+
+        assert_eq!(r.ghosts_scanned, 1);
+        assert_eq!(r.candidates_queued, 1);
+        assert_eq!(r.already_pending, 0);
+        assert!(dbm.get_track(ghost).unwrap().unwrap().is_ghost(), "ghost must NOT be merged");
+        let rows = pending_rows(&dbm);
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].0, rows[0].1), (ghost, local));
+        assert!(rows[0].2 >= matcher::AUTO_MERGE_THRESHOLD, "sanity: this was a high-confidence pair");
+    }
+
+    /// A ghost with nothing similar in the library queues nothing.
+    #[test]
+    fn scan_skips_ghosts_below_review_threshold() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-scan2", "u", "Completely Different Band", "Nothing Alike", "Al", 200.0).unwrap();
+        let pl = dbm.upsert_spotify_playlist("pl-scan2", "P", "s", &[ghost]).unwrap();
+        make_local(&dbm, "TD-scan2", None, "tagdeck_scan2.mp3"); // "Artist" / "Title"
+
+        let r = scan_playlist_for_matches(&dbm, pl).unwrap();
+
+        assert_eq!(r.ghosts_scanned, 1);
+        assert_eq!(r.candidates_queued, 0);
+        assert!(pending_rows(&dbm).is_empty());
+    }
+
+    /// Re-running the scan must not duplicate queue rows; the second pass
+    /// reports the pair as already pending.
+    #[test]
+    fn rescan_reports_already_pending_instead_of_duplicating() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-scan3", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        let pl = dbm.upsert_spotify_playlist("pl-scan3", "P", "s", &[ghost]).unwrap();
+        make_local(&dbm, "TD-scan3", None, "tagdeck_scan3.mp3");
+
+        scan_playlist_for_matches(&dbm, pl).unwrap();
+        let r = scan_playlist_for_matches(&dbm, pl).unwrap();
+
+        assert_eq!(r.candidates_queued, 0);
+        assert_eq!(r.already_pending, 1);
+        assert_eq!(pending_rows(&dbm).len(), 1);
+    }
+
+    /// Locals already linked to Spotify are never candidates (same guard as
+    /// the automatic flow — is_match_candidate).
+    #[test]
+    fn scan_excludes_already_linked_locals() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-scan4", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        let pl = dbm.upsert_spotify_playlist("pl-scan4", "P", "s", &[ghost]).unwrap();
+        let local = make_local(&dbm, "TD-scan4", None, "tagdeck_scan4.mp3");
+        dbm.conn.execute("UPDATE tracks SET spotify_id = 'other-track' WHERE id = ?1",
+            rusqlite::params![local]).unwrap();
+
+        let r = scan_playlist_for_matches(&dbm, pl).unwrap();
+
+        assert_eq!(r.ghosts_scanned, 1);
+        assert_eq!(r.candidates_queued, 0);
+        assert!(pending_rows(&dbm).is_empty());
+    }
+
+    /// Non-ghost members of the playlist (already-matched tracks) don't count
+    /// as scanned ghosts.
+    #[test]
+    fn scan_counts_only_ghost_members() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-scan5", "u", "Someone Else", "Other Song", "Al", 123.0).unwrap();
+        let local_member = make_local(&dbm, "TD-scan5", None, "tagdeck_scan5.mp3");
+        let pl = dbm.upsert_spotify_playlist("pl-scan5", "P", "s", &[ghost, local_member]).unwrap();
+
+        let r = scan_playlist_for_matches(&dbm, pl).unwrap();
+
+        assert_eq!(r.ghosts_scanned, 1, "the local member is not a ghost");
     }
 }
