@@ -59,8 +59,8 @@ A Spotify-style play queue. Users queue tracks via context menu or hotkey; queue
 
 ## Edge cases
 
-- Spotify ghost tracks queue like any track — `Player` already routes by `track.source`.
-- If a queued track's file is missing at play time, existing missing-file handling applies and playback advances to the next item.
+- Spotify ghost tracks queue like any track — `Player` already routes by `track.source`. Known limitation (pre-existing, out of scope): `SpotifyPlayer` has no track-end detection, so when a queued ghost finishes, the user must press Next to continue the queue. Follow-up: detect end-of-track in SpotifyPlayer's progress poll and call `onNext`.
+- If a queued track's file is missing at play time, existing missing-file handling applies: the track is marked missing and playback stops with an error (it does not auto-advance — that is the app's pre-existing behavior). The queue entry is already consumed, so pressing Next resumes the queue. Follow-up option: advance-on-missing with a guard against skip-loops through consecutive missing tracks.
 - Switching playlists/filters does not touch the manual queue; the "Next up" section simply reflects the new visible tracklist.
 - Empty queue + end of tracklist: playback stops (current behavior).
 
