@@ -9,6 +9,95 @@ use std::path::Path;
 
 use crate::file_manager::TrackImportMeta;
 
+/// Decode a 4-byte ID3v2 synchsafe integer (7 significant bits per byte).
+fn synchsafe(b: &[u8]) -> usize {
+    ((b[0] as usize) << 21) | ((b[1] as usize) << 14) | ((b[2] as usize) << 7) | (b[3] as usize)
+}
+
+/// Some MP3s (notably certain iTunes/older-encoder files) leave a run of junk
+/// padding between the end of the ID3v2 tag and the first MPEG audio frame.
+///
+/// lofty's tag writer re-detects the file format from *content* (ignoring the
+/// extension) and only searches 1024 bytes past the ID3 tag for a frame sync
+/// (`ParseOptions::DEFAULT_MAX_JUNK_BYTES`). When the gap is larger, every tag
+/// write fails with "No format could be determined from the provided file",
+/// even though reads succeed (reads use the `.mp3` extension). The same gap can
+/// also defeat stricter decoders (e.g. the browser's Web Audio decoder, which
+/// then forces the player's native-decoder "fallback").
+///
+/// This strips the non-audio gap so the first frame immediately follows the
+/// tag, which both unblocks tag writes and cleans the file up for playback.
+/// The audio frames themselves are untouched. Returns `Ok(true)` if the file
+/// was rewritten.
+pub fn normalize_mpeg_junk_gap<P: AsRef<Path>>(path: P) -> Result<bool> {
+    let path = path.as_ref();
+    let data = std::fs::read(path)?;
+    // Only touch files that actually start with an ID3v2 tag. AIFF ("FORM"),
+    // FLAC ("fLaC"), etc. are left alone.
+    if data.len() < 10 || &data[..3] != b"ID3" {
+        return Ok(false);
+    }
+    let flags = data[5];
+    let tag_size = synchsafe(&data[6..10]);
+    let footer = if flags & 0x10 != 0 { 10 } else { 0 };
+    let id3_end = 10 + tag_size + footer;
+    if id3_end >= data.len() {
+        return Ok(false);
+    }
+
+    // Find the first plausible MPEG frame sync at or after the tag boundary.
+    let mut frame_pos = None;
+    let mut i = id3_end;
+    while i + 1 < data.len() {
+        if data[i] == 0xFF && (data[i + 1] & 0xE0) == 0xE0 {
+            let version = (data[i + 1] >> 3) & 0x3; // 0b01 = reserved
+            let layer = (data[i + 1] >> 1) & 0x3; // 0b00 = reserved
+            if version != 0b01 && layer != 0b00 {
+                frame_pos = Some(i);
+                break;
+            }
+        }
+        i += 1;
+    }
+    let frame_pos = match frame_pos {
+        Some(p) if p > id3_end => p,
+        // No gap, or no frame found at all — nothing safe to strip.
+        _ => return Ok(false),
+    };
+
+    // Splice out the junk gap: [ID3 tag][audio ...].
+    let mut out = Vec::with_capacity(data.len() - (frame_pos - id3_end));
+    out.extend_from_slice(&data[..id3_end]);
+    out.extend_from_slice(&data[frame_pos..]);
+
+    // Write via temp file + rename for atomicity; preserve permissions.
+    let tmp = path.with_extension("tagdeck-tmp");
+    std::fs::write(&tmp, &out).context("Failed to write normalized MP3")?;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    }
+    std::fs::rename(&tmp, path).context("Failed to replace file with normalized MP3")?;
+    eprintln!(
+        "[metadata] stripped {}-byte junk gap before first MPEG frame: {:?}",
+        frame_pos - id3_end,
+        path
+    );
+    Ok(true)
+}
+
+/// Saves `tag` to `path`. If lofty rejects the write because it can't determine
+/// the format (the ID3v2-to-audio junk-gap failure mode above), normalize the
+/// file once and retry. Any other failure is returned unchanged.
+fn save_tag_repairing(path: &Path, tag: &Tag, ctx: &'static str) -> Result<()> {
+    match tag.save_to_path(path, WriteOptions::default()) {
+        Ok(()) => Ok(()),
+        Err(first_err) => match normalize_mpeg_junk_gap(path) {
+            Ok(true) => tag.save_to_path(path, WriteOptions::default()).context(ctx),
+            _ => Err(first_err).context(ctx),
+        },
+    }
+}
+
 /// Overwrites the comment field with exactly the provided string.
 /// Also mirrors to Grouping if that's the desired behavior (or we can separate them).
 /// For the UI editor, we probably want to write exactly what the user typed.
@@ -54,8 +143,7 @@ pub fn write_metadata<P: AsRef<Path>>(path: P, comment: &str) -> Result<()> {
     // }
 
     // 4. Save
-    tag.save_to_path(path, WriteOptions::default())
-        .context("Failed to save tags to disk")?;
+    save_tag_repairing(path_ref, &tag, "Failed to save tags to disk")?;
 
     Ok(())
 }
@@ -152,8 +240,7 @@ pub fn write_track_info<P: AsRef<Path>>(
         }
     }
 
-    tag.save_to_path(path, WriteOptions::default())
-        .context("Failed to save track info to disk")?;
+    save_tag_repairing(path_ref, &tag, "Failed to save track info to disk")?;
 
     Ok(())
 }
@@ -215,4 +302,79 @@ pub fn read_full_metadata<P: AsRef<Path>>(path: P) -> Result<TrackImportMeta> {
         is_compilation,
         bit_rate,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// Build a synthetic ID3v2.4 header declaring `body_len` bytes of tag body.
+    fn id3_header(body_len: usize) -> Vec<u8> {
+        let ss = |n: usize| -> [u8; 4] {
+            [
+                ((n >> 21) & 0x7f) as u8,
+                ((n >> 14) & 0x7f) as u8,
+                ((n >> 7) & 0x7f) as u8,
+                (n & 0x7f) as u8,
+            ]
+        };
+        let mut h = vec![b'I', b'D', b'3', 4, 0, 0];
+        h.extend_from_slice(&ss(body_len));
+        h
+    }
+
+    #[test]
+    fn strips_junk_gap_between_tag_and_first_frame() {
+        // [ID3 header][32-byte body][1044 zero junk][MPEG frame 0xFF 0xFB ...]
+        let body = vec![0u8; 32];
+        let mut data = id3_header(body.len());
+        data.extend_from_slice(&body);
+        let id3_end = data.len();
+        data.extend_from_slice(&vec![0u8; 1044]); // the offending gap (> lofty's 1024)
+        let frame = [0xFFu8, 0xFB, 0x90, 0x00, 0x11, 0x22, 0x33, 0x44];
+        data.extend_from_slice(&frame);
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("tagdeck_junkgap_test.mp3");
+        std::fs::File::create(&path).unwrap().write_all(&data).unwrap();
+
+        let stripped = normalize_mpeg_junk_gap(&path).unwrap();
+        assert!(stripped, "expected the junk gap to be stripped");
+
+        let out = std::fs::read(&path).unwrap();
+        // Frame must now sit immediately after the tag, gap removed.
+        assert_eq!(&out[id3_end..id3_end + frame.len()], &frame);
+        assert_eq!(out.len(), id3_end + frame.len());
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn leaves_contiguous_file_untouched() {
+        // No gap: frame immediately follows the tag.
+        let body = vec![0u8; 16];
+        let mut data = id3_header(body.len());
+        data.extend_from_slice(&body);
+        data.extend_from_slice(&[0xFFu8, 0xFB, 0x90, 0x00]);
+        let before = data.clone();
+
+        let dir = std::env::temp_dir();
+        let path = dir.join("tagdeck_nogap_test.mp3");
+        std::fs::File::create(&path).unwrap().write_all(&data).unwrap();
+
+        let stripped = normalize_mpeg_junk_gap(&path).unwrap();
+        assert!(!stripped, "contiguous file should not be rewritten");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn ignores_non_id3_files() {
+        let data = b"FORM....AIFF and whatnot".to_vec();
+        let dir = std::env::temp_dir();
+        let path = dir.join("tagdeck_notid3_test.aiff");
+        std::fs::File::create(&path).unwrap().write_all(&data).unwrap();
+        assert!(!normalize_mpeg_junk_gap(&path).unwrap());
+        std::fs::remove_file(&path).ok();
+    }
 }
