@@ -351,7 +351,7 @@ fn main() {
     let mut best = (f32::MIN, ScoreParams::default());
     for &top_k in &[5usize, 10] {
         for &knn_trust in &[4usize, 6, 8, 10, 12, 15, 20] {
-            let p = ScoreParams { knn_trust, knn_top_k: top_k };
+            let p = ScoreParams { knn_trust, knn_top_k: top_k, ..ScoreParams::default() };
             let all = macro_blend(p, MIN_EVAL, usize::MAX);
             let low = macro_blend(p, 4, 9);
             let high = macro_blend(p, 10, usize::MAX);

@@ -16,9 +16,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use super::audio::decode_to_mono_48k;
-use super::clap::{AudioEmbedder, TextEmbedder};
+use super::clap::{AudioEmbedder, TextEmbedder, EMBED_DIM};
 use super::model_manager::{self, ModelStatus, MODEL_VERSION};
-use super::prompts::derive_prompt;
+use super::prompts::derive_prompt_ensemble;
 use super::scoring::{score_suggestions, ScoreInput, Suggestion, TagInfo};
 use super::{AnalysisState, AnalysisStatus};
 use crate::commands::AppState;
@@ -34,6 +34,16 @@ const MAX_WORKERS: usize = 3;
 
 fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
+}
+
+/// Normalize a vector to unit L2 length in place (no-op on the zero vector).
+fn l2_normalize(v: &mut [f32]) {
+    let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > 1e-12 {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
 }
 
 fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -144,7 +154,11 @@ struct AnalysisComplete {
 
 struct TagPromptJob {
     tag_id: i64,
-    prompt: String,
+    /// Prompt wordings to embed and average into one text anchor.
+    prompts: Vec<String>,
+    /// Drift-detection key (the joined wordings) stored alongside the vector, so
+    /// changing the ensemble templates or a tag's description re-embeds it.
+    key: String,
 }
 
 #[tauri::command]
@@ -209,10 +223,12 @@ pub async fn analyze_tracks(
                 .group_id
                 .and_then(|gid| group_names.get(&gid))
                 .map(|s| s.as_str());
-            if let Some(prompt) = derive_prompt(&tag.name, gname, tag.description.as_deref()) {
-                let needs = force || existing_prompt.get(&tag.id) != Some(&prompt);
+            if let Some(prompts) = derive_prompt_ensemble(&tag.name, gname, tag.description.as_deref())
+            {
+                let key = prompts.join("\n");
+                let needs = force || existing_prompt.get(&tag.id) != Some(&key);
                 if needs {
-                    tag_jobs.push(TagPromptJob { tag_id: tag.id, prompt });
+                    tag_jobs.push(TagPromptJob { tag_id: tag.id, prompts, key });
                 }
             }
         }
@@ -298,19 +314,35 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
                     if app.state::<AnalysisState>().cancel.load(Ordering::SeqCst) {
                         break;
                     }
-                    match text.embed_text(&job.prompt) {
-                        Ok(vec) => {
-                            if let Ok(db) = app.state::<AppState>().db.lock() {
-                                let _ = db.upsert_tag_text_embedding(
-                                    job.tag_id,
-                                    MODEL_VERSION,
-                                    &job.prompt,
-                                    &vec,
-                                    now_ts(),
-                                );
+                    // Embed each wording and mean-pool into one anchor. Averaging
+                    // smooths CLAP's sensitivity to exact phrasing (see eval_levers).
+                    let mut acc = vec![0f32; EMBED_DIM];
+                    let mut n = 0f32;
+                    let mut err: Option<String> = None;
+                    for p in &job.prompts {
+                        match text.embed_text(p) {
+                            Ok(v) => {
+                                for (k, x) in v.iter().enumerate() {
+                                    acc[k] += x;
+                                }
+                                n += 1.0;
                             }
+                            Err(e) => err = Some(format!("{p}: {e:#}")),
                         }
-                        Err(e) => log_err(format!("tag prompt embed failed ({}): {e:#}", job.prompt)),
+                    }
+                    if n > 0.0 {
+                        l2_normalize(&mut acc);
+                        if let Ok(db) = app.state::<AppState>().db.lock() {
+                            let _ = db.upsert_tag_text_embedding(
+                                job.tag_id,
+                                MODEL_VERSION,
+                                &job.key,
+                                &acc,
+                                now_ts(),
+                            );
+                        }
+                    } else if let Some(e) = err {
+                        log_err(format!("tag prompt embed failed ({e})"));
                     }
                     let _ = app.emit(
                         PROGRESS_EVENT,

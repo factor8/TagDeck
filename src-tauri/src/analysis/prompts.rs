@@ -44,6 +44,69 @@ pub fn derive_prompt(
     Some(prompt)
 }
 
+/// Derive an ENSEMBLE of prompt wordings for a tag. Averaging the text-tower
+/// embeddings of several phrasings gives a steadier zero-shot anchor than any
+/// single sentence — it smooths over CLAP's sensitivity to exact wording, which
+/// matters most for the rarely-used tags that never accumulate k-NN examples.
+///
+/// An explicit user `description` is respected verbatim (single-element), since
+/// the user chose those exact words. Returns `None` for the same cases as
+/// `derive_prompt` (non-audio group with no description, or an empty name).
+pub fn derive_prompt_ensemble(
+    tag_name: &str,
+    group_name: Option<&str>,
+    description: Option<&str>,
+) -> Option<Vec<String>> {
+    if let Some(desc) = description {
+        let desc = desc.trim();
+        if !desc.is_empty() {
+            return Some(vec![desc.to_string()]);
+        }
+    }
+
+    if let Some(group) = group_name {
+        if NON_AUDIO_GROUPS.iter().any(|g| g.eq_ignore_ascii_case(group)) {
+            return None;
+        }
+    }
+
+    let name = tag_name.trim().to_lowercase();
+    if name.is_empty() {
+        return None;
+    }
+    let prompts: Vec<String> = match group_name.map(|g| g.to_lowercase()).as_deref() {
+        Some("genre") => vec![
+            format!("a {name} electronic music track"),
+            format!("{name} music"),
+            format!("a song in the {name} genre"),
+            format!("this track sounds like {name}"),
+        ],
+        Some("vibe") => vec![
+            format!("a piece of music with a {name} mood"),
+            format!("a {name} sounding song"),
+            format!("{name} music"),
+            format!("this track feels {name}"),
+        ],
+        Some("instruments") => vec![
+            format!("a music recording featuring {name}"),
+            format!("a song with {name} in it"),
+            format!("the sound of {name} in a track"),
+        ],
+        Some("time of day") => vec![
+            format!("music that fits {name}"),
+            format!("a song for {name}"),
+            format!("{name} music"),
+        ],
+        Some("beat") => vec![
+            format!("a music track with a {name} rhythm"),
+            format!("a {name} beat"),
+            format!("{name} rhythm music"),
+        ],
+        _ => vec![format!("a {name} music track"), format!("{name} music")],
+    };
+    Some(prompts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +138,19 @@ mod tests {
             derive_prompt("Piano", Some("Instruments"), None).as_deref(),
             Some("a music recording featuring piano")
         );
+    }
+
+    #[test]
+    fn ensemble_multiple_wordings_and_desc_override() {
+        let e = derive_prompt_ensemble("Sinister", Some("Vibe"), None).unwrap();
+        assert!(e.len() >= 2);
+        assert!(e.iter().all(|p| p.contains("sinister")));
+        // first wording matches the single-prompt template for continuity
+        assert_eq!(e[0], "a piece of music with a sinister mood");
+        // explicit description collapses to a single verbatim prompt
+        let d = derive_prompt_ensemble("Wrecker", Some("Vibe"), Some("aggressive bass")).unwrap();
+        assert_eq!(d, vec!["aggressive bass".to_string()]);
+        // non-audio group still excluded
+        assert!(derive_prompt_ensemble("Ty Doza", Some("People"), None).is_none());
     }
 }

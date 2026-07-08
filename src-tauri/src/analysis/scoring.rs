@@ -20,15 +20,28 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
+/// How a tag's personalized (has-enough-examples) signal is computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnnMode {
+    /// Mean cosine of the query to its top-k nearest positive examples.
+    TopK,
+    /// Linear probe: score the query along the (normalized) direction from the
+    /// negative centroid to the positive centroid — i.e. what separates the
+    /// tag's tracks from the rest of the library, not just the nearest few.
+    MeanDiffProbe,
+}
+
 /// Tunable knobs for scoring. Defaults chosen by sweeping against a real
-/// library (see `bin/eval_diagnose`).
+/// library (see `bin/eval_diagnose` / `bin/eval_levers`).
 #[derive(Debug, Clone, Copy)]
 pub struct ScoreParams {
-    /// Examples a tag needs before its personalized k-NN signal is trusted.
-    /// At/above this the tag is scored by k-NN alone; below it, by zero-shot.
+    /// Examples a tag needs before its personalized signal is trusted.
+    /// At/above this the tag is scored by k-NN/probe alone; below it, by zero-shot.
     pub knn_trust: usize,
-    /// Neighbors averaged for the k-NN raw score.
+    /// Neighbors averaged for the `TopK` k-NN raw score.
     pub knn_top_k: usize,
+    /// Which personalized scorer to use once a tag clears `knn_trust`.
+    pub knn_mode: KnnMode,
 }
 
 impl Default for ScoreParams {
@@ -37,7 +50,7 @@ impl Default for ScoreParams {
         // policy plateaus for knn_trust in ~4–8 at top_k=5; 8 sits at the
         // robust end of that plateau (needs a real handful of examples before
         // trusting personalization) without overfitting to the exact peak.
-        Self { knn_trust: 8, knn_top_k: 5 }
+        Self { knn_trust: 8, knn_top_k: 5, knn_mode: KnnMode::TopK }
     }
 }
 
@@ -95,6 +108,66 @@ fn mean_std(xs: &[f32]) -> (f32, f32) {
     (mean, var.sqrt().max(1e-6))
 }
 
+/// Normalize a vector to unit L2 length in place (no-op on the zero vector).
+fn l2_normalize(v: &mut [f32]) {
+    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if n > 1e-12 {
+        for x in v.iter_mut() {
+            *x /= n;
+        }
+    }
+}
+
+/// Linear-probe score for a well-populated tag: build the direction from the
+/// negative centroid (everything else in the library) to the positive centroid
+/// (the tag's tracks), then z-score the query's projection onto it against the
+/// whole library's projections. Captures what *separates* the tag from the rest
+/// rather than just proximity to the nearest few examples.
+fn mean_diff_probe(input: &ScoreInput, positives: &[&Vec<f32>], pos_ids: &HashSet<i64>) -> f32 {
+    let dim = input.query.len();
+
+    let mut pos_c = vec![0f32; dim];
+    for p in positives {
+        for (i, x) in p.iter().enumerate() {
+            pos_c[i] += x;
+        }
+    }
+    if !positives.is_empty() {
+        let inv = 1.0 / positives.len() as f32;
+        for x in &mut pos_c {
+            *x *= inv;
+        }
+    }
+
+    let mut neg_c = vec![0f32; dim];
+    let mut neg_n = 0f32;
+    for (id, v) in input.all_tracks {
+        if *id == input.query_track_id || pos_ids.contains(id) {
+            continue;
+        }
+        for (i, x) in v.iter().enumerate() {
+            neg_c[i] += x;
+        }
+        neg_n += 1.0;
+    }
+    if neg_n > 0.0 {
+        let inv = 1.0 / neg_n;
+        for x in &mut neg_c {
+            *x *= inv;
+        }
+    }
+
+    // Direction between unit centroids, so it's a pure orientation.
+    l2_normalize(&mut pos_c);
+    l2_normalize(&mut neg_c);
+    let w: Vec<f32> = pos_c.iter().zip(&neg_c).map(|(a, b)| a - b).collect();
+
+    // Calibrate the query's projection against the whole library's.
+    let sims: Vec<f32> = input.all_tracks.iter().map(|(_, v)| dot(&w, v)).collect();
+    let (mu, sigma) = mean_std(&sims);
+    sigmoid((dot(&w, input.query) - mu) / sigma)
+}
+
 /// Compute ranked suggestions for one track with default parameters.
 pub fn score_suggestions(input: &ScoreInput) -> Vec<Suggestion> {
     score_suggestions_with(input, ScoreParams::default())
@@ -136,26 +209,29 @@ pub fn score_suggestions_with(input: &ScoreInput, params: ScoreParams) -> Vec<Su
             None => (0.0, false),
         };
 
-        // --- personalized k-NN ---
-        let positives: Vec<&Vec<f32>> = input
+        // --- personalized k-NN / probe ---
+        let pos_ids: HashSet<i64> = input
             .tag_positives
             .get(&tag.id)
-            .map(|ids| {
-                ids.iter()
-                    .filter(|id| **id != input.query_track_id)
-                    .filter_map(|id| index.get(id).copied())
-                    .collect()
-            })
+            .map(|ids| ids.iter().copied().filter(|id| *id != input.query_track_id).collect())
             .unwrap_or_default();
+        let positives: Vec<&Vec<f32>> =
+            pos_ids.iter().filter_map(|id| index.get(id).copied()).collect();
         let n = positives.len();
 
         let (knn, has_knn) = if n >= params.knn_trust {
-            let mut sims: Vec<f32> = positives.iter().map(|p| dot(input.query, p)).collect();
-            sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-            let k = params.knn_top_k.min(sims.len());
-            let raw = sims[..k].iter().sum::<f32>() / k as f32;
-            let z = (raw - bg_mean) / bg_std;
-            (sigmoid(z), true)
+            let score = match params.knn_mode {
+                KnnMode::TopK => {
+                    let mut sims: Vec<f32> =
+                        positives.iter().map(|p| dot(input.query, p)).collect();
+                    sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+                    let k = params.knn_top_k.min(sims.len());
+                    let raw = sims[..k].iter().sum::<f32>() / k as f32;
+                    sigmoid((raw - bg_mean) / bg_std)
+                }
+                KnnMode::MeanDiffProbe => mean_diff_probe(input, &positives, &pos_ids),
+            };
+            (score, true)
         } else {
             (0.0, false)
         };
@@ -259,7 +335,7 @@ mod tests {
             max_per_group: 8,
         };
         // Small fixture: lower the trust threshold so k-NN fires on 3-4 examples.
-        let params = ScoreParams { knn_trust: 3, knn_top_k: 5 };
+        let params = ScoreParams { knn_trust: 3, knn_top_k: 5, knn_mode: KnnMode::TopK };
         let sugg = score_suggestions_with(&input, params);
         assert_eq!(sugg[0].tag_id, 100, "closest tag should rank first");
         assert!(sugg[0].score > sugg.iter().find(|s| s.tag_id == 200).unwrap().score);
