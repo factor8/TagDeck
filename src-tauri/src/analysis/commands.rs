@@ -22,7 +22,7 @@ use super::prompts::derive_prompt_ensemble;
 use super::scoring::{score_suggestions, ScoreInput, Suggestion, TagInfo};
 use super::{AnalysisState, AnalysisStatus};
 use crate::commands::AppState;
-use crate::models::parse_comment_tags;
+use crate::models::{parse_comment_tags, TagCandidate};
 
 const PROGRESS_EVENT: &str = "analysis-progress";
 const COMPLETE_EVENT: &str = "analysis-complete";
@@ -604,6 +604,64 @@ pub async fn set_tag_description(
     let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
     let desc = description.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty());
     db.set_tag_description(tag_id, desc).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Vocabulary expansion: candidate scan + review
+// ---------------------------------------------------------------------------
+
+/// Deterministically propose new-tag candidates from the shape of the tag cloud.
+/// No model needed; inserts `proposed` rows (idempotent) and returns the full
+/// current candidate list.
+#[tauri::command]
+pub async fn scan_tag_candidates(state: State<'_, AppState>) -> Result<Vec<TagCandidate>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    let groups = db.get_tag_groups().map_err(|e| e.to_string())?;
+    let tags = db.get_all_tags().map_err(|e| e.to_string())?;
+
+    let existing: HashSet<String> = tags.iter().map(|t| t.name.to_lowercase()).collect();
+    let mut by_group: HashMap<i64, Vec<String>> = HashMap::new();
+    for t in &tags {
+        if let Some(g) = t.group_id {
+            by_group.entry(g).or_default().push(t.name.clone());
+        }
+    }
+    let group_pairs: Vec<(i64, String)> = groups.iter().map(|g| (g.id, g.name.clone())).collect();
+
+    let proposed = super::concept_map::propose(&group_pairs, &by_group, &existing);
+    let now = now_ts();
+    for p in &proposed {
+        db.insert_tag_candidate(&p.name, Some(p.group_id), p.description.as_deref(), "concept_map", now)
+            .map_err(|e| e.to_string())?;
+    }
+    db.get_tag_candidates(None).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_tag_candidates(
+    state: State<'_, AppState>,
+    status: Option<String>,
+) -> Result<Vec<TagCandidate>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    db.get_tag_candidates(status.as_deref()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn approve_tag_candidate(state: State<'_, AppState>, candidate_id: i64) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    db.set_tag_candidate_status(candidate_id, "approved").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn dismiss_tag_candidate(state: State<'_, AppState>, candidate_id: i64) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    db.set_tag_candidate_status(candidate_id, "dismissed").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_tag_candidate(state: State<'_, AppState>, candidate_id: i64) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    db.delete_tag_candidate(candidate_id).map_err(|e| e.to_string())
 }
 
 /// Minimum blended confidence a suggestion must clear to be shown, persisted in
