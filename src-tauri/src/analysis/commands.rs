@@ -731,12 +731,16 @@ pub async fn embed_tag_candidates(app: AppHandle) -> Result<(), String> {
         for job in &jobs {
             let mut acc = vec![0f32; EMBED_DIM];
             let mut n = 0f32;
+            let mut err = None;
             for p in &job.prompts {
-                if let Ok(v) = text.embed_text(p) {
-                    for (k, x) in v.iter().enumerate() {
-                        acc[k] += x;
+                match text.embed_text(p) {
+                    Ok(v) => {
+                        for (k, x) in v.iter().enumerate() {
+                            acc[k] += x;
+                        }
+                        n += 1.0;
                     }
-                    n += 1.0;
+                    Err(e) => err = Some(format!("{p}: {e:#}")),
                 }
             }
             if n > 0.0 {
@@ -744,6 +748,9 @@ pub async fn embed_tag_candidates(app: AppHandle) -> Result<(), String> {
                 if let Ok(db) = app2.state::<AppState>().db.lock() {
                     let _ = db.upsert_tag_candidate_embedding(job.tag_id, MODEL_VERSION, &job.key, &acc, now_ts());
                 }
+            } else if let Some(e) = err {
+                app2.state::<crate::logging::LogState>()
+                    .add_log("ERROR", &format!("candidate prompt embed failed ({e})"), &app2);
             }
         }
         Ok(())
