@@ -225,9 +225,16 @@ impl Database {
                 description TEXT,
                 status TEXT NOT NULL DEFAULT 'proposed',
                 source TEXT NOT NULL DEFAULT 'concept_map',
-                created_at INTEGER NOT NULL,
-                UNIQUE(name, group_id)
+                created_at INTEGER NOT NULL
             )",
+            [],
+        );
+        // Dedup by (name, group_id) with NULL groups collapsed to a single
+        // sentinel — a plain UNIQUE(name, group_id) would treat each NULL as
+        // distinct and never dedup ungrouped candidates.
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_candidates_name_group
+                ON tag_candidates(name, COALESCE(group_id, -1))",
             [],
         );
         // Candidate text embeddings live in their own table because
@@ -2595,6 +2602,16 @@ mod tests {
         // Deleting the candidate removes its embeddings regardless of FK pragma.
         db.delete_tag_candidate(id).unwrap();
         assert!(db.all_tag_candidate_embeddings("m1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_candidate_dedup_with_null_group() {
+        let db = Database::new(":memory:").unwrap();
+        // Same name, no group, inserted twice → must dedup to one row.
+        db.insert_tag_candidate("Ungrouped Idea", None, None, "concept_map", 1).unwrap();
+        db.insert_tag_candidate("Ungrouped Idea", None, Some("desc"), "concept_map", 2).unwrap();
+        let all = db.get_tag_candidates(None).unwrap();
+        assert_eq!(all.iter().filter(|c| c.name == "Ungrouped Idea").count(), 1);
     }
 
     #[test]
