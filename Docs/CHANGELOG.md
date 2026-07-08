@@ -28,6 +28,7 @@
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
 
 ### Fixed
+- Tags applied to a Spotify track right as it's auto-matched to a local file no longer silently fail to stick, and the track stays playable and reveal-in-Finder-able without having to click away and back. When a match completes, TagDeck now re-points the current selection (and the now-playing track) onto the merged local file instead of the discarded Spotify entry. As a safety net, bulk tagging now reports any tracks it couldn't write — you'll get a clear message ("N of M tracks couldn't be tagged") and the tag won't appear as applied when it wasn't, instead of failing quietly.
 - Clicking a track no longer leaves a lingering blue focus outline on that row after arrow keys move the selection elsewhere — the highlight now always matches the actually selected track.
 - Spacebar now reliably toggles play/pause: it works while a Spotify track is playing (previously local tracks only), and no longer goes dead after clicking a checkbox, slider, or other control — only typing in an actual text field claims the spacebar.
 - The Link to Local Track and Copy Playlists search boxes now match the library filter's behavior: each word matches independently across title, artist, and album, so e.g. "daft around" finds "Around the World" by Daft Punk (previously the whole query had to appear literally in one field).

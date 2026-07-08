@@ -27,6 +27,18 @@ interface SuggestionsResponse {
     suggestions: Suggestion[];
 }
 
+// Result of batch_add_tag / batch_remove_tag. Anything in failed_ids (file
+// unwritable) or missing_ids (id no longer in DB, e.g. a stale Spotify-ghost id
+// left behind by a merge) was NOT persisted and must be surfaced, not hidden.
+interface BatchTagResult {
+    updated: number;
+    failed_ids: number[];
+    missing_ids: number[];
+}
+
+const batchTagFailures = (res: BatchTagResult): number[] =>
+    [...(res.missing_ids || []), ...(res.failed_ids || [])];
+
 export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Props) {
     const { showError } = useToast();
     // rawComment is ONLY the Left Side (User Comment)
@@ -285,10 +297,17 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 
                 console.log(`Executing ${command} on ${idsToUpdate.length} tracks for tag: ${val}`);
 
-                invoke(command, { ids: idsToUpdate, tag: val })
-                    .then(() => {
-                         // Optimistic update for Primary Track (UI feedback)
-                         if (track) {
+                invoke<BatchTagResult>(command, { ids: idsToUpdate, tag: val })
+                    .then((res) => {
+                         const failed = batchTagFailures(res);
+                         if (failed.length > 0) {
+                             const msg = `${failed.length} of ${idsToUpdate.length} track${idsToUpdate.length === 1 ? '' : 's'} couldn't be tagged — file unavailable or out of sync.`;
+                             showError(msg);
+                             invoke('log_error', { message: `${command}: ${msg} ids=[${failed.join(',')}]` }).catch(console.error);
+                         }
+                         // Optimistically toggle the primary pill only if everything
+                         // persisted; otherwise let onUpdate()'s refresh show the truth.
+                         if (track && failed.length === 0) {
                              setTags(prev => {
                                  if (isPresent) {
                                      // Remove
@@ -330,8 +349,13 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         if (isMultiSelect) {
             const ids = Array.from(selectedTrackIds || []);
             try {
-                await invoke('batch_remove_tag', { ids, tag: tagToRemove });
-                setTags(prev => prev.filter((_, idx) => idx !== index));
+                const res = await invoke<BatchTagResult>('batch_remove_tag', { ids, tag: tagToRemove });
+                const failed = batchTagFailures(res);
+                if (failed.length > 0) {
+                    showError(`${failed.length} of ${ids.length} track${ids.length === 1 ? '' : 's'} couldn't be updated — file unavailable or out of sync.`);
+                } else {
+                    setTags(prev => prev.filter((_, idx) => idx !== index));
+                }
                 onUpdate();
             } catch (e) {
                 console.error(e);
@@ -354,12 +378,17 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             if (isMultiSelect) {
                 const ids = Array.from(selectedTrackIds || []);
                 try {
-                    await invoke('batch_add_tag', { ids, tag: val });
-                    setTags(prev => {
-                        const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
-                        if (exists) return prev;
-                        return [...prev, val];
-                    });
+                    const res = await invoke<BatchTagResult>('batch_add_tag', { ids, tag: val });
+                    const failed = batchTagFailures(res);
+                    if (failed.length > 0) {
+                        showError(`${failed.length} of ${ids.length} track${ids.length === 1 ? '' : 's'} couldn't be tagged — file unavailable or out of sync.`);
+                    } else {
+                        setTags(prev => {
+                            const exists = prev.some(t => t.toLowerCase() === val.toLowerCase());
+                            if (exists) return prev;
+                            return [...prev, val];
+                        });
+                    }
                     onUpdate();
                 } catch (e) {
                     console.error("Batch add failed", e);

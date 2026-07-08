@@ -340,6 +340,15 @@ fn refresh_track_metadata_from_file(db: &Database, track_id: i64) -> Result<(), 
     Ok(())
 }
 
+/// Fetch a single fresh track by id. Returns None if it doesn't exist (e.g. a
+/// Spotify ghost that has since been merged away). Used by the frontend to
+/// re-resolve a snapshot after its id changed under a merge.
+#[tauri::command]
+pub async fn get_track(id: i64, state: State<'_, AppState>) -> Result<Option<Track>, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.get_track(id).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn write_tags(
     id: i64,
@@ -415,23 +424,38 @@ pub async fn write_tags(
     Ok(())
 }
 
+/// Per-track outcome of a bulk tag operation. `updated` counts tracks whose
+/// end state now matches the request (written, or already correct). Anything
+/// in `failed_ids` (file write error) or `missing_ids` (id not in DB — e.g. a
+/// stale id left over from a Spotify ghost→local merge) was NOT persisted, and
+/// the frontend must surface it rather than assume success.
+#[derive(serde::Serialize, Default)]
+pub struct BatchTagResult {
+    pub updated: usize,
+    pub failed_ids: Vec<i64>,
+    pub missing_ids: Vec<i64>,
+}
+
 #[tauri::command]
-pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn batch_add_tag(ids: Vec<i64>, tag: String, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<BatchTagResult, String> {
+    let mut result = BatchTagResult::default();
     let raw_tag = tag.trim();
     if raw_tag.is_empty() {
-        return Ok(());
+        return Ok(result);
     }
 
     let db_mutex = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     let mode = LibraryConfig::sync_mode(&db_mutex);
 
-    // Collect tracks to avoid holding lock too long if we needed to, but here we need lock for update anyway
-    // Or we iterate one by one. For safety/simplicity let's get all tracks first.
+    // Collect tracks up front. Ids that don't resolve to a row are recorded as
+    // `missing_ids` (not silently dropped) — this is the smoking gun for tags
+    // that "don't stick" after a background merge changes a track's id.
     let mut tracks_to_update = Vec::new();
 
     for id in &ids {
-        if let Ok(Some(track)) = db_mutex.get_track(*id) {
-             tracks_to_update.push(track);
+        match db_mutex.get_track(*id) {
+            Ok(Some(track)) => tracks_to_update.push(track),
+            _ => result.missing_ids.push(*id),
         }
     }
     // Drop lock to perform file IO
@@ -479,6 +503,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                 if let Ok(db) = state.db.lock() {
                     let _ = db.update_track(&track);
                 }
+                result.updated += 1;
                 continue; // no file write, no Music push, no undo entry
             }
 
@@ -493,9 +518,14 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
             });
 
             // WRITE
-            // 1. File
+            // 1. File — a failure here means the tag reached neither file nor DB.
+            // Record it (and log) instead of silently continuing so the caller
+            // can tell the user which tracks didn't take.
              if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
-                 println!("Failed to write file {}: {}", track.id, e);
+                 let msg = format!("batch_add_tag: file write failed for track {} ({}): {}", track.id, track.file_path, e);
+                 app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                 undo_track_states.pop();
+                 result.failed_ids.push(track.id);
                  continue;
              }
 
@@ -506,6 +536,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                     let _ = db.update_track(&track);
                 }
             }
+            result.updated += 1;
 
             // 3. Queue Music.app Update (only when the sync mode allows pushing)
              if mode.push_enabled() {
@@ -518,6 +549,9 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
                  let _ = touch_file(&track.file_path);
                  dirty_ids.push(track.id);
              }
+        } else {
+            // Tag already present — end state already matches the request.
+            result.updated += 1;
         }
     }
 
@@ -544,23 +578,25 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState
         }
     }
 
-    Ok(())
+    Ok(result)
 }
 
 #[tauri::command]
-pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, app: tauri::AppHandle, state: State<'_, AppState>) -> Result<BatchTagResult, String> {
+    let mut result = BatchTagResult::default();
     let raw_tag = tag.trim();
     if raw_tag.is_empty() {
-        return Ok(());
+        return Ok(result);
     }
-    
-    // Lock briefly to get tracks
+
+    // Lock briefly to get tracks. Ids with no row are recorded as missing.
     let mut tracks_to_update = Vec::new();
     let mode = {
         let db_mutex = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         for id in &ids {
-            if let Ok(Some(track)) = db_mutex.get_track(*id) {
-                tracks_to_update.push(track);
+            match db_mutex.get_track(*id) {
+                Ok(Some(track)) => tracks_to_update.push(track),
+                _ => result.missing_ids.push(*id),
             }
         }
         LibraryConfig::sync_mode(&db_mutex)
@@ -610,6 +646,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                 if let Ok(db) = state.db.lock() {
                     let _ = db.update_track(&track);
                 }
+                result.updated += 1;
                 continue; // no file write, no Music push, no undo entry
             }
 
@@ -623,9 +660,12 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                 new_comment: new_full_comment.clone(),
             });
 
-            // WRITE
+            // WRITE — record + log failures instead of silently dropping them.
             if let Err(e) = write_tags_to_file(&track.file_path, &new_full_comment) {
-                println!("Failed to write file {}: {}", track.id, e);
+                let msg = format!("batch_remove_tag: file write failed for track {} ({}): {}", track.id, track.file_path, e);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                undo_track_states.pop();
+                result.failed_ids.push(track.id);
                 continue;
             }
 
@@ -636,6 +676,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                     let _ = db.update_track(&track);
                 }
             }
+            result.updated += 1;
 
             // Music.app Queue (only when the sync mode allows pushing)
              if mode.push_enabled() {
@@ -648,6 +689,9 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
                  let _ = touch_file(&track.file_path);
                  dirty_ids.push(track.id);
              }
+        } else {
+            // Tag not present — end state already matches the request.
+            result.updated += 1;
         }
     }
 
@@ -674,7 +718,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, state: State<'_, AppSt
         }
     }
 
-    Ok(())
+    Ok(result)
 }
 
 #[tauri::command]

@@ -76,6 +76,12 @@ function App() {
   const rightPanelRef = useRef<PanelImperativeHandle>(null);
   const trackListRef = useRef<TrackListHandle>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Live mirrors so the once-registered merge listener can read current
+  // snapshots without re-subscribing on every selection change.
+  const playingTrackRef = useRef(playingTrack);
+  playingTrackRef.current = playingTrack;
+  const selectedTrackRef = useRef(selectedTrack);
+  selectedTrackRef.current = selectedTrack;
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<'tags' | 'queue'>('tags');
@@ -408,8 +414,40 @@ function App() {
   // newly-surfaced ambiguous matches land here — toast the outcome and refresh so
   // the merged track/sidebar badge reflect it immediately.
   useEffect(() => {
-    const un = listen<{ merged: number; pending: number }>('spotify-merge-completed', (e) => {
-        const { merged, pending } = e.payload;
+    const un = listen<{ merged: number; pending: number; mappings?: { ghost: number; local: number }[] }>('spotify-merge-completed', async (e) => {
+        const { merged, pending, mappings } = e.payload;
+
+        // A merge deletes the Spotify ghost row and moves its identity onto the
+        // local track (which gets a different id). Re-point any snapshot still
+        // holding the dead ghost id so tagging / playback / reveal act on the
+        // real local file instead of a stale ghost. Without this, the merged
+        // track's tag silently fails and it won't play until re-selected.
+        if (mappings && mappings.length) {
+            const map = new Map(mappings.map(m => [m.ghost, m.local]));
+            setSelectedTrackIds(prev => {
+                if (![...prev].some(id => map.has(id))) return prev;
+                return new Set([...prev].map(id => map.get(id) ?? id));
+            });
+            setLastSelectedTrackId(prev => (prev != null && map.has(prev) ? map.get(prev)! : prev));
+
+            const remap = async (t: Track | null): Promise<Track | null> => {
+                const localId = t ? map.get(t.id) : undefined;
+                if (localId === undefined) return t;
+                try {
+                    const fresh = await invoke<Track | null>('get_track', { id: localId });
+                    return fresh ?? t;
+                } catch {
+                    return t;
+                }
+            };
+            const curPlaying = playingTrackRef.current;
+            const freshPlaying = await remap(curPlaying);
+            if (freshPlaying !== curPlaying) setPlayingTrack(freshPlaying);
+            const curSelected = selectedTrackRef.current;
+            const freshSelected = await remap(curSelected);
+            if (freshSelected !== curSelected) setSelectedTrack(freshSelected);
+        }
+
         if (merged > 0) showSuccess(`Merged Spotify tags into ${merged} purchased track${merged === 1 ? '' : 's'}`);
         if (pending > 0) showToast(`${pending} possible Spotify match${pending === 1 ? '' : 'es'} to review`, 'info');
         handleRefresh();

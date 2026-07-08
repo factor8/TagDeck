@@ -244,6 +244,9 @@ pub fn process_new_local_tracks(
 ) -> MergeOutcome {
     let mut outcome = MergeOutcome::default();
     let mut pushes: Vec<MusicPush> = Vec::new();
+    // (ghost_id, local_id) pairs for each auto-merge. The frontend uses these to
+    // migrate any selection/playing snapshot still pinned to the deleted ghost id.
+    let mut merges: Vec<(i64, i64)> = Vec::new();
     let Ok(db) = db.lock() else { return outcome };
     let Ok(ghosts) = db.get_ghost_tracks() else { return outcome };
     if ghosts.is_empty() {
@@ -271,6 +274,7 @@ pub fn process_new_local_tracks(
             Some((ghost_id, score)) if score >= matcher::AUTO_MERGE_THRESHOLD => {
                 if let Ok(push) = merge_ghost_into_local(&db, ghost_id, local_id) {
                     outcome.auto_merged += 1;
+                    merges.push((ghost_id, local_id));
                     pushes.extend(push);
                 }
             }
@@ -292,7 +296,10 @@ pub fn process_new_local_tracks(
     }
     if outcome.auto_merged > 0 || outcome.pending_review > 0 {
         let _ = app.emit("spotify-merge-completed", serde_json::json!({
-            "merged": outcome.auto_merged, "pending": outcome.pending_review
+            "merged": outcome.auto_merged,
+            "pending": outcome.pending_review,
+            // [{ghost, local}] — lets the frontend re-point stale ids onto the merged row.
+            "mappings": merges.iter().map(|(g, l)| serde_json::json!({ "ghost": g, "local": l })).collect::<Vec<_>>()
         }));
         app.state::<crate::logging::LogState>().add_log(
             "INFO",
