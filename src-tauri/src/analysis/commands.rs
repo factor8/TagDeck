@@ -31,6 +31,10 @@ const MAX_SUGGESTIONS: usize = 8;
 const MAX_PER_GROUP: usize = 3;
 /// Upper bound on worker threads (each holds a ~34MB audio model in memory).
 const MAX_WORKERS: usize = 3;
+/// Higher default confidence bar for brand-new tags (vs 0.5 for known tags).
+const DEFAULT_VOCAB_THRESHOLD: f32 = 0.6;
+/// Never surface more than this many new-tag ghost chips on one track.
+const MAX_NEW_TAGS_PER_TRACK: usize = 2;
 
 fn now_ts() -> i64 {
     chrono::Utc::now().timestamp()
@@ -522,10 +526,20 @@ fn worker_count(total: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
+pub struct NewTagSuggestion {
+    pub candidate_id: i64,
+    pub name: String,
+    pub group_id: Option<i64>,
+    pub score: f32,
+}
+
+#[derive(Serialize)]
 pub struct SuggestionsResponse {
     /// False when the track has no embedding yet (UI shows "analyze this track").
     pub analyzed: bool,
     pub suggestions: Vec<Suggestion>,
+    /// Brand-new tags proposed via vocabulary expansion (may be empty / disabled).
+    pub new_tags: Vec<NewTagSuggestion>,
 }
 
 #[tauri::command]
@@ -540,7 +554,9 @@ pub async fn get_tag_suggestions(
         .map_err(|e| e.to_string())?
     {
         Some(v) => v,
-        None => return Ok(SuggestionsResponse { analyzed: false, suggestions: vec![] }),
+        None => {
+            return Ok(SuggestionsResponse { analyzed: false, suggestions: vec![], new_tags: vec![] })
+        }
     };
 
     let all_tracks = db.all_track_embeddings(MODEL_VERSION).map_err(|e| e.to_string())?;
@@ -553,6 +569,27 @@ pub async fn get_tag_suggestions(
         .flatten()
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(DEFAULT_THRESHOLD);
+
+    // Vocabulary-expansion inputs — only loaded when the toggle is on.
+    let vocab_enabled = db
+        .get_config("vocab_expansion_enabled")
+        .ok()
+        .flatten()
+        .map(|s| s == "true")
+        .unwrap_or(false);
+    let (cand_rows, cand_emb, vocab_threshold) = if vocab_enabled {
+        let rows = db.get_tag_candidates(Some("approved")).map_err(|e| e.to_string())?;
+        let emb = db.all_tag_candidate_embeddings(MODEL_VERSION).map_err(|e| e.to_string())?;
+        let t = db
+            .get_config("vocab_new_tag_threshold")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or(DEFAULT_VOCAB_THRESHOLD);
+        (rows, emb, t)
+    } else {
+        (Vec::new(), Vec::new(), DEFAULT_VOCAB_THRESHOLD)
+    };
     drop(db);
 
     // Map applied/positive tag assignments from comment strings.
@@ -573,8 +610,7 @@ pub async fn get_tag_suggestions(
         }
     }
 
-    let tag_text: HashMap<i64, Vec<f32>> =
-        text.into_iter().map(|(id, _p, v)| (id, v)).collect();
+    let tag_text: HashMap<i64, Vec<f32>> = text.into_iter().map(|(id, _p, v)| (id, v)).collect();
     let tag_infos: Vec<TagInfo> = tags
         .iter()
         .map(|t| TagInfo { id: t.id, name: t.name.clone(), group_id: t.group_id })
@@ -592,7 +628,62 @@ pub async fn get_tag_suggestions(
         max_total: MAX_SUGGESTIONS,
         max_per_group: MAX_PER_GROUP,
     };
-    Ok(SuggestionsResponse { analyzed: true, suggestions: score_suggestions(&input) })
+    let suggestions = score_suggestions(&input);
+
+    let new_tags = if vocab_enabled {
+        score_new_tags(&query, track_id, &all_tracks, &cand_rows, &cand_emb, vocab_threshold)
+    } else {
+        Vec::new()
+    };
+
+    Ok(SuggestionsResponse { analyzed: true, suggestions, new_tags })
+}
+
+/// Zero-shot-score approved vocabulary candidates against a track. Candidates
+/// have no positive examples, so the scorer always takes its zero-shot branch.
+fn score_new_tags(
+    query: &[f32],
+    track_id: i64,
+    all_tracks: &[(i64, Vec<f32>)],
+    cands: &[TagCandidate],
+    cand_emb: &[(i64, Vec<f32>)],
+    threshold: f32,
+) -> Vec<NewTagSuggestion> {
+    if cands.is_empty() || cand_emb.is_empty() {
+        return Vec::new();
+    }
+    let emb_map: HashMap<i64, Vec<f32>> = cand_emb.iter().cloned().collect();
+    let infos: Vec<TagInfo> = cands
+        .iter()
+        .filter(|c| emb_map.contains_key(&c.id))
+        .map(|c| TagInfo { id: c.id, name: c.name.clone(), group_id: c.group_id })
+        .collect();
+    if infos.is_empty() {
+        return Vec::new();
+    }
+    let empty_pos: HashMap<i64, Vec<i64>> = HashMap::new();
+    let empty_applied: HashSet<i64> = HashSet::new();
+    let input = ScoreInput {
+        query,
+        query_track_id: track_id,
+        all_tracks,
+        tag_text: &emb_map,
+        tag_positives: &empty_pos,
+        tags: &infos,
+        applied: &empty_applied,
+        threshold,
+        max_total: MAX_NEW_TAGS_PER_TRACK,
+        max_per_group: MAX_NEW_TAGS_PER_TRACK,
+    };
+    score_suggestions(&input)
+        .into_iter()
+        .map(|s| NewTagSuggestion {
+            candidate_id: s.tag_id,
+            name: s.name,
+            group_id: s.group_id,
+            score: s.score,
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -757,4 +848,42 @@ pub async fn embed_tag_candidates(app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("embed task join: {e}"))?
+}
+
+#[derive(Serialize)]
+pub struct VocabSettings {
+    pub enabled: bool,
+    pub threshold: f32,
+}
+
+#[tauri::command]
+pub async fn get_vocab_settings(state: State<'_, AppState>) -> Result<VocabSettings, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    let enabled = db
+        .get_config("vocab_expansion_enabled")
+        .ok()
+        .flatten()
+        .map(|s| s == "true")
+        .unwrap_or(false);
+    let threshold = db
+        .get_config("vocab_new_tag_threshold")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(DEFAULT_VOCAB_THRESHOLD);
+    Ok(VocabSettings { enabled, threshold })
+}
+
+#[tauri::command]
+pub async fn set_vocab_settings(
+    state: State<'_, AppState>,
+    enabled: bool,
+    threshold: f32,
+) -> Result<(), String> {
+    let clamped = threshold.clamp(0.0, 1.0);
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    db.set_config("vocab_expansion_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+    db.set_config("vocab_new_tag_threshold", &clamped.to_string())
+        .map_err(|e| e.to_string())
 }
