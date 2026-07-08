@@ -1,12 +1,18 @@
-//! Hybrid tag scoring: zero-shot (CLAP text) + personalized k-NN (your own
-//! tagged tracks), blended by how many examples a tag has.
+//! Tag scoring: personalized k-NN (your own tagged tracks) with a zero-shot
+//! (CLAP text) fallback for tags you haven't used much yet.
 //!
 //! Raw CLAP cosines are not comparable across tags or between the text-anchor
-//! and track-to-track spaces, so each signal is calibrated before blending:
+//! and track-to-track spaces, so each signal is calibrated:
 //!   - zero-shot: per-tag z-score of cos(track, tag_text) over the whole
 //!     library (each text anchor has its own similarity scale).
 //!   - k-NN: per-query z-score of the top-k mean similarity to a tag's positive
 //!     examples, against the query's own cos-to-all-tracks distribution.
+//!
+//! We do NOT blend the two: an eval against a real library (see
+//! `bin/eval_diagnose`) showed k-NN is far stronger once a tag has ~a dozen
+//! examples, and mixing in the (near-random for subjective tags) zero-shot
+//! signal only reorders the ranking downward. So each tag uses whichever
+//! signal is trustworthy: k-NN when it has enough examples, else zero-shot.
 //!
 //! All embeddings are L2-normalized, so cosine == dot product.
 
@@ -14,12 +20,26 @@ use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
-/// Minimum positive examples before a tag's k-NN signal is trusted.
-const KNN_MIN_EXAMPLES: usize = 3;
-/// Neighbors averaged for the k-NN raw score.
-const KNN_TOP_K: usize = 5;
-/// Shrinkage constant in the blend weight w = n / (n + SHRINKAGE).
-const BLEND_SHRINKAGE: f32 = 8.0;
+/// Tunable knobs for scoring. Defaults chosen by sweeping against a real
+/// library (see `bin/eval_diagnose`).
+#[derive(Debug, Clone, Copy)]
+pub struct ScoreParams {
+    /// Examples a tag needs before its personalized k-NN signal is trusted.
+    /// At/above this the tag is scored by k-NN alone; below it, by zero-shot.
+    pub knn_trust: usize,
+    /// Neighbors averaged for the k-NN raw score.
+    pub knn_top_k: usize,
+}
+
+impl Default for ScoreParams {
+    fn default() -> Self {
+        // Tuned via bin/eval_diagnose on a real 332-track library: the switch
+        // policy plateaus for knn_trust in ~4–8 at top_k=5; 8 sits at the
+        // robust end of that plateau (needs a real handful of examples before
+        // trusting personalization) without overfitting to the exact peak.
+        Self { knn_trust: 8, knn_top_k: 5 }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Suggestion {
@@ -75,8 +95,13 @@ fn mean_std(xs: &[f32]) -> (f32, f32) {
     (mean, var.sqrt().max(1e-6))
 }
 
-/// Compute ranked suggestions for one track. Pure function over the inputs.
+/// Compute ranked suggestions for one track with default parameters.
 pub fn score_suggestions(input: &ScoreInput) -> Vec<Suggestion> {
+    score_suggestions_with(input, ScoreParams::default())
+}
+
+/// Compute ranked suggestions for one track. Pure function over the inputs.
+pub fn score_suggestions_with(input: &ScoreInput, params: ScoreParams) -> Vec<Suggestion> {
     let index: HashMap<i64, &Vec<f32>> =
         input.all_tracks.iter().map(|(id, v)| (*id, v)).collect();
 
@@ -124,10 +149,10 @@ pub fn score_suggestions(input: &ScoreInput) -> Vec<Suggestion> {
             .unwrap_or_default();
         let n = positives.len();
 
-        let (knn, has_knn) = if n >= KNN_MIN_EXAMPLES {
+        let (knn, has_knn) = if n >= params.knn_trust {
             let mut sims: Vec<f32> = positives.iter().map(|p| dot(input.query, p)).collect();
             sims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-            let k = KNN_TOP_K.min(sims.len());
+            let k = params.knn_top_k.min(sims.len());
             let raw = sims[..k].iter().sum::<f32>() / k as f32;
             let z = (raw - bg_mean) / bg_std;
             (sigmoid(z), true)
@@ -139,11 +164,9 @@ pub fn score_suggestions(input: &ScoreInput) -> Vec<Suggestion> {
             continue;
         }
 
-        // --- blend ---
-        let (score, source) = if has_knn && has_zero {
-            let w = n as f32 / (n as f32 + BLEND_SHRINKAGE);
-            (w * knn + (1.0 - w) * zero, "hybrid")
-        } else if has_knn {
+        // Trust k-NN once a tag has enough examples; otherwise fall back to
+        // zero-shot. No blending — see the module doc for why.
+        let (score, source) = if has_knn {
             (knn, "knn")
         } else {
             (zero, "zero_shot")
@@ -235,7 +258,9 @@ mod tests {
             max_total: 8,
             max_per_group: 8,
         };
-        let sugg = score_suggestions(&input);
+        // Small fixture: lower the trust threshold so k-NN fires on 3-4 examples.
+        let params = ScoreParams { knn_trust: 3, knn_top_k: 5 };
+        let sugg = score_suggestions_with(&input, params);
         assert_eq!(sugg[0].tag_id, 100, "closest tag should rank first");
         assert!(sugg[0].score > sugg.iter().find(|s| s.tag_id == 200).unwrap().score);
     }
