@@ -6,6 +6,7 @@
 
 pub mod audio;
 pub mod clap;
+pub mod concept_map;
 pub mod commands;
 pub mod features;
 pub mod model_manager;
