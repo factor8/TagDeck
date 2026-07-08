@@ -56,16 +56,18 @@ export function AnalysisTab() {
     useEffect(() => {
         invoke<{ enabled: boolean; threshold: number }>('get_vocab_settings')
             .then((v) => { setVocabEnabled(v.enabled); setVocabThreshold(v.threshold); })
-            .catch(() => {});
+            .catch((e) => console.error('get_vocab_settings failed', e));
         invoke<TagCandidate[]>('get_tag_candidates', { status: 'proposed' })
             .then(setProposed)
-            .catch(() => {});
+            .catch((e) => console.error('get_tag_candidates failed', e));
     }, []);
 
     const saveVocab = (enabled: boolean, threshold: number) => {
         setVocabEnabled(enabled);
         setVocabThreshold(threshold);
-        invoke('set_vocab_settings', { enabled, threshold }).catch(() => {});
+        invoke('set_vocab_settings', { enabled, threshold }).catch((e) =>
+            console.error('set_vocab_settings failed', e)
+        );
     };
 
     const handleScan = async () => {
@@ -73,20 +75,32 @@ export function AnalysisTab() {
         try {
             const all = await invoke<TagCandidate[]>('scan_tag_candidates');
             setProposed(all.filter((c) => c.status === 'proposed'));
+        } catch (e) {
+            showError(`Scan failed: ${e}`);
         } finally {
             setScanning(false);
         }
     };
 
     const handleApprove = async (id: number) => {
-        await invoke('approve_tag_candidate', { candidateId: id });
-        setProposed((p) => p.filter((c) => c.id !== id));
-        invoke('embed_tag_candidates').catch(() => {}); // fire-and-forget text embed
+        try {
+            await invoke('approve_tag_candidate', { candidateId: id });
+            setProposed((p) => p.filter((c) => c.id !== id));
+            invoke('embed_tag_candidates').catch((e) =>
+                console.error('embed_tag_candidates failed', e)
+            ); // fire-and-forget text embed
+        } catch (e) {
+            showError(`Approve failed: ${e}`);
+        }
     };
 
     const handleDismiss = async (id: number) => {
-        await invoke('dismiss_tag_candidate', { candidateId: id });
-        setProposed((p) => p.filter((c) => c.id !== id));
+        try {
+            await invoke('dismiss_tag_candidate', { candidateId: id });
+            setProposed((p) => p.filter((c) => c.id !== id));
+        } catch (e) {
+            showError(`Dismiss failed: ${e}`);
+        }
     };
 
     useEffect(() => {
@@ -332,10 +346,10 @@ export function AnalysisTab() {
                                                 <span style={{ fontWeight: 600, fontSize: 13 }}>{c.name}</span>
                                                 <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{c.group_name ?? 'Ungrouped'}</span>
                                                 <span style={{ flex: 1 }} />
-                                                <button className="btn" style={{ ...btnStyle, padding: '4px 8px' }} title="Approve" onClick={() => handleApprove(c.id)}>
+                                                <button className="btn" style={{ ...btnStyle, padding: '4px 8px' }} title="Approve" aria-label="Approve" onClick={() => handleApprove(c.id)}>
                                                     <Check size={13} />
                                                 </button>
-                                                <button className="btn" style={{ ...btnStyle, padding: '4px 8px' }} title="Dismiss" onClick={() => handleDismiss(c.id)}>
+                                                <button className="btn" style={{ ...btnStyle, padding: '4px 8px' }} title="Dismiss" aria-label="Dismiss" onClick={() => handleDismiss(c.id)}>
                                                     <X size={13} />
                                                 </button>
                                             </div>
