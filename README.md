@@ -12,7 +12,7 @@
 - **Tag Editor:** Pill-based editing sidebar with autocomplete, auto-save, and batch tagging across multi-selected tracks.
 - **CDJ-safe metadata writes:** Tags are written to each file's Comment field as `{Original Comment} && {Tag1}; {Tag2}`, preserving Mixed In Key results and existing notes. Every write is verified by re-reading the file.
 - **Tag groups**, global **undo/redo** for tag and playlist edits, and iTunes-style **star ratings** with half-star precision.
-- **AI tag suggestions:** Optionally analyze a track's audio locally (CLAP audio embeddings via ONNX Runtime) and get suggested tags from your own vocabulary as dashed chips in the tag editor — click to accept. Blends zero-shot audio↔text matching with similarity to tracks you've already tagged. Fully on-device; the model is an opt-in one-time download and the app works unchanged without it.
+- **AI tag suggestions:** Optionally analyze a track's audio locally (CLAP audio embeddings via ONNX Runtime) and get suggested tags from your own vocabulary as dashed chips in the tag editor — click to accept. Learns your taste from tracks you've already tagged, with a text-matching fallback for rarely-used tags. Fully on-device; the model is an opt-in one-time download and the app works unchanged without it. See [How AI Tag Suggestions Work](Docs/HowAITagSuggestionsWork.md) for a plain-language explainer.
 
 ### Apple Music / iTunes Sync
 
@@ -119,6 +119,8 @@ Output binaries land in `src-tauri/target/release/bundle/`.
 ## Documentation
 
 The [Docs/](Docs/) folder contains the PRD, changelog, search syntax reference, keyboard shortcuts, and design docs for major subsystems (sync strategy, file management, Spotify integration, and more).
+
+New to the AI tag suggestions? [How AI Tag Suggestions Work](Docs/HowAITagSuggestionsWork.md) is a plain-language explainer of what the feature does, how it learns from your tagging, and how it could improve over time.
 
 ## Contributing
 
