@@ -241,7 +241,8 @@ pub fn run() {
             analysis::commands::delete_tag_candidate,
             analysis::commands::embed_tag_candidates,
             analysis::commands::get_vocab_settings,
-            analysis::commands::set_vocab_settings
+            analysis::commands::set_vocab_settings,
+            analysis::commands::finalize_accepted_candidate
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

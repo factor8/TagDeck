@@ -887,3 +887,29 @@ pub async fn set_vocab_settings(
     db.set_config("vocab_new_tag_threshold", &clamped.to_string())
         .map_err(|e| e.to_string())
 }
+
+/// Finalize acceptance of a new-tag candidate. Precondition: the tag name has
+/// already been applied to a track (creating the `tags` row via `sync_tags`).
+/// This files the new tag under the candidate's group, copies the curated
+/// zero-shot description, and retires the candidate. Returns the new tag id.
+#[tauri::command]
+pub async fn finalize_accepted_candidate(
+    state: State<'_, AppState>,
+    candidate_id: i64,
+) -> Result<i64, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+    let cand = db
+        .get_tag_candidate(candidate_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Candidate not found".to_string())?;
+    let tag_id = db
+        .get_tag_id_by_name(&cand.name)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Tag has not been created yet".to_string())?;
+    db.set_tag_group(tag_id, cand.group_id).map_err(|e| e.to_string())?;
+    if let Some(desc) = cand.description.as_deref() {
+        db.set_tag_description(tag_id, Some(desc)).map_err(|e| e.to_string())?;
+    }
+    db.delete_tag_candidate(candidate_id).map_err(|e| e.to_string())?;
+    Ok(tag_id)
+}
