@@ -687,3 +687,67 @@ pub async fn set_suggestion_threshold(
     db.set_config("suggestion_threshold", &clamped.to_string())
         .map_err(|e| e.to_string())
 }
+
+/// Embed every approved candidate that still lacks an embedding for the current
+/// model. Text-only (no audio) — loads the text tower on a blocking thread and
+/// drops it when done. Mirrors the tag-prompt recipe in `run_job` Phase 1.
+#[tauri::command]
+pub async fn embed_tag_candidates(app: AppHandle) -> Result<(), String> {
+    let dir = app_data_dir(&app)?;
+    if model_manager::status(&dir) != ModelStatus::Ready {
+        return Err("Analysis model is not downloaded".to_string());
+    }
+    let model_dir = model_manager::model_dir(&dir);
+
+    // Snapshot approved-but-unembedded candidates under a brief lock.
+    // (TagPromptJob is reused; its `tag_id` field carries the candidate id here.)
+    let jobs: Vec<TagPromptJob> = {
+        let state = app.state::<AppState>();
+        let db = state.db.lock().map_err(|_| "Failed to lock DB")?;
+        let embedded = db.candidate_embedded_ids(MODEL_VERSION).map_err(|e| e.to_string())?;
+        let groups = db.get_tag_groups().map_err(|e| e.to_string())?;
+        let group_names: HashMap<i64, String> = groups.into_iter().map(|g| (g.id, g.name)).collect();
+        let cands = db.get_tag_candidates(Some("approved")).map_err(|e| e.to_string())?;
+        let mut jobs = Vec::new();
+        for c in &cands {
+            if embedded.contains(&c.id) {
+                continue;
+            }
+            let gname = c.group_id.and_then(|gid| group_names.get(&gid)).map(|s| s.as_str());
+            if let Some(prompts) = derive_prompt_ensemble(&c.name, gname, c.description.as_deref()) {
+                let key = prompts.join("\n");
+                jobs.push(TagPromptJob { tag_id: c.id, prompts, key });
+            }
+        }
+        jobs
+    };
+    if jobs.is_empty() {
+        return Ok(());
+    }
+
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let mut text = TextEmbedder::load(&model_dir).map_err(|e| format!("text model load failed: {e:#}"))?;
+        for job in &jobs {
+            let mut acc = vec![0f32; EMBED_DIM];
+            let mut n = 0f32;
+            for p in &job.prompts {
+                if let Ok(v) = text.embed_text(p) {
+                    for (k, x) in v.iter().enumerate() {
+                        acc[k] += x;
+                    }
+                    n += 1.0;
+                }
+            }
+            if n > 0.0 {
+                l2_normalize(&mut acc);
+                if let Ok(db) = app2.state::<AppState>().db.lock() {
+                    let _ = db.upsert_tag_candidate_embedding(job.tag_id, MODEL_VERSION, &job.key, &acc, now_ts());
+                }
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("embed task join: {e}"))?
+}
