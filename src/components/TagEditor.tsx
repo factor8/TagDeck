@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Info, Sparkles, Loader2 } from 'lucide-react';
+import { Info, Sparkles, Loader2, Plus } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
@@ -22,9 +22,17 @@ interface Suggestion {
     source: string;
 }
 
+interface NewTagSuggestion {
+    candidate_id: number;
+    name: string;
+    group_id?: number | null;
+    score: number;
+}
+
 interface SuggestionsResponse {
     analyzed: boolean;
     suggestions: Suggestion[];
+    new_tags: NewTagSuggestion[];
 }
 
 // Result of batch_add_tag / batch_remove_tag. Anything in failed_ids (file
@@ -56,6 +64,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [analyzed, setAnalyzed] = useState(true);
     const [dismissed, setDismissed] = useState<Set<number>>(new Set());
     const [analyzing, setAnalyzing] = useState(false);
+    const [newTags, setNewTags] = useState<NewTagSuggestion[]>([]);
+    const [dismissedNew, setDismissedNew] = useState<Set<number>>(new Set());
 
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
 
@@ -64,20 +74,24 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             const resp = await invoke<SuggestionsResponse>('get_tag_suggestions', { trackId });
             setAnalyzed(resp.analyzed);
             setSuggestions(resp.suggestions);
+            setNewTags(resp.new_tags ?? []);
         } catch (e) {
             // No model / no embeddings yet — stay silent, just show nothing.
             console.debug('get_tag_suggestions:', e);
             setSuggestions([]);
+            setNewTags([]);
         }
     }, []);
 
     // Load suggestions when a single track is selected; clear on multi/none.
     useEffect(() => {
         setDismissed(new Set());
+        setDismissedNew(new Set());
         if (track && !isMultiSelect) {
             fetchSuggestions(track.id);
         } else {
             setSuggestions([]);
+            setNewTags([]);
             setAnalyzed(true);
         }
     }, [track, isMultiSelect, fetchSuggestions]);
@@ -103,6 +117,22 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const acceptSuggestion = async (s: Suggestion) => {
         setSuggestions((prev) => prev.filter((x) => x.tag_id !== s.tag_id));
         await addTag(s.name);
+    };
+
+    const acceptNewTag = async (c: NewTagSuggestion) => {
+        // Optimistically hide the chip.
+        setDismissedNew((prev) => new Set(prev).add(c.candidate_id));
+        // Reuse the normal write path — this creates the tag via sync_tags.
+        await addTag(c.name);
+        try {
+            // File it in its group + copy the curated description + retire the candidate.
+            await invoke('finalize_accepted_candidate', { candidateId: c.candidate_id });
+        } catch (e) {
+            // Tag was still created (just uncategorized) — non-fatal.
+            console.error('finalize_accepted_candidate failed', e);
+        }
+        onUpdate();
+        if (track) fetchSuggestions(track.id);
     };
 
     const dismissSuggestion = (tagId: number) => {
@@ -559,6 +589,42 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     }
                     return null;
                 })()}
+
+                {!isMultiSelect && (() => {
+                    const applied = new Set(tags.map((t) => t.toLowerCase()));
+                    const visibleNew = newTags.filter(
+                        (c) => !dismissedNew.has(c.candidate_id) && !applied.has(c.name.toLowerCase())
+                    );
+                    if (visibleNew.length === 0) return null;
+                    return (
+                        <div style={styles.suggestRow}>
+                            <span style={styles.suggestLabel}>
+                                <Plus size={11} /> New tags
+                            </span>
+                            {visibleNew.map((c) => (
+                                <span
+                                    key={c.candidate_id}
+                                    style={styles.newTagChip}
+                                    title={`${Math.round(c.score * 100)}% match — click to add “${c.name}”`}
+                                    onClick={() => acceptNewTag(c)}
+                                >
+                                    {c.name}
+                                    <span style={styles.newTagBadge}>new</span>
+                                    <span style={styles.ghostPct}>{Math.round(c.score * 100)}%</span>
+                                    <span
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setDismissedNew((prev) => new Set(prev).add(c.candidate_id));
+                                        }}
+                                        style={{ marginLeft: 2, cursor: 'pointer', opacity: 0.6 }}
+                                    >
+                                        ×
+                                    </span>
+                                </span>
+                            ))}
+                        </div>
+                    );
+                })()}
             </div>
         </div>
     );
@@ -660,6 +726,27 @@ const styles = {
         border: '1px dashed var(--accent-color)',
         cursor: 'pointer',
         userSelect: 'none' as const,
+    },
+    newTagChip: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '3px 9px',
+        border: '1px dashed #22c55e',
+        background: 'transparent',
+        color: 'var(--text-secondary)',
+        borderRadius: '10px',
+        fontWeight: 500,
+        fontSize: '12px',
+        cursor: 'pointer',
+        userSelect: 'none' as const,
+    },
+    newTagBadge: {
+        fontSize: '9px',
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.04em',
+        color: '#22c55e',
+        fontWeight: 700,
     },
     ghostPct: {
         fontSize: '10px',
