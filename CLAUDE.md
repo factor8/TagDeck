@@ -14,6 +14,16 @@ This project is a MacOS desktop application for managing and playing local music
 - Do not be verbose. Do not explain code to the user. Conserve tokens when possible.
 - Subtask agents liberally.
 
+## User Tasks
+
+`USER_TASKS.md` (repo root) tracks things **Jordan** must do himself — manual tests, model downloads, external setup, decisions — not the agent's code work.
+
+- Read it when starting a session and when picking up related work.
+- Add a task whenever something surfaces that only Jordan can do; check it off when he confirms it's done.
+- Remind Jordan of open items when they're relevant, and at natural stopping points.
+- If **🔴 Blocking** is non-empty and the current work depends on one of those items, surface it and pause before proceeding.
+- Date each item `(YYYY-MM-DD)`. Keep everything in that one file — don't build tooling around it.
+
 ## User Experience and Design
 
 - Always prioritize a clean, intuitive user interface.
