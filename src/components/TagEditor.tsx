@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Info, Sparkles, Loader2, Plus } from 'lucide-react';
+import { Info, Sparkles, Plus } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
@@ -153,11 +153,19 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         let unlisten: (() => void) | undefined;
         let active = true;
         listen('analysis-complete', async () => {
-            creepRef.current = null;
-            setProgress({ fraction: 1, label: 'Finding suggestions…' });
+            // Only drive the progress bar for THIS component's own analyze run;
+            // a Settings batch completion also fires this event and must not flash
+            // a phantom bar. The suggestion refetch still runs in both cases.
+            const wasOurRun = analyzingRef.current;
+            if (wasOurRun) {
+                creepRef.current = null;
+                setProgress({ fraction: 1, label: 'Finding suggestions…' });
+            }
             if (track && !isMultiSelect) await fetchSuggestions(track.id);
-            setAnalyzing(false);
-            setProgress(null);
+            if (wasOurRun) {
+                setAnalyzing(false);
+                setProgress(null);
+            }
         }).then((u) => {
             if (active) unlisten = u;
             else u();
@@ -703,12 +711,10 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                             <div style={styles.suggestRow}>
                                 <button
                                     onClick={analyzeThisTrack}
-                                    disabled={analyzing}
                                     style={styles.analyzeBtn}
                                     title="Analyze this track's audio to suggest tags"
                                 >
-                                    {analyzing ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
-                                    {analyzing ? 'Analyzing…' : 'Suggest tags'}
+                                    <Sparkles size={11} /> Suggest tags
                                 </button>
                             </div>
                         );
