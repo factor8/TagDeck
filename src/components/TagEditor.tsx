@@ -128,8 +128,9 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             // File it in its group + copy the curated description + retire the candidate.
             await invoke('finalize_accepted_candidate', { candidateId: c.candidate_id });
         } catch (e) {
-            // Tag was still created (just uncategorized) — non-fatal.
+            // Tag was still created (just uncategorized) — non-fatal, but tell the user.
             console.error('finalize_accepted_candidate failed', e);
+            showError(`"${c.name}" was added, but couldn't be filed in its group automatically.`);
         }
         onUpdate();
         if (track) fetchSuggestions(track.id);
