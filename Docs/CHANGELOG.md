@@ -4,6 +4,12 @@
 
 ### Added
 - **AI tag suggestions** (Settings → AI Tags): analyze a track's audio locally and get suggested tags drawn from your own vocabulary, shown as dashed chips in the tag editor — click one to add it (it flows through the normal tag-write path). For tags you've used a fair amount, suggestions come from how similar the track sounds to songs you've already given that tag (so they sharpen the more you tag); for rarely-used tags it falls back to matching the audio against several plain-language descriptions of the tag, combined for a steadier read. Everything runs on your Mac; nothing is uploaded. The model is an **optional one-time download** (~160 MB) enabled from Settings — without it the app behaves exactly as before. Analyze your whole library in the background (resumable, cancelable) or right-click any track(s) for **Suggest tags (AI)**. A sensitivity slider controls how many suggestions appear, and removing the model to free disk keeps everything you've already analyzed.
+- **New-tag suggestions (vocabulary expansion).** Opt-in setting that proposes
+  brand-new tags filling gaps in your existing groups (e.g. "Afternoon" alongside
+  Morning/Evening), scored on-device via the zero-shot path. Scan and approve
+  candidates in Settings → AI Tags; approved tags appear as distinct green ghost
+  chips and are created in the right group on accept. Off by default, with a
+  separate higher confidence threshold.
 - **Play queue**: right-click any track (or a multi-selection) for **Play Next** / **Play Later**, or press **⇧Q** / **Q** with tracks selected. Queued songs play before the tracklist resumes where you left off (Spotify-style). The new **Queue** tab in the right panel shows what's playing, the queue itself (drag to reorder, hover-X to remove, double-click to jump, Clear), and what's coming up next from the current playlist. The queue survives app restarts.
 - **Elapsed / total time in the player bar**: elapsed time sits left of the waveform, total duration on the right — click the total to toggle it to remaining time (shown with a `-` prefix), and the choice is remembered. Works in both player modes.
 - **Find Library Matches**: right-click an imported Spotify playlist to scan its unmatched (Spotify-only) tracks against your local library — likely matches are queued in the match review panel for you to confirm or reject; nothing is ever merged automatically. Works offline and reports what it found in a toast.
