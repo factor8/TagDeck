@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Info, Sparkles, Loader2, Plus } from 'lucide-react';
+import { Info, Sparkles, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
+import { ProgressBar } from './ProgressBar';
 
 interface Props {
     track: Track | null;
@@ -47,6 +48,48 @@ interface BatchTagResult {
 const batchTagFailures = (res: BatchTagResult): number[] =>
     [...(res.missing_ids || []), ...(res.failed_ids || [])];
 
+interface AnalysisProgressEvent {
+    phase: string;
+    current: number;
+    total: number;
+    track_id?: number | null;
+    window?: number | null;
+    window_total?: number | null;
+}
+
+const clamp01 = (f: number) => Math.max(0, Math.min(1, f));
+const lerp = (a: number, b: number, f: number) => a + (b - a) * clamp01(f);
+
+// Map a single-track analysis event to a target ceiling + phase label.
+// Returns null for events the bar should ignore (e.g. the coarse pre-worker
+// "analyzing" tick that carries no window data). `firstRun` widens the layout
+// to make room for the one-time "Preparing tags…" segment.
+function progressForEvent(
+    ev: AnalysisProgressEvent,
+    firstRun: boolean,
+): { ceiling: number; label: string; canCreep: boolean } | null {
+    const seg = firstRun
+        ? { tags: [0, 0.3], load: [0.3, 0.45], decode: [0.45, 0.55], embed: [0.55, 0.9] }
+        : { tags: [0, 0], load: [0, 0.25], decode: [0.25, 0.5], embed: [0.5, 0.9] };
+    switch (ev.phase) {
+        case 'embedding_tags': {
+            const f = ev.total > 0 ? ev.current / ev.total : 0;
+            return { ceiling: lerp(seg.tags[0], seg.tags[1], f), label: 'Preparing tags…', canCreep: false };
+        }
+        case 'loading_model':
+            return { ceiling: seg.load[1], label: 'Loading model…', canCreep: true };
+        case 'decoding':
+            return { ceiling: seg.decode[1], label: 'Reading audio…', canCreep: true };
+        case 'analyzing': {
+            if (ev.window_total == null) return null; // coarse tick, no sub-progress
+            const f = ev.window_total > 0 ? (ev.window ?? 0) / ev.window_total : 0;
+            return { ceiling: lerp(seg.embed[0], seg.embed[1], f), label: 'Analyzing audio…', canCreep: false };
+        }
+        default:
+            return null;
+    }
+}
+
 export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Props) {
     const { showError } = useToast();
     // rawComment is ONLY the Left Side (User Comment)
@@ -66,6 +109,19 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [analyzing, setAnalyzing] = useState(false);
     const [newTags, setNewTags] = useState<NewTagSuggestion[]>([]);
     const [dismissedNew, setDismissedNew] = useState<Set<number>>(new Set());
+    const [progress, setProgress] = useState<{ fraction: number; label: string } | null>(null);
+    // Global (persisted) collapse toggle for the suggested-tags chips.
+    const [suggestCollapsed, setSuggestCollapsed] = useState(
+        () => localStorage.getItem('app_suggestions_collapsed') === 'true'
+    );
+    const analyzingRef = useRef(false);
+    const sawTagPhaseRef = useRef(false);
+    const creepRef = useRef<number | null>(null); // ceiling to ease toward, or null
+    const runIdRef = useRef(0); // bumped per analyze run; guards stale async cleanup
+    const currentTrackIdRef = useRef<number | null>(null); // viewed single track, for event matching
+    const progressActiveRef = useRef(false); // true while a bar is showing for the viewed track
+
+    useEffect(() => { analyzingRef.current = analyzing; }, [analyzing]);
 
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
 
@@ -76,10 +132,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             setSuggestions(resp.suggestions);
             setNewTags(resp.new_tags ?? []);
         } catch (e) {
-            // No model / no embeddings yet — stay silent, just show nothing.
-            console.debug('get_tag_suggestions:', e);
+            // The backend returns analyzed:false cleanly for un-embedded tracks, so
+            // reaching here means the command itself failed. Don't leave `analyzed`
+            // stale-true (that would hide the "Suggest tags" button); surface the
+            // error loudly so the real cause is visible.
+            console.error('get_tag_suggestions failed:', e);
             setSuggestions([]);
             setNewTags([]);
+            setAnalyzed(false);
         }
     }, []);
 
@@ -87,6 +147,12 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     useEffect(() => {
         setDismissed(new Set());
         setDismissedNew(new Set());
+        setProgress(null);
+        setAnalyzing(false);
+        analyzingRef.current = false;
+        creepRef.current = null;
+        progressActiveRef.current = false;
+        currentTrackIdRef.current = track && !isMultiSelect ? track.id : null;
         if (track && !isMultiSelect) {
             fetchSuggestions(track.id);
         } else {
@@ -101,9 +167,24 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         let active = true;
-        listen('analysis-complete', () => {
-            setAnalyzing(false);
-            if (track && !isMultiSelect) fetchSuggestions(track.id);
+        listen('analysis-complete', async () => {
+            // Only finish the bar if one was actually showing for the viewed track
+            // (our button run OR a right-click run of this track). A Settings batch
+            // completion leaves progressActiveRef false → no phantom bar. The
+            // suggestion refetch still runs in every case.
+            const wasActive = progressActiveRef.current;
+            const myRun = runIdRef.current;
+            if (wasActive) {
+                creepRef.current = null;
+                setProgress({ fraction: 1, label: 'Finding suggestions…' });
+            }
+            if (track && !isMultiSelect) await fetchSuggestions(track.id);
+            // Skip cleanup if a newer analyze run began during the await above.
+            if (wasActive && runIdRef.current === myRun) {
+                setAnalyzing(false);
+                setProgress(null);
+                progressActiveRef.current = false;
+            }
         }).then((u) => {
             if (active) unlisten = u;
             else u();
@@ -113,6 +194,44 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             unlisten?.();
         };
     }, [track, isMultiSelect, fetchSuggestions]);
+
+    // Live progress for THIS component's single-track analyze.
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        let active = true;
+        listen<AnalysisProgressEvent>('analysis-progress', (e) => {
+            const ev = e.payload;
+            // Drive the bar for our own button run OR any run analyzing the
+            // currently-viewed track (e.g. the right-click context-menu action).
+            const forViewedTrack = ev.track_id != null && ev.track_id === currentTrackIdRef.current;
+            if (!analyzingRef.current && !forViewedTrack) return;
+            if (ev.phase === 'embedding_tags') sawTagPhaseRef.current = true;
+            const mapped = progressForEvent(ev, sawTagPhaseRef.current);
+            if (!mapped) return;
+            creepRef.current = mapped.canCreep ? mapped.ceiling : null;
+            progressActiveRef.current = true;
+            setProgress((prev) => {
+                const base = prev?.fraction ?? 0;
+                const fraction = mapped.canCreep ? base : Math.max(base, mapped.ceiling);
+                return { fraction, label: mapped.label };
+            });
+        }).then((u) => { if (active) unlisten = u; else u(); });
+        return () => { active = false; unlisten?.(); };
+    }, []);
+
+    // Cosmetic creep during un-measurable steps (model load / decode).
+    useEffect(() => {
+        const id = setInterval(() => {
+            const ceiling = creepRef.current;
+            if (ceiling == null) return;
+            setProgress((prev) => {
+                if (!prev || prev.fraction >= ceiling) return prev;
+                const next = Math.min(ceiling, prev.fraction + (ceiling - prev.fraction) * 0.08 + 0.003);
+                return { ...prev, fraction: next };
+            });
+        }, 120);
+        return () => clearInterval(id);
+    }, []);
 
     const acceptSuggestion = async (s: Suggestion) => {
         setSuggestions((prev) => prev.filter((x) => x.tag_id !== s.tag_id));
@@ -140,20 +259,36 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         setDismissed((prev) => new Set(prev).add(tagId));
     };
 
+    const toggleSuggestCollapsed = () => {
+        setSuggestCollapsed((v) => {
+            const next = !v;
+            localStorage.setItem('app_suggestions_collapsed', String(next));
+            return next;
+        });
+    };
+
     // Shared keydown activator for pointer-only chips: fires `fn` on Enter/Space
     // and blocks the page-scroll default that Space would otherwise trigger.
     const activateOnKey = (fn: () => void) => (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
     };
 
-    const analyzeThisTrack = async () => {
+    const analyzeThisTrack = async (force = false) => {
         if (!track) return;
+        runIdRef.current += 1;
+        sawTagPhaseRef.current = false;
+        creepRef.current = null;
+        progressActiveRef.current = true;
+        setProgress({ fraction: 0, label: 'Starting…' });
         setAnalyzing(true);
         try {
-            await invoke('analyze_tracks', { trackIds: [track.id], force: false });
+            await invoke('analyze_tracks', { trackIds: [track.id], force });
             // `analysis-complete` listener refetches and clears `analyzing`.
         } catch (e) {
             setAnalyzing(false);
+            setProgress(null);
+            creepRef.current = null;
+            progressActiveRef.current = false;
             const msg = String(e);
             if (msg.includes('not downloaded')) {
                 showError('Enable AI suggestions in Settings → AI Tags first.');
@@ -554,57 +689,83 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 </div>
 
                 {!isMultiSelect && (() => {
+                    if (progress) {
+                        return (
+                            <div
+                                style={styles.suggestRow}
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={Math.round(progress.fraction * 100)}
+                                aria-valuetext={progress.label}
+                            >
+                                <div style={{ flex: 1 }}>
+                                    <ProgressBar value={Math.round(progress.fraction * 100)} label={progress.label} />
+                                </div>
+                            </div>
+                        );
+                    }
                     const visible = suggestions.filter(
                         s => !dismissed.has(s.tag_id) && !appliedTags.has(s.name.toLowerCase())
                     );
-                    if (visible.length > 0) {
-                        return (
-                            <div style={styles.suggestRow}>
-                                <span style={styles.suggestLabel}>
-                                    <Sparkles size={11} /> Suggested
-                                </span>
-                                {visible.map(s => (
-                                    <div
-                                        key={s.tag_id}
-                                        style={styles.ghostChip}
-                                        onClick={() => acceptSuggestion(s)}
-                                        title={`${Math.round(s.score * 100)}% match — click to add`}
+                    // Always keep an entry point for a single selected track: show any
+                    // suggestion chips, followed by a persistent Suggest/Re-analyze
+                    // button so the track never renders a blank, dead-end row.
+                    return (
+                        <div style={styles.suggestRow}>
+                            {visible.length > 0 && (
+                                <>
+                                    <span
+                                        style={{ ...styles.suggestLabel, cursor: 'pointer' }}
+                                        onClick={toggleSuggestCollapsed}
                                         role="button"
                                         tabIndex={0}
-                                        aria-label={`Add tag ${s.name}`}
-                                        onKeyDown={activateOnKey(() => acceptSuggestion(s))}
+                                        aria-expanded={!suggestCollapsed}
+                                        aria-label={suggestCollapsed
+                                            ? `Show ${visible.length} suggested tags`
+                                            : 'Hide suggested tags'}
+                                        title={suggestCollapsed ? 'Show suggested tags' : 'Hide suggested tags'}
+                                        onKeyDown={activateOnKey(toggleSuggestCollapsed)}
                                     >
-                                        {s.name}
-                                        <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
-                                        <span
-                                            style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
-                                            onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                                        {suggestCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                                        <Sparkles size={11} /> Suggested ({visible.length})
+                                    </span>
+                                    {!suggestCollapsed && visible.map(s => (
+                                        <div
+                                            key={s.tag_id}
+                                            style={styles.ghostChip}
+                                            onClick={() => acceptSuggestion(s)}
+                                            title={`${Math.round(s.score * 100)}% match — click to add`}
                                             role="button"
                                             tabIndex={0}
-                                            aria-label={`Dismiss ${s.name}`}
-                                            onKeyDown={(e) => { e.stopPropagation(); activateOnKey(() => dismissSuggestion(s.tag_id))(e); }}
-                                        >×</span>
-                                    </div>
-                                ))}
-                            </div>
-                        );
-                    }
-                    if (!analyzed) {
-                        return (
-                            <div style={styles.suggestRow}>
-                                <button
-                                    onClick={analyzeThisTrack}
-                                    disabled={analyzing}
-                                    style={styles.analyzeBtn}
-                                    title="Analyze this track's audio to suggest tags"
-                                >
-                                    {analyzing ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
-                                    {analyzing ? 'Analyzing…' : 'Suggest tags'}
-                                </button>
-                            </div>
-                        );
-                    }
-                    return null;
+                                            aria-label={`Add tag ${s.name}`}
+                                            onKeyDown={activateOnKey(() => acceptSuggestion(s))}
+                                        >
+                                            {s.name}
+                                            <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
+                                            <span
+                                                style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
+                                                onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-label={`Dismiss ${s.name}`}
+                                                onKeyDown={(e) => { e.stopPropagation(); activateOnKey(() => dismissSuggestion(s.tag_id))(e); }}
+                                            >×</span>
+                                        </div>
+                                    ))}
+                                </>
+                            )}
+                            <button
+                                onClick={() => analyzeThisTrack(analyzed)}
+                                style={styles.analyzeBtn}
+                                title={analyzed
+                                    ? "Re-analyze this track's audio to refresh suggestions"
+                                    : "Analyze this track's audio to suggest tags"}
+                            >
+                                <Sparkles size={11} /> {analyzed ? 'Re-analyze' : 'Suggest tags'}
+                            </button>
+                        </div>
+                    );
                 })()}
 
                 {!isMultiSelect && (() => {

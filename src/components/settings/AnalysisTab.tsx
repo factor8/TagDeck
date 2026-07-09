@@ -4,6 +4,7 @@ import { Sparkles, Loader2, Download, Trash2, Play, Square, Wand2, Check, X } fr
 import { useToast } from '../Toast';
 import { useAnalysis } from '../../hooks/useAnalysis';
 import { TagCandidate } from '../../types';
+import { ProgressBar } from '../ProgressBar';
 
 const fmtMB = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
@@ -367,17 +368,6 @@ export function AnalysisTab() {
 
                 </>
             )}
-        </div>
-    );
-}
-
-function ProgressBar({ value, label }: { value: number; label: string }) {
-    return (
-        <div style={{ marginTop: '12px' }}>
-            <div style={{ height: '6px', background: 'var(--bg-secondary)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ width: `${value}%`, height: '100%', background: 'var(--accent-color)', transition: 'width 0.2s' }} />
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '5px' }}>{label}</div>
         </div>
     );
 }

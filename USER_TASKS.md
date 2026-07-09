@@ -23,7 +23,7 @@ _Depends-on-Jordan items that should halt related work until done._
 ## To Do
 _Non-blocking — do when convenient._
 
-_(none)_
+- [ ] (2026-07-09) Verify single-track Suggested Tags progress bar: pick an un-analyzed track, click "Suggest tags", confirm phases advance and the bar fills during audio windows, then suggestions render. Repeat on a first-ever analysis to see "Preparing tags…".
 
 ## Done
 _Recently finished. Trim when this grows long._
