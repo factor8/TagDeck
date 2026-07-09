@@ -17,3 +17,18 @@ To get sharper on your well-used tags, the natural idea is to study your own tag
 To get more useful on rarely-used tags, there are two routes. The gentle one — asking the question better — is already in: when the feature falls back to matching a song against the plain meaning of a phrase, it now tries several wordings of that phrase and combines them, which gives a fairer, steadier read on tags it has little history for, and it costs nothing to run. The bigger route is to give the feature better ears: swap the current listening model for a larger one, or one trained specifically on music rather than sounds in general. That would likely help across the board — both the sparse tags and the well-used ones — but it means a meaningfully larger download, so it's the kind of upgrade worth offering as a choice rather than forcing on everyone.
 
 Finally, the simplest and most reliable lever is in your hands: keep tagging. Because the feature learns from your own labels, every track you tag makes that tag's future suggestions a little sharper, and tags gradually "graduate" from rough guessing into the confident, learned-from-you picks. None of the improvements above replace that — they just help the assistant make the most of the tagging you've already done.
+
+## Growing Your Vocabulary (Optional)
+
+Normally the feature only ever suggests tags you already use. There's an opt-in
+setting (AI Tags in Settings) that lets it grow your vocabulary outward from the
+shape of your tag cloud. If you already tag by time of day — Morning, Evening,
+Prime Time — it notices the pattern and can propose the gap: Afternoon, say, when
+a track sounds like it. You scan your tags, approve the ideas you like, and from
+then on approved new tags show up as their own distinct ghost chips (with a
+green dashed outline and a "new" marker) on tracks that fit. Accepting one both
+creates the tag in the right group and applies it. It's off by default and uses
+a stricter confidence bar than ordinary suggestions, because inventing a new tag
+is a bigger step than reusing one you already have. The ideas come from a small
+built-in map of common musical dimensions; nothing about your library leaves your
+Mac.

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Info, Sparkles, Loader2 } from 'lucide-react';
+import { Info, Sparkles, Loader2, Plus } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
@@ -22,9 +22,17 @@ interface Suggestion {
     source: string;
 }
 
+interface NewTagSuggestion {
+    candidate_id: number;
+    name: string;
+    group_id?: number | null;
+    score: number;
+}
+
 interface SuggestionsResponse {
     analyzed: boolean;
     suggestions: Suggestion[];
+    new_tags: NewTagSuggestion[];
 }
 
 // Result of batch_add_tag / batch_remove_tag. Anything in failed_ids (file
@@ -56,6 +64,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [analyzed, setAnalyzed] = useState(true);
     const [dismissed, setDismissed] = useState<Set<number>>(new Set());
     const [analyzing, setAnalyzing] = useState(false);
+    const [newTags, setNewTags] = useState<NewTagSuggestion[]>([]);
+    const [dismissedNew, setDismissedNew] = useState<Set<number>>(new Set());
 
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
 
@@ -64,20 +74,24 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             const resp = await invoke<SuggestionsResponse>('get_tag_suggestions', { trackId });
             setAnalyzed(resp.analyzed);
             setSuggestions(resp.suggestions);
+            setNewTags(resp.new_tags ?? []);
         } catch (e) {
             // No model / no embeddings yet — stay silent, just show nothing.
             console.debug('get_tag_suggestions:', e);
             setSuggestions([]);
+            setNewTags([]);
         }
     }, []);
 
     // Load suggestions when a single track is selected; clear on multi/none.
     useEffect(() => {
         setDismissed(new Set());
+        setDismissedNew(new Set());
         if (track && !isMultiSelect) {
             fetchSuggestions(track.id);
         } else {
             setSuggestions([]);
+            setNewTags([]);
             setAnalyzed(true);
         }
     }, [track, isMultiSelect, fetchSuggestions]);
@@ -105,8 +119,31 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         await addTag(s.name);
     };
 
+    const acceptNewTag = async (c: NewTagSuggestion) => {
+        // Optimistically hide the chip.
+        setDismissedNew((prev) => new Set(prev).add(c.candidate_id));
+        // Reuse the normal write path — this creates the tag via sync_tags.
+        await addTag(c.name);
+        try {
+            // File it in its group + copy the curated description + retire the candidate.
+            await invoke('finalize_accepted_candidate', { candidateId: c.candidate_id });
+        } catch (e) {
+            // Tag was still created (just uncategorized) — non-fatal, but tell the user.
+            console.error('finalize_accepted_candidate failed', e);
+            showError(`"${c.name}" was added, but couldn't be filed in its group automatically.`);
+        }
+        onUpdate();
+        if (track) fetchSuggestions(track.id);
+    };
+
     const dismissSuggestion = (tagId: number) => {
         setDismissed((prev) => new Set(prev).add(tagId));
+    };
+
+    // Shared keydown activator for pointer-only chips: fires `fn` on Enter/Space
+    // and blocks the page-scroll default that Space would otherwise trigger.
+    const activateOnKey = (fn: () => void) => (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
     };
 
     const analyzeThisTrack = async () => {
@@ -432,6 +469,9 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
 
     if (!track) return null;
 
+    // Shared by both suggestion IIFEs below so neither recomputes its own copy.
+    const appliedTags = new Set(tags.map((t) => t.toLowerCase()));
+
     return (
         <div style={styles.container}>
             {/* Header Removed */}
@@ -514,9 +554,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 </div>
 
                 {!isMultiSelect && (() => {
-                    const applied = new Set(tags.map(t => t.toLowerCase()));
                     const visible = suggestions.filter(
-                        s => !dismissed.has(s.tag_id) && !applied.has(s.name.toLowerCase())
+                        s => !dismissed.has(s.tag_id) && !appliedTags.has(s.name.toLowerCase())
                     );
                     if (visible.length > 0) {
                         return (
@@ -530,12 +569,20 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                                         style={styles.ghostChip}
                                         onClick={() => acceptSuggestion(s)}
                                         title={`${Math.round(s.score * 100)}% match — click to add`}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Add tag ${s.name}`}
+                                        onKeyDown={activateOnKey(() => acceptSuggestion(s))}
                                     >
                                         {s.name}
                                         <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
                                         <span
                                             style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
                                             onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-label={`Dismiss ${s.name}`}
+                                            onKeyDown={(e) => { e.stopPropagation(); activateOnKey(() => dismissSuggestion(s.tag_id))(e); }}
                                         >×</span>
                                     </div>
                                 ))}
@@ -558,6 +605,52 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                         );
                     }
                     return null;
+                })()}
+
+                {!isMultiSelect && (() => {
+                    const visibleNew = newTags.filter(
+                        (c) => !dismissedNew.has(c.candidate_id) && !appliedTags.has(c.name.toLowerCase())
+                    );
+                    if (visibleNew.length === 0) return null;
+                    return (
+                        <div style={styles.suggestRow}>
+                            <span style={styles.suggestLabel}>
+                                <Plus size={11} /> New tags
+                            </span>
+                            {visibleNew.map((c) => (
+                                <span
+                                    key={c.candidate_id}
+                                    style={styles.newTagChip}
+                                    title={`${Math.round(c.score * 100)}% match — click to add “${c.name}”`}
+                                    onClick={() => acceptNewTag(c)}
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Add new tag ${c.name}`}
+                                    onKeyDown={activateOnKey(() => acceptNewTag(c))}
+                                >
+                                    {c.name}
+                                    <span style={styles.newTagBadge}>new</span>
+                                    <span style={styles.ghostPct}>{Math.round(c.score * 100)}%</span>
+                                    <span
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setDismissedNew((prev) => new Set(prev).add(c.candidate_id));
+                                        }}
+                                        style={{ marginLeft: 2, cursor: 'pointer', opacity: 0.6 }}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Dismiss ${c.name}`}
+                                        onKeyDown={(e) => {
+                                            e.stopPropagation();
+                                            activateOnKey(() => setDismissedNew((prev) => new Set(prev).add(c.candidate_id)))(e);
+                                        }}
+                                    >
+                                        ×
+                                    </span>
+                                </span>
+                            ))}
+                        </div>
+                    );
                 })()}
             </div>
         </div>
@@ -660,6 +753,27 @@ const styles = {
         border: '1px dashed var(--accent-color)',
         cursor: 'pointer',
         userSelect: 'none' as const,
+    },
+    newTagChip: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '3px 9px',
+        border: '1px dashed #22c55e',
+        background: 'transparent',
+        color: 'var(--text-secondary)',
+        borderRadius: '10px',
+        fontWeight: 500,
+        fontSize: '12px',
+        cursor: 'pointer',
+        userSelect: 'none' as const,
+    },
+    newTagBadge: {
+        fontSize: '9px',
+        textTransform: 'uppercase' as const,
+        letterSpacing: '0.04em',
+        color: '#22c55e',
+        fontWeight: 700,
     },
     ghostPct: {
         fontSize: '10px',

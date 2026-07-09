@@ -113,3 +113,20 @@ pub struct TagGroup {
     pub name: String,
     pub position: i64,
 }
+
+/// A proposed brand-new tag (vocabulary expansion). Virtual until accepted: no
+/// `tags` row exists for it until the user accepts a ghost chip on a track.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TagCandidate {
+    pub id: i64,
+    pub name: String,
+    pub group_id: Option<i64>,
+    /// Joined from `tag_groups` for display; not stored on the candidate row.
+    pub group_name: Option<String>,
+    /// Curated zero-shot prompt override (may be None → group template is used).
+    pub description: Option<String>,
+    /// 'proposed' | 'approved' | 'dismissed'
+    pub status: String,
+    /// 'concept_map' (future: 'llm')
+    pub source: String,
+}

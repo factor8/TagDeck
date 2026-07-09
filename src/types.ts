@@ -55,3 +55,13 @@ export interface TagGroup {
     name: string;
     position: number;
 }
+
+export interface TagCandidate {
+    id: number;
+    name: string;
+    group_id?: number | null;
+    group_name?: string | null;
+    description?: string | null;
+    status: string;
+    source: string;
+}

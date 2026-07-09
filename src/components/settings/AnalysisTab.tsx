@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Sparkles, Loader2, Download, Trash2, Play, Square } from 'lucide-react';
+import { Sparkles, Loader2, Download, Trash2, Play, Square, Wand2, Check, X } from 'lucide-react';
 import { useToast } from '../Toast';
 import { useAnalysis } from '../../hooks/useAnalysis';
+import { TagCandidate } from '../../types';
 
 const fmtMB = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
@@ -47,6 +48,65 @@ export function AnalysisTab() {
     const [threshold, setThreshold] = useState<number>(0.5);
     const [busy, setBusy] = useState(false);
     const [force, setForce] = useState(false);
+    const [vocabEnabled, setVocabEnabled] = useState(false);
+    const [vocabThreshold, setVocabThreshold] = useState(0.6);
+    const [proposed, setProposed] = useState<TagCandidate[]>([]);
+    const [scanning, setScanning] = useState(false);
+
+    useEffect(() => {
+        invoke<{ enabled: boolean; threshold: number }>('get_vocab_settings')
+            .then((v) => {
+                setVocabEnabled(v.enabled);
+                setVocabThreshold(v.threshold);
+                if (v.enabled) {
+                    invoke<TagCandidate[]>('get_tag_candidates', { status: 'proposed' })
+                        .then(setProposed)
+                        .catch((e) => console.error('get_tag_candidates failed', e));
+                }
+            })
+            .catch((e) => console.error('get_vocab_settings failed', e));
+    }, []);
+
+    const saveVocab = (enabled: boolean, newThreshold: number) => {
+        setVocabEnabled(enabled);
+        setVocabThreshold(newThreshold);
+        invoke('set_vocab_settings', { enabled, threshold: newThreshold }).catch((e) =>
+            console.error('set_vocab_settings failed', e)
+        );
+    };
+
+    const handleScan = async () => {
+        setScanning(true);
+        try {
+            const all = await invoke<TagCandidate[]>('scan_tag_candidates');
+            setProposed(all.filter((c) => c.status === 'proposed'));
+        } catch (e) {
+            showError(`Scan failed: ${e}`);
+        } finally {
+            setScanning(false);
+        }
+    };
+
+    const handleApprove = async (id: number) => {
+        try {
+            await invoke('approve_tag_candidate', { candidateId: id });
+            setProposed((p) => p.filter((c) => c.id !== id));
+            invoke('embed_tag_candidates').catch((e) =>
+                console.error('embed_tag_candidates failed', e)
+            ); // fire-and-forget text embed
+        } catch (e) {
+            showError(`Approve failed: ${e}`);
+        }
+    };
+
+    const handleDismiss = async (id: number) => {
+        try {
+            await invoke('dismiss_tag_candidate', { candidateId: id });
+            setProposed((p) => p.filter((c) => c.id !== id));
+        } catch (e) {
+            showError(`Dismiss failed: ${e}`);
+        }
+    };
 
     useEffect(() => {
         invoke<number>('get_suggestion_threshold').then(setThreshold).catch(console.error);
@@ -232,6 +292,79 @@ export function AnalysisTab() {
                             </span>
                         </div>
                     </div>
+
+                    <div style={cardStyle}>
+                        <h4 style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-secondary)', fontWeight: 600, margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Wand2 size={14} /> Vocabulary expansion
+                        </h4>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5, margin: '0 0 10px' }}>
+                            Propose brand-new tags that fill gaps in your groups — e.g. “Afternoon”
+                            when you already use Morning and Evening. Suggested new tags appear as
+                            distinct ghost chips; accepting one creates the tag.
+                        </p>
+
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={vocabEnabled}
+                                onChange={(e) => saveVocab(e.target.checked, vocabThreshold)}
+                                style={{ accentColor: 'var(--accent-color)' }}
+                            />
+                            <span>Suggest new tags</span>
+                        </label>
+
+                        {vocabEnabled && (
+                            <>
+                                <div style={{ marginTop: 12 }}>
+                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                        New-tag confidence: {vocabThreshold.toFixed(2)}
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min={0.5}
+                                        max={1}
+                                        step={0.05}
+                                        value={vocabThreshold}
+                                        onChange={(e) => setVocabThreshold(parseFloat(e.target.value))}
+                                        onMouseUp={() => saveVocab(vocabEnabled, vocabThreshold)}
+                                        style={{ width: '100%', accentColor: 'var(--accent-color)' }}
+                                    />
+                                </div>
+
+                                <button
+                                    className="btn"
+                                    style={{ ...btnStyle, marginTop: 12 }}
+                                    onClick={handleScan}
+                                    disabled={scanning}
+                                >
+                                    {scanning ? <Loader2 size={13} className="spin" /> : <Wand2 size={13} />}
+                                    Scan my tags for new ideas
+                                </button>
+
+                                {proposed.length > 0 && (
+                                    <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                        {proposed.map((c) => (
+                                            <div
+                                                key={c.id}
+                                                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', background: 'var(--bg-secondary)', borderRadius: 6 }}
+                                            >
+                                                <span style={{ fontWeight: 600, fontSize: 13 }}>{c.name}</span>
+                                                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{c.group_name ?? 'Ungrouped'}</span>
+                                                <span style={{ flex: 1 }} />
+                                                <button className="btn" style={{ ...btnStyle, padding: '4px 8px' }} title="Approve" aria-label="Approve" onClick={() => handleApprove(c.id)}>
+                                                    <Check size={13} />
+                                                </button>
+                                                <button className="btn" style={{ ...btnStyle, padding: '4px 8px' }} title="Dismiss" aria-label="Dismiss" onClick={() => handleDismiss(c.id)}>
+                                                    <X size={13} />
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </>
+                        )}
+                    </div>
+
                 </>
             )}
         </div>

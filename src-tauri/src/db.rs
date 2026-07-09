@@ -215,6 +215,42 @@ impl Database {
             )",
             [],
         );
+        // Vocabulary expansion: proposed brand-new tags derived from the shape of
+        // the existing tag cloud. Virtual until accepted (no `tags` row yet).
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS tag_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                group_id INTEGER REFERENCES tag_groups(id) ON DELETE CASCADE,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'proposed',
+                source TEXT NOT NULL DEFAULT 'concept_map',
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        );
+        // Dedup by (name, group_id) with NULL groups collapsed to a single
+        // sentinel — a plain UNIQUE(name, group_id) would treat each NULL as
+        // distinct and never dedup ungrouped candidates.
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_tag_candidates_name_group
+                ON tag_candidates(name, COALESCE(group_id, -1))",
+            [],
+        );
+        // Candidate text embeddings live in their own table because
+        // tag_text_embeddings.tag_id is a NOT-NULL FK to tags(id).
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS tag_candidate_embeddings (
+                candidate_id INTEGER NOT NULL REFERENCES tag_candidates(id) ON DELETE CASCADE,
+                model_version TEXT NOT NULL,
+                prompt TEXT NOT NULL,
+                dims INTEGER NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY (candidate_id, model_version)
+            )",
+            [],
+        );
         // Optional per-tag prompt override for zero-shot text embedding.
         let _ = conn.execute("ALTER TABLE tags ADD COLUMN description TEXT", []);
 
@@ -1395,6 +1431,125 @@ impl Database {
     }
 
     // -----------------------------------------------------------------------
+    // Tag candidates (vocabulary expansion)
+    // -----------------------------------------------------------------------
+
+    pub fn insert_tag_candidate(
+        &self,
+        name: &str,
+        group_id: Option<i64>,
+        description: Option<&str>,
+        source: &str,
+        created_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO tag_candidates
+                (name, group_id, description, status, source, created_at)
+             VALUES (?1, ?2, ?3, 'proposed', ?4, ?5)",
+            params![name, group_id, description, source, created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_tag_candidates(&self, status: Option<&str>) -> Result<Vec<crate::models::TagCandidate>> {
+        let mut sql = String::from(CANDIDATE_SELECT);
+        if status.is_some() {
+            sql.push_str(" WHERE c.status = ?1");
+        }
+        sql.push_str(" ORDER BY c.group_id, c.name");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut out = Vec::new();
+        if let Some(s) = status {
+            let rows = stmt.query_map(params![s], row_to_candidate)?;
+            for r in rows { out.push(r?); }
+        } else {
+            let rows = stmt.query_map([], row_to_candidate)?;
+            for r in rows { out.push(r?); }
+        }
+        Ok(out)
+    }
+
+    pub fn get_tag_candidate(&self, id: i64) -> Result<Option<crate::models::TagCandidate>> {
+        use rusqlite::OptionalExtension;
+        let mut sql = String::from(CANDIDATE_SELECT);
+        sql.push_str("
+             WHERE c.id = ?1");
+        let c = self.conn.query_row(
+            &sql,
+            params![id],
+            row_to_candidate,
+        ).optional()?;
+        Ok(c)
+    }
+
+    pub fn set_tag_candidate_status(&self, id: i64, status: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tag_candidates SET status = ?1 WHERE id = ?2",
+            params![status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_tag_candidate(&self, id: i64) -> Result<()> {
+        // Delete embeddings explicitly so cleanup does not depend on the
+        // foreign-keys pragma being enabled.
+        self.conn.execute("DELETE FROM tag_candidate_embeddings WHERE candidate_id = ?1", params![id])?;
+        self.conn.execute("DELETE FROM tag_candidates WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn upsert_tag_candidate_embedding(
+        &self,
+        candidate_id: i64,
+        model_version: &str,
+        prompt: &str,
+        embedding: &[f32],
+        created_at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO tag_candidate_embeddings
+                (candidate_id, model_version, prompt, dims, embedding, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![candidate_id, model_version, prompt, embedding.len() as i64, f32_to_blob(embedding), created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn all_tag_candidate_embeddings(&self, model_version: &str) -> Result<Vec<(i64, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT candidate_id, embedding FROM tag_candidate_embeddings WHERE model_version = ?1",
+        )?;
+        let rows = stmt.query_map(params![model_version], |row| {
+            let id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((id, blob_to_f32(&blob)))
+        })?;
+        let mut out = Vec::new();
+        for r in rows { out.push(r?); }
+        Ok(out)
+    }
+
+    pub fn candidate_embedded_ids(&self, model_version: &str) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT candidate_id FROM tag_candidate_embeddings WHERE model_version = ?1",
+        )?;
+        let rows = stmt.query_map(params![model_version], |row| row.get::<_, i64>(0))?;
+        let mut ids = std::collections::HashSet::new();
+        for r in rows { ids.insert(r?); }
+        Ok(ids)
+    }
+
+    pub fn get_tag_id_by_name(&self, name: &str) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let id: Option<i64> = self.conn.query_row(
+            "SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE",
+            params![name],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(id)
+    }
+
+    // -----------------------------------------------------------------------
     // Analysis embeddings (CLAP)
     // -----------------------------------------------------------------------
 
@@ -2199,6 +2354,26 @@ fn blob_to_f32(b: &[u8]) -> Vec<f32> {
         .collect()
 }
 
+/// Shared `SELECT ... JOIN` prefix for `get_tag_candidates`/`get_tag_candidate`;
+/// callers append their own WHERE/ORDER suffix. Column order matches
+/// `row_to_candidate`: id, name, group_id, group_name, description, status, source.
+const CANDIDATE_SELECT: &str = "SELECT c.id, c.name, c.group_id, g.name, c.description, c.status, c.source
+             FROM tag_candidates c LEFT JOIN tag_groups g ON g.id = c.group_id";
+
+/// Map a joined tag_candidates row to the model. Column order:
+/// id, name, group_id, group_name, description, status, source.
+fn row_to_candidate(row: &rusqlite::Row) -> rusqlite::Result<crate::models::TagCandidate> {
+    Ok(crate::models::TagCandidate {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        group_id: row.get(2)?,
+        group_name: row.get(3)?,
+        description: row.get(4)?,
+        status: row.get(5)?,
+        source: row.get(6)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2391,5 +2566,64 @@ mod tests {
         let removed = db.gc_orphan_ghosts().unwrap();
         assert_eq!(removed, 0);
         assert!(db.get_track(orphan_rated).unwrap().is_some());
+    }
+
+    #[test]
+    fn tag_candidate_roundtrip_and_status() {
+        let db = Database::new(":memory:").unwrap();
+        let g = db.create_tag_group("Time of Day").unwrap();
+        db.insert_tag_candidate("Afternoon", Some(g.id), Some("an afternoon music track"), "concept_map", 111).unwrap();
+        // Duplicate (same name+group) is ignored by UNIQUE(name, group_id).
+        db.insert_tag_candidate("Afternoon", Some(g.id), None, "concept_map", 222).unwrap();
+        let all = db.get_tag_candidates(None).unwrap();
+        assert_eq!(all.len(), 1);
+        let c = &all[0];
+        assert_eq!(c.name, "Afternoon");
+        assert_eq!(c.group_id, Some(g.id));
+        assert_eq!(c.group_name.as_deref(), Some("Time of Day"));
+        assert_eq!(c.status, "proposed");
+        db.set_tag_candidate_status(c.id, "approved").unwrap();
+        assert_eq!(db.get_tag_candidates(Some("approved")).unwrap().len(), 1);
+        assert_eq!(db.get_tag_candidates(Some("proposed")).unwrap().len(), 0);
+        assert_eq!(db.get_tag_candidate(c.id).unwrap().unwrap().status, "approved");
+        db.delete_tag_candidate(c.id).unwrap();
+        assert!(db.get_tag_candidate(c.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn tag_candidate_embedding_roundtrip_and_cleanup() {
+        let db = Database::new(":memory:").unwrap();
+        let g = db.create_tag_group("Time of Day").unwrap();
+        db.insert_tag_candidate("Afternoon", Some(g.id), None, "concept_map", 1).unwrap();
+        let id = db.get_tag_candidates(None).unwrap()[0].id;
+        db.upsert_tag_candidate_embedding(id, "m1", "key", &[0.1, 0.2, 0.3], 5).unwrap();
+        let all = db.all_tag_candidate_embeddings("m1").unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, id);
+        assert_eq!(all[0].1.len(), 3);
+        assert!(db.candidate_embedded_ids("m1").unwrap().contains(&id));
+        assert!(db.candidate_embedded_ids("other").unwrap().is_empty());
+        // Deleting the candidate removes its embeddings regardless of FK pragma.
+        db.delete_tag_candidate(id).unwrap();
+        assert!(db.all_tag_candidate_embeddings("m1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_candidate_dedup_with_null_group() {
+        let db = Database::new(":memory:").unwrap();
+        // Same name, no group, inserted twice → must dedup to one row.
+        db.insert_tag_candidate("Ungrouped Idea", None, None, "concept_map", 1).unwrap();
+        db.insert_tag_candidate("Ungrouped Idea", None, Some("desc"), "concept_map", 2).unwrap();
+        let all = db.get_tag_candidates(None).unwrap();
+        assert_eq!(all.iter().filter(|c| c.name == "Ungrouped Idea").count(), 1);
+    }
+
+    #[test]
+    fn get_tag_id_by_name_is_case_insensitive() {
+        let db = Database::new(":memory:").unwrap();
+        db.conn.execute("INSERT INTO tags (name, usage_count) VALUES ('Afternoon', 0)", []).unwrap();
+        assert!(db.get_tag_id_by_name("afternoon").unwrap().is_some());
+        assert!(db.get_tag_id_by_name("AFTERNOON").unwrap().is_some());
+        assert!(db.get_tag_id_by_name("nope").unwrap().is_none());
     }
 }
