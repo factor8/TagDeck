@@ -1452,10 +1452,7 @@ impl Database {
     }
 
     pub fn get_tag_candidates(&self, status: Option<&str>) -> Result<Vec<crate::models::TagCandidate>> {
-        let mut sql = String::from(
-            "SELECT c.id, c.name, c.group_id, g.name, c.description, c.status, c.source
-             FROM tag_candidates c LEFT JOIN tag_groups g ON g.id = c.group_id",
-        );
+        let mut sql = String::from(CANDIDATE_SELECT);
         if status.is_some() {
             sql.push_str(" WHERE c.status = ?1");
         }
@@ -1474,10 +1471,11 @@ impl Database {
 
     pub fn get_tag_candidate(&self, id: i64) -> Result<Option<crate::models::TagCandidate>> {
         use rusqlite::OptionalExtension;
+        let mut sql = String::from(CANDIDATE_SELECT);
+        sql.push_str("
+             WHERE c.id = ?1");
         let c = self.conn.query_row(
-            "SELECT c.id, c.name, c.group_id, g.name, c.description, c.status, c.source
-             FROM tag_candidates c LEFT JOIN tag_groups g ON g.id = c.group_id
-             WHERE c.id = ?1",
+            &sql,
             params![id],
             row_to_candidate,
         ).optional()?;
@@ -2355,6 +2353,12 @@ fn blob_to_f32(b: &[u8]) -> Vec<f32> {
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
+
+/// Shared `SELECT ... JOIN` prefix for `get_tag_candidates`/`get_tag_candidate`;
+/// callers append their own WHERE/ORDER suffix. Column order matches
+/// `row_to_candidate`: id, name, group_id, group_name, description, status, source.
+const CANDIDATE_SELECT: &str = "SELECT c.id, c.name, c.group_id, g.name, c.description, c.status, c.source
+             FROM tag_candidates c LEFT JOIN tag_groups g ON g.id = c.group_id";
 
 /// Map a joined tag_candidates row to the model. Column order:
 /// id, name, group_id, group_name, description, status, source.

@@ -631,7 +631,8 @@ pub async fn get_tag_suggestions(
     let suggestions = score_suggestions(&input);
 
     let new_tags = if vocab_enabled {
-        score_new_tags(&query, track_id, &all_tracks, &cand_rows, &cand_emb, vocab_threshold)
+        let existing_names: HashSet<String> = tags.iter().map(|t| t.name.to_lowercase()).collect();
+        score_new_tags(&query, track_id, &all_tracks, &cand_rows, &cand_emb, &existing_names, vocab_threshold)
     } else {
         Vec::new()
     };
@@ -647,6 +648,7 @@ fn score_new_tags(
     all_tracks: &[(i64, Vec<f32>)],
     cands: &[TagCandidate],
     cand_emb: &[(i64, Vec<f32>)],
+    existing_names: &HashSet<String>,
     threshold: f32,
 ) -> Vec<NewTagSuggestion> {
     if cands.is_empty() || cand_emb.is_empty() {
@@ -655,7 +657,7 @@ fn score_new_tags(
     let emb_map: HashMap<i64, Vec<f32>> = cand_emb.iter().cloned().collect();
     let infos: Vec<TagInfo> = cands
         .iter()
-        .filter(|c| emb_map.contains_key(&c.id))
+        .filter(|c| emb_map.contains_key(&c.id) && !existing_names.contains(&c.name.to_lowercase()))
         .map(|c| TagInfo { id: c.id, name: c.name.clone(), group_id: c.group_id })
         .collect();
     if infos.is_empty() {
@@ -912,4 +914,75 @@ pub async fn finalize_accepted_candidate(
     }
     db.delete_tag_candidate(candidate_id).map_err(|e| e.to_string())?;
     Ok(tag_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cand(id: i64, name: &str, group_id: Option<i64>) -> TagCandidate {
+        TagCandidate {
+            id,
+            name: name.to_string(),
+            group_id,
+            group_name: None,
+            description: None,
+            status: "approved".to_string(),
+            source: "concept_map".to_string(),
+        }
+    }
+
+    #[test]
+    fn score_new_tags_empty_candidates_returns_empty() {
+        let existing: HashSet<String> = HashSet::new();
+        let out = score_new_tags(&[1.0f32, 0.0], 1, &[], &[], &[], &existing, 0.5);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn score_new_tags_empty_embeddings_returns_empty() {
+        let existing: HashSet<String> = HashSet::new();
+        let cands = vec![cand(1, "moody", None)];
+        let out = score_new_tags(&[1.0f32, 0.0], 1, &[], &cands, &[], &existing, 0.5);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn score_new_tags_missing_candidate_embedding_returns_empty() {
+        let existing: HashSet<String> = HashSet::new();
+        let cands = vec![cand(1, "moody", None)];
+        // Embedding present, but for a different candidate id than the one proposed.
+        let cand_emb = vec![(99i64, vec![1.0f32, 0.0])];
+        let out = score_new_tags(&[1.0f32, 0.0], 1, &[], &cands, &cand_emb, &existing, 0.5);
+        assert!(out.is_empty());
+    }
+
+    /// Pins Fix 1: a candidate whose name already exists as a real tag (matched
+    /// case-insensitively) must never resurface as a "new tag" suggestion.
+    #[test]
+    fn score_new_tags_excludes_candidate_already_a_real_tag() {
+        let mut existing: HashSet<String> = HashSet::new();
+        existing.insert("moody".to_string());
+        let cands = vec![cand(1, "Moody", None)];
+        let cand_emb = vec![(1i64, vec![1.0f32, 0.0])];
+        let out = score_new_tags(&[1.0f32, 0.0], 1, &[], &cands, &cand_emb, &existing, 0.5);
+        assert!(out.is_empty());
+    }
+
+    /// With `all_tracks` empty, `mean_std` (scoring.rs) deterministically falls
+    /// back to (mean=0, std=1), so the zero-shot z-score reduces to plain
+    /// `sigmoid(dot(query, candidate_embedding))` with no calibration noise —
+    /// safe to assert on exactly, unlike the general calibrated case.
+    #[test]
+    fn score_new_tags_maps_suggestion_fields_when_deterministically_clears_threshold() {
+        let existing: HashSet<String> = HashSet::new();
+        let cands = vec![cand(7, "moody", Some(3))];
+        let cand_emb = vec![(7i64, vec![1.0f32, 0.0])];
+        let out = score_new_tags(&[1.0f32, 0.0], 1, &[], &cands, &cand_emb, &existing, 0.5);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].candidate_id, 7);
+        assert_eq!(out[0].name, "moody");
+        assert_eq!(out[0].group_id, Some(3));
+        assert!(out[0].score >= 0.5);
+    }
 }
