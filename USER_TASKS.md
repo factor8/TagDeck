@@ -28,4 +28,4 @@ _(none)_
 ## Done
 _Recently finished. Trim when this grows long._
 
-_(none yet)_
+- [x] (2026-07-08) **Test the keyboard media keys.** Confirmed working by Jordan.

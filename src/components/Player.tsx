@@ -70,6 +70,7 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
     const prevTrackIdRef = useRef<number | null>(null);
     const onPlayStateChangeRef = useRef(onPlayStateChange);
     const onNextRef = useRef(onNext);
+    const onPrevRef = useRef(onPrev);
     const onAutoPlayProcessedRef = useRef(onAutoPlayProcessed);
 
     // Keep refs up to date
@@ -78,8 +79,16 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         playerModeRef.current = playerMode;
         onPlayStateChangeRef.current = onPlayStateChange;
         onNextRef.current = onNext;
+        onPrevRef.current = onPrev;
         onAutoPlayProcessedRef.current = onAutoPlayProcessed;
-    }, [autoPlay, playerMode, onPlayStateChange, onNext, onAutoPlayProcessed]);
+    }, [autoPlay, playerMode, onPlayStateChange, onNext, onPrev, onAutoPlayProcessed]);
+
+    // React to the "Show BPM" toggle in Settings
+    useEffect(() => {
+        const handleShowBpmChange = () => setShowBpm(localStorage.getItem('app_show_bpm') !== 'false');
+        window.addEventListener('show-bpm-changed', handleShowBpmChange);
+        return () => window.removeEventListener('show-bpm-changed', handleShowBpmChange);
+    }, []);
 
     const [wavesurfer, setWavesurfer] = useState<WaveSurfer | null>(null);
     const wavesurferRef = useRef<WaveSurfer | null>(null);
@@ -91,6 +100,7 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
     const [usingMediaFallback, setUsingMediaFallback] = useState(false);
     const [waveformRevealed, setWaveformRevealed] = useState(false);
     const [showRemaining, setShowRemaining] = useState(() => localStorage.getItem('app_time_display') === 'remaining');
+    const [showBpm, setShowBpm] = useState(() => localStorage.getItem('app_show_bpm') !== 'false');
     const [playbackProgress, setPlaybackProgress] = useState(0);
     const [playbackDuration, setPlaybackDuration] = useState(0);
     const [playbackCurrentTime, setPlaybackCurrentTime] = useState(0);
@@ -486,6 +496,56 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, []); // togglePlayPause is stable (uses refs internally)
 
+    // macOS hardware media keys (play/pause, next, previous) via the MediaSession
+    // API. WKWebView auto-routes play/pause to the <audio> element, which is why
+    // that key already worked — but next/previous do nothing unless we register
+    // explicit handlers here. Registered once; handlers call the latest props via
+    // refs. Also drives the macOS "Now Playing" widget (Control Center / lock).
+    useEffect(() => {
+        if (!('mediaSession' in navigator)) return;
+        const ms = navigator.mediaSession;
+        const set = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+            try { ms.setActionHandler(action, handler); } catch { /* action unsupported by this OS/webview */ }
+        };
+        set('play', () => {
+            userPausedRef.current = false;
+            wavesurferRef.current?.play().catch(() => {});
+        });
+        set('pause', () => {
+            userPausedRef.current = true;
+            wavesurferRef.current?.pause();
+            mediaElementRef.current?.pause();
+        });
+        set('nexttrack', () => onNextRef.current?.());
+        set('previoustrack', () => onPrevRef.current?.());
+        return () => {
+            set('play', null);
+            set('pause', null);
+            set('nexttrack', null);
+            set('previoustrack', null);
+        };
+    }, []);
+
+    // Keep the OS "Now Playing" info in sync with the current track and state.
+    useEffect(() => {
+        if (!('mediaSession' in navigator)) return;
+        navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    }, [isPlaying]);
+
+    useEffect(() => {
+        if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+        if (!track) {
+            navigator.mediaSession.metadata = null;
+            return;
+        }
+        navigator.mediaSession.metadata = new MediaMetadata({
+            title: track.title,
+            artist: track.artist,
+            album: track.album || '',
+            artwork: artworkUrl ? [{ src: artworkUrl }] : [],
+        });
+    }, [track, artworkUrl]);
+
     const hasTrack = !!track;
 
     return (
@@ -549,6 +609,17 @@ function LocalPlayer({ track, playlistName, onPlaylistClick, onNext, onPrev, aut
                     >
                         {track ? track.artist : 'to start playback'}
                     </div>
+                    {track && showBpm && track.bpm ? (
+                        <div style={{
+                            fontSize: '11px',
+                            color: 'var(--text-secondary)',
+                            marginTop: '2px',
+                            whiteSpace: 'nowrap',
+                            fontVariantNumeric: 'tabular-nums'
+                        }}>
+                            {Math.round(track.bpm)} BPM
+                        </div>
+                    ) : null}
                     {track && (
                     <div 
                         onClick={onPlaylistClick}

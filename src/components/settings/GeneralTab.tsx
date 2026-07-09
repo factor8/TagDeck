@@ -18,6 +18,7 @@ export function GeneralTab({ syncInfo, appleMusicAvailable }: GeneralTabProps) {
     const [playerMode, setPlayerMode] = useState<'standard' | 'waveform'>(() => {
         return (localStorage.getItem('app_player_mode') as 'standard' | 'waveform') || 'standard';
     });
+    const [showBpm, setShowBpm] = useState(() => localStorage.getItem('app_show_bpm') !== 'false');
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -71,6 +72,23 @@ export function GeneralTab({ syncInfo, appleMusicAvailable }: GeneralTabProps) {
                             setPlayerMode(next);
                             localStorage.setItem('app_player_mode', next);
                             window.dispatchEvent(new Event('player-mode-changed'));
+                        }}
+                    />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px' }}>
+                    <div>
+                        <span style={{ fontSize: '14px', color: 'var(--text-primary)' }}>Show BPM</span>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                            {showBpm ? 'BPM shown in the play bar' : 'BPM hidden in the play bar'}
+                        </div>
+                    </div>
+                    <ToggleSwitch
+                        checked={showBpm}
+                        onChange={() => {
+                            const next = !showBpm;
+                            setShowBpm(next);
+                            localStorage.setItem('app_show_bpm', String(next));
+                            window.dispatchEvent(new Event('show-bpm-changed'));
                         }}
                     />
                 </div>

@@ -49,6 +49,7 @@ Keyboard and mouse shortcuts for TagDeck. On Windows/Linux, use **⌃ Ctrl** whe
 | **Space** | Play / pause — works anywhere in the app (local and Spotify), unless you're typing in a text field |
 | **←** | Play the previous track |
 | **→** | Play the next track |
+| **Hardware media keys** | The keyboard's ⏯ play/pause, ⏭ next, and ⏮ previous keys control local playback, and the track also appears in the macOS **Now Playing** widget (Control Center / lock screen) |
 
 ## Tags
 
