@@ -261,7 +261,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
     };
 
-    const analyzeThisTrack = async () => {
+    const analyzeThisTrack = async (force = false) => {
         if (!track) return;
         runIdRef.current += 1;
         sawTagPhaseRef.current = false;
@@ -270,7 +270,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         setProgress({ fraction: 0, label: 'Starting…' });
         setAnalyzing(true);
         try {
-            await invoke('analyze_tracks', { trackIds: [track.id], force: false });
+            await invoke('analyze_tracks', { trackIds: [track.id], force });
             // `analysis-complete` listener refetches and clears `analyzing`.
         } catch (e) {
             setAnalyzing(false);
@@ -696,52 +696,52 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                     const visible = suggestions.filter(
                         s => !dismissed.has(s.tag_id) && !appliedTags.has(s.name.toLowerCase())
                     );
-                    if (visible.length > 0) {
-                        return (
-                            <div style={styles.suggestRow}>
-                                <span style={styles.suggestLabel}>
-                                    <Sparkles size={11} /> Suggested
-                                </span>
-                                {visible.map(s => (
-                                    <div
-                                        key={s.tag_id}
-                                        style={styles.ghostChip}
-                                        onClick={() => acceptSuggestion(s)}
-                                        title={`${Math.round(s.score * 100)}% match — click to add`}
-                                        role="button"
-                                        tabIndex={0}
-                                        aria-label={`Add tag ${s.name}`}
-                                        onKeyDown={activateOnKey(() => acceptSuggestion(s))}
-                                    >
-                                        {s.name}
-                                        <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
-                                        <span
-                                            style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
-                                            onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                    // Always keep an entry point for a single selected track: show any
+                    // suggestion chips, followed by a persistent Suggest/Re-analyze
+                    // button so the track never renders a blank, dead-end row.
+                    return (
+                        <div style={styles.suggestRow}>
+                            {visible.length > 0 && (
+                                <>
+                                    <span style={styles.suggestLabel}>
+                                        <Sparkles size={11} /> Suggested
+                                    </span>
+                                    {visible.map(s => (
+                                        <div
+                                            key={s.tag_id}
+                                            style={styles.ghostChip}
+                                            onClick={() => acceptSuggestion(s)}
+                                            title={`${Math.round(s.score * 100)}% match — click to add`}
                                             role="button"
                                             tabIndex={0}
-                                            aria-label={`Dismiss ${s.name}`}
-                                            onKeyDown={(e) => { e.stopPropagation(); activateOnKey(() => dismissSuggestion(s.tag_id))(e); }}
-                                        >×</span>
-                                    </div>
-                                ))}
-                            </div>
-                        );
-                    }
-                    if (!analyzed) {
-                        return (
-                            <div style={styles.suggestRow}>
-                                <button
-                                    onClick={analyzeThisTrack}
-                                    style={styles.analyzeBtn}
-                                    title="Analyze this track's audio to suggest tags"
-                                >
-                                    <Sparkles size={11} /> Suggest tags
-                                </button>
-                            </div>
-                        );
-                    }
-                    return null;
+                                            aria-label={`Add tag ${s.name}`}
+                                            onKeyDown={activateOnKey(() => acceptSuggestion(s))}
+                                        >
+                                            {s.name}
+                                            <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
+                                            <span
+                                                style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
+                                                onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                                                role="button"
+                                                tabIndex={0}
+                                                aria-label={`Dismiss ${s.name}`}
+                                                onKeyDown={(e) => { e.stopPropagation(); activateOnKey(() => dismissSuggestion(s.tag_id))(e); }}
+                                            >×</span>
+                                        </div>
+                                    ))}
+                                </>
+                            )}
+                            <button
+                                onClick={() => analyzeThisTrack(analyzed)}
+                                style={styles.analyzeBtn}
+                                title={analyzed
+                                    ? "Re-analyze this track's audio to refresh suggestions"
+                                    : "Analyze this track's audio to suggest tags"}
+                            >
+                                <Sparkles size={11} /> {analyzed ? 'Re-analyze' : 'Suggest tags'}
+                            </button>
+                        </div>
+                    );
                 })()}
 
                 {!isMultiSelect && (() => {
