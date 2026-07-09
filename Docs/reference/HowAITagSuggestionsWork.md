@@ -59,6 +59,10 @@ So the honest guidance isn't "tag everything." It's: get each tag you care about
 roughly 8+ genuine examples. A handful of well-populated tags beats a huge, sparsely
 tagged library.
 
+**UI: Progress bar for single-track analysis**
+
+When you click "Suggest tags" on a single track, the UI shows a phased progress bar (Preparing tags → Loading model → Reading audio → Analyzing audio → Finding suggestions) instead of a bare spinner. This is driven by backend `analysis-progress` events, with the "Analyzing audio" phase showing per-window sub-progress as the model processes each time window. Batch analysis (Settings → AI Tags → Scan) is unchanged.
+
 ## Growing Your Vocabulary (Optional)
 
 Normally the feature only ever suggests tags you already use. There's an opt-in
