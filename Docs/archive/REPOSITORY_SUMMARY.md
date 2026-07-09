@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Auto-generated architecture snapshot from Feb 2026. Commit stats/dates are stale and the inventory omits whole subsystems (AI analysis, Spotify, export, file management).
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # Repository Analysis: TagDeck
 
 ## Overview

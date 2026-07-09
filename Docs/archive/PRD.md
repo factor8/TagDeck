@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Original Day-1 product requirements (Feb 2026), frozen at the initial vision. The app has since grown well beyond this scope (AI tag suggestions, Spotify, export, play queue, sync modes).
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # Product Requirements Document (PRD)
 
 ## Product Name (working)

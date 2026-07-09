@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Manual QA checklist for a since-merged feature branch. Predates AI tag suggestions, vocabulary expansion, and the play queue.
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # Test Plan — Library Ownership & Sync (Phases 1–6)
 
 Manual test pass for the `feature/file-management` branch (commits `38a0e7d` → `2345e84`).

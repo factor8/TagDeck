@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Implementation plan for the playlist system. Phases 1–3 shipped; Phase 4 (Smart Playlists) was extracted to roadmap/SmartPlaylists.md.
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # Playlist System — Full Implementation Plan
 
 ## Overview

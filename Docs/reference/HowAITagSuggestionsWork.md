@@ -18,6 +18,47 @@ To get more useful on rarely-used tags, there are two routes. The gentle one —
 
 Finally, the simplest and most reliable lever is in your hands: keep tagging. Because the feature learns from your own labels, every track you tag makes that tag's future suggestions a little sharper, and tags gradually "graduate" from rough guessing into the confident, learned-from-you picks. None of the improvements above replace that — they just help the assistant make the most of the tagging you've already done.
 
+## The Mechanics, Precisely (for reference)
+
+The prose above is the friendly version. This section pins down exactly what
+happens, because "the more you tag, the better it gets" is true but easy to
+misread.
+
+**There is no training step, and nothing gets "analyzed" a second time.** The
+listening model (CLAP, run locally — no LLM, no cloud API, no fine-tuning) does
+exactly one thing during analysis: it computes a fixed audio fingerprint for each
+track and a fixed text fingerprint for each tag name. Those are stored once and
+never change based on how you tag. See `src-tauri/src/analysis/clap.rs` and
+`analyze_tracks` in `commands.rs`.
+
+**Your tags are used live, at suggestion time — not baked into the model.** Every
+time the suggestion UI opens, it re-reads which tracks currently carry each tag
+(parsed fresh from the comment field, `commands.rs` `get_tag_suggestions`) and
+scores each tag one of two ways, never blended (`scoring.rs`):
+
+- **Zero-shot** — matches the track's audio fingerprint against the *text* of the
+  tag name ("a Morning electronic music track"). Generic; the code itself notes
+  it is "near-random for subjective tags."
+- **k-NN (personalized)** — matches the track against the *songs you already gave
+  that tag*, scoring by closeness to your own examples. This is the strong one.
+
+**The switch between them is a hard cutoff at 8 examples, per tag.** A tag scored
+below 8 tagged songs uses generic zero-shot; at 8 or more it flips to personalized
+k-NN (`ScoreParams { knn_trust: 8, knn_top_k: 5 }` in `scoring.rs`, tuned on a
+332-track library). Consequences:
+
+- The count that matters is **per tag, not per library.** 500 tagged songs spread
+  thin across many rarely-used tags helps almost nothing. The payoff is pushing an
+  individual tag you care about past ~8 real examples.
+- Beyond 8 there are still modest gains (the k-NN takes the 5 nearest of a denser,
+  better-covered example set), but they diminish.
+- It's **immediate** — no re-analysis. Tag an 8th song and that tag is personalized
+  on the very next suggestion request.
+
+So the honest guidance isn't "tag everything." It's: get each tag you care about to
+roughly 8+ genuine examples. A handful of well-populated tags beats a huge, sparsely
+tagged library.
+
 ## Growing Your Vocabulary (Optional)
 
 Normally the feature only ever suggests tags you already use. There's an opt-in

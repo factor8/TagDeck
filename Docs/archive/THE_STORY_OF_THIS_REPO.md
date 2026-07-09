@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Narrative history of the Jan 30–Feb 10 2026 origin sprint. A point-in-time story, not current project status.
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # The Story of TagDeck
 
 ## The Chronicles: A Year in Numbers

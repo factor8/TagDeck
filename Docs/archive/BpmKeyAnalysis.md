@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Speculative plan for NATIVE BPM/key detection that was never built — TagDeck uses external Mixed In Key instead (see reference/MixedInKeyIntegration.md). Its ✅ 'success criteria' never shipped, and its 'analysis.rs' references now point at unrelated AI-tag code.
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # BPM and Key Analysis Implementation Plan
 
 ## Overview

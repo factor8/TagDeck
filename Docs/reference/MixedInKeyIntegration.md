@@ -1,203 +1,76 @@
-# Mixed In Key 8 External Processing Integration
+# Mixed In Key 8 Integration
 
 ## Overview
-Add a context menu option to send selected track(s) to Mixed In Key 8 for analysis, then automatically poll and reload metadata changes using the existing sync mechanism. Supports batch processing with scaled timeout handling.
+TagDeck can hand selected tracks to **Mixed In Key 8** (MiK8), an external macOS app, for harmonic/tempo analysis. MiK8 writes BPM, musical key, and energy directly into each file's metadata (BPM field + comment/grouping). TagDeck never computes BPM or key itself — it launches MiK8, waits for the files to change on disk, then re-reads the updated metadata into its database.
 
-## Git Branch
-`feature/mixed-in-key-integration`
+macOS only. On any other platform the command returns an error.
 
-## Implementation Steps
+## User Flow
+1. Right-click one or more tracks in the track list.
+2. Click **"Analyze with Mixed In Key"** (labeled **"Analyze with Mixed In Key (N tracks)"** when a multi-selection is active).
+3. MiK8 opens, analyzes the files, and quits. TagDeck refreshes the affected rows so new BPM/key values appear.
 
-### 1. Add "Send to Mixed In Key" to Context Menu
-**File**: [src/components/TrackList.tsx](src/components/TrackList.tsx) (lines 702-782)
+Spotify/ghost tracks (no local file) are excluded from the selection automatically.
 
-Insert a new menu item in the existing right-click context menu that appears on track selection, positioned near "Show in Finder", that triggers the MiK8 workflow for all currently selected tracks.
+## Components
 
-**Requirements**:
-- Only show when tracks are selected
-- Place logically with other file operations
-- Handle both single and multiple track selections
-- Show count in label when multiple tracks selected (e.g., "Send 5 Tracks to Mixed In Key")
+### Context menu — `src/components/TrackList.tsx` (~line 2145)
+The menu item (Lucide `Activity` icon) collects the target tracks (the current multi-selection, or just the right-clicked row), filters out `source === 'spotify'`, and invokes the backend:
 
-### 2. Create `send_to_mixed_in_key` Tauri Command
-**File**: [src-tauri/src/commands.rs](src-tauri/src/commands.rs)
+```ts
+await invoke('analyze_with_mixed_in_key', { trackIds, filePaths });
+onRefresh?.();
+```
 
-Add a Rust command following the pattern of `show_in_finder` that:
-- Accepts `Vec<String>` of file paths and `Vec<i64>` of track IDs
-- Validates `/Applications/Mixed In Key 8.app` exists before attempting launch
-- Returns helpful error if MiK8 not installed: "Mixed In Key 8 not found. Please install from https://mixedinkey.com/"
-- Validates each file exists before processing
-- Launches `open -a "Mixed In Key 8"` with all file paths as arguments for batch processing
-- Logs the action with track count
-- Returns `Result<Vec<i64>, String>` with list of successfully sent track IDs
+Feedback is intentionally minimal: on success it `console.log`s and calls `onRefresh()`; on failure it `console.error`s and shows an `alert(...)`. There are **no** per-row progress indicators, toasts, or a `processingTracks` map — the whole operation blocks in Rust and returns once done.
 
-**App Detection**:
+### Backend command — `src-tauri/src/commands.rs` (`analyze_with_mixed_in_key`, ~line 164)
 ```rust
-#[cfg(target_os = "macos")]
-{
-    let mik8_path = "/Applications/Mixed In Key 8.app";
-    if !std::path::Path::new(mik8_path).exists() {
-        return Err("Mixed In Key 8 not found. Please install from https://mixedinkey.com/".to_string());
-    }
-}
+pub async fn analyze_with_mixed_in_key(
+    app: tauri::AppHandle,
+    track_ids: Vec<i64>,
+    file_paths: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String>
 ```
+Registered in `src-tauri/src/lib.rs` (~line 159). It returns `()` on success (not a list of sent IDs). Steps:
 
-### 3. Implement Polling Service with Modification Time Tracking
-**File**: [src/components/TagDeck.tsx](src/components/TagDeck.tsx)
+1. **Validate MiK8 is installed** — checks `/Applications/Mixed In Key 8.app` exists; otherwise returns `"Mixed In Key 8 not found. Please install from https://mixedinkey.com/"`.
+2. **Capture baseline mod-times** — verifies each `file_path` exists and records its current `std::fs::metadata(...).modified()`.
+3. **Launch via AppleScript** — builds an `osascript` script that activates MiK8, `open`s each file (passed as a `POSIX file "…"` list), and delays to let processing start. It is `spawn`ed (fire-and-forget):
+   ```applescript
+   tell application "Mixed In Key 8"
+       activate
+       delay 1
+       set fileList to {POSIX file "…", …}
+       repeat with aFile in fileList
+           try
+               open aFile
+           end try
+       end repeat
+       delay 3
+   end tell
+   ```
+   (This replaces the naive `open -a "Mixed In Key 8"` approach — MiK8 needs to be scripted, not just opened with paths.)
+4. **Poll for completion (all-Rust blocking loop)** — every 2 s, compare each file's current mod-time against its baseline; when every file's mod-time has advanced, stop. A timeout of `10 + 15 * n` seconds (base + per-file) bounds the wait; on timeout it logs how many of `n` files were processed and breaks.
+5. **Quit MiK8** — after a 1 s settle delay, sends a `quit` AppleScript via `osascript`.
+6. **Refresh metadata** — for each `track_id`, calls the internal helper `refresh_track_metadata_from_file(&db, id)` and logs a `"… X of N tracks updated"` summary.
 
-Create a state-based polling system that:
-- Maintains a `processingTracks` state: `Map<trackId, { startTime, originalModTime }>`
-- When tracks sent to MiK8, store their current file modification time
-- Start polling interval at 2-second intervals
-- On each poll cycle:
-  - Check file modification time via new Tauri command `get_file_mod_time`
-  - Only call `refreshTracks()` for tracks whose mod time has changed
-  - Remove track from processing set when metadata updated
-- Calculate timeout: `10 seconds + (15 seconds × number of tracks in batch)`
-- Clear polling and show timeout message if expired
-- Stop polling when all tracks processed or timeout reached
+Progress and errors are recorded through `LogState::add_log` (visible in the app's log view), not surfaced as UI toasts.
 
-**Polling Logic**:
-```typescript
-// Pseudo-code structure
-const processingTracks = new Map<number, { 
-  startTime: number, 
-  originalModTime: number 
-}>();
+### Metadata refresh — `refresh_track_metadata_from_file` (same file, ~line 303)
+Re-reads the file MiK8 just modified and writes the values back into the DB:
+- Comment + grouping via `metadata::read_metadata(path)` (returns `(comment, grouping)`).
+- BPM via lofty's `ItemKey::Bpm` (`tag.get_string(&ItemKey::Bpm)`, parsed to `i64`, default `0`) — see `src-tauri/src/metadata.rs`.
+- Updates `comment_raw`, `grouping_raw`, and `bpm` on the track and persists with `db.update_track`.
 
-// When sending to MiK8
-const trackIds = selectedTracks.map(t => t.id);
-const modTimes = await invoke('get_file_mod_times', { 
-  filePaths: selectedTracks.map(t => t.file_path) 
-});
+No conflict resolution or diffing — TagDeck simply accepts whatever MiK8 wrote.
 
-trackIds.forEach((id, idx) => {
-  processingTracks.set(id, {
-    startTime: Date.now(),
-    originalModTime: modTimes[idx]
-  });
-});
+## Where the BPM ends up
+The BPM read back from MiK8 flows through normal TagDeck storage and is exported to rekordbox: `src-tauri/src/rekordbox.rs` writes it as the `AverageBpm` attribute (e.g. `AverageBpm="128.00"`) when `bpm > 0`.
 
-// Polling interval
-const checkInterval = setInterval(async () => {
-  const timeout = 10000 + (processingTracks.size * 15000);
-  const now = Date.now();
-  
-  for (const [trackId, data] of processingTracks) {
-    // Check if expired
-    if (now - data.startTime > timeout) {
-      processingTracks.delete(trackId);
-      continue;
-    }
-    
-    // Check mod time
-    const currentModTime = await invoke('get_file_mod_time', { 
-      filePath: trackFilePath 
-    });
-    
-    if (currentModTime > data.originalModTime) {
-      await refreshTracks([trackId]);
-      processingTracks.delete(trackId);
-      showToast('Metadata updated from Mixed In Key');
-    }
-  }
-  
-  // Stop polling when done
-  if (processingTracks.size === 0) {
-    clearInterval(checkInterval);
-  }
-}, 2000);
-```
-
-### 4. Add `get_file_mod_time` Helper Command
-**File**: [src-tauri/src/commands.rs](src-tauri/src/commands.rs)
-
-Create utility command to retrieve file modification times without full metadata read:
-
-```rust
-#[tauri::command]
-pub fn get_file_mod_time(file_path: String) -> Result<u64, String> {
-    use std::fs;
-    use std::time::SystemTime;
-    
-    let metadata = fs::metadata(&file_path)
-        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
-    
-    let modified = metadata.modified()
-        .map_err(|e| format!("Failed to get modification time: {}", e))?;
-    
-    let duration = modified.duration_since(SystemTime::UNIX_EPOCH)
-        .map_err(|e| format!("Invalid modification time: {}", e))?;
-    
-    Ok(duration.as_secs())
-}
-
-#[tauri::command]
-pub fn get_file_mod_times(file_paths: Vec<String>) -> Result<Vec<u64>, String> {
-    file_paths.into_iter()
-        .map(|path| get_file_mod_time(path))
-        .collect()
-}
-```
-
-### 5. Register Commands in Handler
-**File**: [src-tauri/src/lib.rs](src-tauri/src/lib.rs)
-
-Add to `invoke_handler`:
-- `send_to_mixed_in_key`
-- `get_file_mod_time`
-- `get_file_mod_times`
-
-### 6. UI Feedback and Error Handling
-**Files**: [src/components/TrackList.tsx](src/components/TrackList.tsx), [src/components/TagDeck.tsx](src/components/TagDeck.tsx)
-
-Implement:
-- **Initial toast**: "Sent 3 tracks to Mixed In Key 8" (show count)
-- **Processing indicator**: Subtle visual indicator on track rows during polling (e.g., pulsing icon, color change)
-- **Success toast**: "Metadata updated for [Track Name]" when changes detected
-- **Timeout message**: "Mixed In Key processing timed out for 2 tracks" if polling expires
-- **Error handling**: 
-  - MiK8 not installed: Show error toast with installation link
-  - File not found: Skip missing files, continue with valid ones
-  - Launch failure: Show OS-level error message
-
-### 7. Metadata Merge Strategy
-**Approach**: Auto-merge without prompting
-
-When `refreshTracks()` is called after MiK8 processing:
-- Use existing `get_track_info` command which reads metadata from file
-- MiK8 writes to fields like:
-  - Key (e.g., "8A", "Cm") → usually in Comment or Grouping field
-  - BPM → overwrites existing BPM
-  - Energy → custom field
-- TagDeck's existing metadata read logic will automatically pick up changes
-- No special parsing needed - just re-read the file as we do on load/sync
-- Display updated values in UI immediately
-
-**No conflict resolution needed** - simply accept whatever MiK8 wrote to the file.
-
-## Testing Checklist
-
-- [ ] Context menu appears on track selection
-- [ ] Menu item shows correct count for multiple tracks
-- [ ] MiK8 app detection works (shows error when app missing)
-- [ ] MiK8 launches with selected track(s)
-- [ ] File mod time tracking initializes correctly
-- [ ] Polling starts after sending tracks
-- [ ] Metadata refresh triggers only when mod time changes
-- [ ] Processing indicator appears on affected tracks
-- [ ] Success toast shows when metadata updated
-- [ ] Timeout expires correctly (10s + 15s per track)
-- [ ] Polling stops when all tracks processed
-- [ ] Batch processing works with 5+ tracks
-- [ ] Error handling for missing files
-- [ ] UI updates with new BPM/key values after processing
-
-## Future Enhancements (Not in Scope)
-
-1. **Progress bar**: Visual progress for batch processing
-2. **Queue management**: Pause/cancel ongoing processing
-3. **Preferences**: Configure MiK8 path for non-standard installations
-4. **Other apps**: Extend pattern to support other audio analysis tools (iZotope RX, etc.)
-5. **Metadata field mapping**: User preference for which field to use for key detection
-6. **Diff view**: Show before/after comparison of metadata changes
+## Notes / Limitations
+- **macOS only** — the non-macOS branch returns an error immediately.
+- **Synchronous & blocking** — the command does not return until MiK8 finishes (or the timeout elapses), so the UI awaits it directly.
+- The MiK8 app path is hard-coded to `/Applications/Mixed In Key 8.app`; non-standard install locations are not supported.
+- There are no `get_file_mod_time` / `get_file_mod_times` helper commands — mod-time tracking lives entirely inside `analyze_with_mixed_in_key`.

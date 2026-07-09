@@ -12,7 +12,7 @@
 - **Tag Editor:** Pill-based editing sidebar with autocomplete, auto-save, and batch tagging across multi-selected tracks.
 - **CDJ-safe metadata writes:** Tags are written to each file's Comment field as `{Original Comment} && {Tag1}; {Tag2}`, preserving Mixed In Key results and existing notes. Every write is verified by re-reading the file.
 - **Tag groups**, global **undo/redo** for tag and playlist edits, and iTunes-style **star ratings** with half-star precision.
-- **AI tag suggestions:** Optionally analyze a track's audio locally (CLAP audio embeddings via ONNX Runtime) and get suggested tags from your own vocabulary as dashed chips in the tag editor — click to accept. Learns your taste from tracks you've already tagged, with a text-matching fallback for rarely-used tags. Fully on-device; the model is an opt-in one-time download and the app works unchanged without it. See [How AI Tag Suggestions Work](Docs/HowAITagSuggestionsWork.md) for a plain-language explainer.
+- **AI tag suggestions:** Optionally analyze a track's audio locally (CLAP audio embeddings via ONNX Runtime) and get suggested tags from your own vocabulary as dashed chips in the tag editor — click to accept. Learns your taste from tracks you've already tagged, with a text-matching fallback for rarely-used tags. Fully on-device; the model is an opt-in one-time download and the app works unchanged without it. See [How AI Tag Suggestions Work](Docs/reference/HowAITagSuggestionsWork.md) for a plain-language explainer.
 
 ### Apple Music / iTunes Sync
 
@@ -58,7 +58,7 @@
 
 - Virtualized track list that stays smooth on large libraries, with column reorder/resize/visibility, inline editing, and multi-select.
 - Tabbed Settings (General, iTunes, Spotify, Library, Export, Appearance, AI Tags, Developer) with themes and custom accent colors.
-- Extensive keyboard shortcuts — see [Docs/KeyCommands.md](Docs/KeyCommands.md).
+- Extensive keyboard shortcuts — see [Docs/reference/KeyCommands.md](Docs/reference/KeyCommands.md).
 - Persistent rotating logs, a searchable Logs window (`⌘⌥L`), and a Debug Mode for troubleshooting.
 
 ## Tech Stack
@@ -106,7 +106,7 @@ Rust unit tests cover the sync, export, and metadata layers:
 cd src-tauri && cargo test
 ```
 
-A manual QA checklist lives in [Docs/TestPlan.md](Docs/TestPlan.md).
+An older manual QA checklist (from the file-management/Spotify branch) is archived at [Docs/archive/TestPlan.md](Docs/archive/TestPlan.md).
 
 ## Building for Production
 
@@ -118,9 +118,9 @@ Output binaries land in `src-tauri/target/release/bundle/`.
 
 ## Documentation
 
-The [Docs/](Docs/) folder contains the PRD, changelog, search syntax reference, keyboard shortcuts, and design docs for major subsystems (sync strategy, file management, Spotify integration, and more).
+The [Docs/](Docs/) folder is indexed in [Docs/README.md](Docs/README.md). In short: [`Docs/reference/`](Docs/reference/) holds the live docs (keyboard shortcuts, search syntax, library/sync design, real-time sync, Mixed In Key, AI tag suggestions), [`Docs/roadmap/`](Docs/roadmap/) tracks planned/unbuilt work, [`Docs/CHANGELOG.md`](Docs/CHANGELOG.md) is the authoritative feature history, and [`Docs/archive/`](Docs/archive/) keeps superseded plans and snapshots for provenance.
 
-New to the AI tag suggestions? [How AI Tag Suggestions Work](Docs/HowAITagSuggestionsWork.md) is a plain-language explainer of what the feature does, how it learns from your tagging, and how it could improve over time.
+New to the AI tag suggestions? [How AI Tag Suggestions Work](Docs/reference/HowAITagSuggestionsWork.md) is a plain-language explainer of what the feature does, how it learns from your tagging, and how it could improve over time.
 
 ## Contributing
 

@@ -1,32 +1,62 @@
 # Key Commands
 
+Keyboard and mouse shortcuts for TagDeck. On Windows/Linux, use **⌃ Ctrl** wherever **⌘** is shown unless noted otherwise.
+
 ## Global
-- **Cmd + F** (Mac) / **Ctrl + F** (Win): Focus Search Bar
-- **Cmd + 0** (Mac) / **Ctrl + 0** (Win): Select "All Tracks" Playlist
-- **Cmd + ,** (Mac) / **Ctrl + ,** (Win): Open/Toggle Settings
-- **Cmd + Opt + I**: Open Developer Tools (Debug)
+
+| Shortcut | Action |
+| --- | --- |
+| **⌘ F** | Focus the search bar (selects existing text) |
+| **⌘ K** | Toggle the playlist quick-switcher palette |
+| **⌘ 0** | Show the **All Tracks** view |
+| **⌘ ,** | Open/close Settings |
+| **Esc** | Blur the search bar if focused; otherwise clear the current track selection |
+| **⌘ Z** | Undo the last tag edit |
+| **⌘ ⇧ Z** | Redo the last tag edit |
+| **⌃ Y** | Redo (Windows/Linux) |
+| **⌘ ⌥ L** | Toggle the Logs window |
 
 ## Track List
-- **Click**: Select Track
-- **Cmd + Click** (Mac) / **Ctrl + Click** (Win): Add/Remove track from selection
-- **Shift + Click**: Select Range of tracks
-- **Cmd + A** (Mac) / **Ctrl + A** (Win): Select All tracks in current view
-- **Cmd + L** (Mac) / **Ctrl + L** (Win): Link selected Spotify track to a local track (opens the Link to Local Track picker)
-- **Cmd + R** (Mac) / **Ctrl + R** (Win): Reveal selected track in Finder
-- **Enter**: Play selected track
-- **Delete / Backspace**: Remove selected track(s) from the current playlist
-- **Double Click**: Play Track (if implemented / future) 
 
-## Tag Deck
-- **Arrow Up / Arrow Down**: Navigate through tags
-- **Enter**: Apply selected tag to selected track(s)
-- **Click**: Toggle tag on selected track(s)
+| Shortcut | Action |
+| --- | --- |
+| **Click** | Select a track |
+| **⌘ Click** | Add/remove a track from the selection |
+| **⇧ Click** | Select a range of tracks |
+| **⌘ A** | Select all tracks in the current view |
+| **↑ / ↓** | Select the previous / next track |
+| **Enter** | Play the selected track |
+| **Double-click** | Play the track |
+| **Q** | Queue the selected track(s) to play later |
+| **⇧ Q** | Queue the selected track(s) to play next |
+| **Delete / Backspace** | Remove the selected track(s) from the current playlist |
+| **⌘ L** | Link the selected Spotify track to a local track |
+| **⌘ R** | Reveal the selected local track in Finder |
+| **⌥ Click + drag** | Drag the track file out to Finder or another app |
 
-## Tag Editor
-- **Type**: Filter tags or create new one
-- **Enter**: Create new tag if not found
-- **Cmd + Enter**: Save changes (Single track mode)
+### Editing a track field inline
+
+| Shortcut | Action |
+| --- | --- |
+| **Enter** | Commit the edit |
+| **Esc** | Cancel and restore the original value |
+| **Tab** | Commit and move to the next editable field |
 
 ## Player
-- **Space**: Play / Pause — works anywhere in the app (local and Spotify tracks) unless you're typing in a text field
-- **Left / Right**: Previous / Next track (while a track is playing)
+
+| Shortcut | Action |
+| --- | --- |
+| **Space** | Play / pause — works anywhere in the app (local and Spotify), unless you're typing in a text field |
+| **←** | Play the previous track |
+| **→** | Play the next track |
+
+## Tags
+
+These apply while typing in the tag input of the Tag Editor.
+
+| Shortcut | Action |
+| --- | --- |
+| **Type** | Filter tags or start a new one |
+| **Enter** | Add the tag (creates it if it doesn't exist) |
+| **Backspace** | Remove the last tag when the input is empty |
+| **Enter / Space** | Accept or dismiss a focused tag suggestion chip |

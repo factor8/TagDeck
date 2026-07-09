@@ -1,8 +1,9 @@
 # Spotify Integration — Design Spec
 
 **Date:** 2026-07-05
-**Status:** Approved design, pre-implementation
+**Status:** ✅ Shipped — this is the original design spec; see the [CHANGELOG](../../CHANGELOG.md) and `src-tauri/src/spotify/` for the as-built system. Later API-rename and 411/Content-Length fixes are recorded in the changelog.
 **Branch:** `feature/spotify-integration`
+**Implementation plan:** [../plans/2026-07-05-spotify-integration.md](../plans/2026-07-05-spotify-integration.md)
 
 ## Goal
 

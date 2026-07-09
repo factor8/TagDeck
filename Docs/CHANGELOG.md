@@ -32,6 +32,21 @@
 - **"Ask me first" deletion behavior** (new default): when a track is removed in iTunes, TagDeck now asks what to do via Sync Review instead of deciding automatically. Keep/Remove remain available as automatic settings.
 - **iTunes Sync mode setting** (Settings → iTunes Sync): choose the relationship between TagDeck and Music.app — **Off** (no connection), **Import only** (pull changes from iTunes, never write back), or **Two-way** (full sync, the previous always-on behavior). Existing users with Music.app default to Two-way; installs without Music.app default to Off. In Off/Import-only modes, imports are handled by TagDeck's own file manager and the Library Management settings become visible.
 - **iTunes deletion behavior setting**: choose what happens when a track is removed in iTunes — keep it in TagDeck marked *unlinked* (default) or remove it from TagDeck too.
+- **Persistent Logging**: All application logs now write to `~/Library/Logs/TagDeck/` following macOS conventions. Log files auto-rotate at 5 MB with up to 5 rotated files kept.
+- **Debug Mode**: New toggle in Settings → Developer section. When enabled:
+  - A `DEBUG` badge appears in the header bar.
+  - TrackList shows a debug status bar with track count, file path, persistent ID, format, and bitrate for the selected track.
+  - Player footer shows format, bitrate, BPM, and file size for the playing track.
+  - Backend emits verbose `DEBUG`-level log entries (suppressed when debug mode is off).
+- **Enhanced Logs Window**: Level filter pills (ERROR / WARN / INFO / DEBUG), text search, log count indicator, and a Clear button.
+- **Log Management in Settings**: Developer section shows log file stats (count, total size) with buttons to open the log folder in Finder or launch the Logs window.
+- **Frontend → Backend Logging**: New `log_from_frontend` Tauri command allows React code to send structured log entries through the same persistent logging pipeline.
+
+### Changed
+- **Faster playback start**: audio now streams straight from disk instead of being read fully into memory first, so playback begins almost immediately — noticeable on long or lossless files. In Waveform mode, playback no longer waits for the waveform: the track starts right away and the waveform rolls out left-to-right once it's ready (if a file's waveform can't be decoded, a plain progress bar is shown instead — playback is unaffected).
+- **Settings reorganized into tabs**: the settings panel now uses a sidebar of categories — General, iTunes, Library, Export, Appearance, Developer — instead of one long two-column list. All settings are unchanged, just easier to find; the panel remembers your last open tab.
+- **Library Management settings are always visible** in Settings, including under Two-way sync (with a note that Music.app currently handles imports in that mode).
+- **Tracks removed from iTunes are no longer deleted from TagDeck.** They are now "unlinked": the track, its tags, and its playlist memberships stay in TagDeck, marked with an *unlinked* badge in the track list. Re-adding the track to Music.app relinks it automatically. (Previously, deleting a track in Music.app silently deleted it from TagDeck on the next sync.)
 
 ### Fixed
 - Some MP3s could never be tagged (and often showed the player's amber "fallback" badge): certain files — typically older iTunes/encoder output — carry a run of empty padding between their ID3 tag and the first audio frame, which defeated the tag writer's format detection and made every write fail, while the same gap tripped up the browser's audio decoder. TagDeck now detects and strips that junk gap on the first write, so the tag saves and playback can use the normal decoder. The audio itself is untouched (same length, bitrate, and quality). Affected files heal themselves the first time you tag them.
@@ -47,23 +62,6 @@
 - Seeking in the Spotify player now works (the handle no longer snaps back), and pause/resume/next/previous are no longer at risk of the same failure: Spotify's servers reject bodyless PUT/POST requests without a `Content-Length` header ("411 Length Required"), so TagDeck now sends an explicit empty body on those calls.
 - The app icon now follows Apple's icon-grid sizing (artwork inset with the standard transparent margin), so it no longer looks oversized next to other icons in the Dock.
 - In Import-only mode, syncing no longer overwrites tags with iTunes' stale copy of the comment field (TagDeck stops pushing comments in that mode, so the file/TagDeck copy is authoritative).
-
-### Changed
-- **Faster playback start**: audio now streams straight from disk instead of being read fully into memory first, so playback begins almost immediately — noticeable on long or lossless files. In Waveform mode, playback no longer waits for the waveform: the track starts right away and the waveform rolls out left-to-right once it's ready (if a file's waveform can't be decoded, a plain progress bar is shown instead — playback is unaffected).
-- **Settings reorganized into tabs**: the settings panel now uses a sidebar of categories — General, iTunes, Library, Export, Appearance, Developer — instead of one long two-column list. All settings are unchanged, just easier to find; the panel remembers your last open tab.
-- **Library Management settings are always visible** in Settings, including under Two-way sync (with a note that Music.app currently handles imports in that mode).
-- **Tracks removed from iTunes are no longer deleted from TagDeck.** They are now "unlinked": the track, its tags, and its playlist memberships stay in TagDeck, marked with an *unlinked* badge in the track list. Re-adding the track to Music.app relinks it automatically. (Previously, deleting a track in Music.app silently deleted it from TagDeck on the next sync.)
-
-### Added
-- **Persistent Logging**: All application logs now write to `~/Library/Logs/TagDeck/` following macOS conventions. Log files auto-rotate at 5 MB with up to 5 rotated files kept.
-- **Debug Mode**: New toggle in Settings → Developer section. When enabled:
-  - A `DEBUG` badge appears in the header bar.
-  - TrackList shows a debug status bar with track count, file path, persistent ID, format, and bitrate for the selected track.
-  - Player footer shows format, bitrate, BPM, and file size for the playing track.
-  - Backend emits verbose `DEBUG`-level log entries (suppressed when debug mode is off).
-- **Enhanced Logs Window**: Level filter pills (ERROR / WARN / INFO / DEBUG), text search, log count indicator, and a Clear button.
-- **Log Management in Settings**: Developer section shows log file stats (count, total size) with buttons to open the log folder in Finder or launch the Logs window.
-- **Frontend → Backend Logging**: New `log_from_frontend` Tauri command allows React code to send structured log entries through the same persistent logging pipeline.
 
 ## [0.1.2] - 2026-02-02
 

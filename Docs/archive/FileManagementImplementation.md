@@ -1,3 +1,7 @@
+> **📦 Archived — historical / superseded.** Pre-implementation code-dump for file management. The shipped code diverged substantially; use the source and reference/LibraryStrategy.md instead.
+>
+> For current behavior see the [CHANGELOG](../CHANGELOG.md), the [README](../../README.md), and the live docs in [Docs/reference/](../reference/). Kept for provenance; do not treat as an accurate description of the shipped app.
+
 # File Management Implementation Guide
 
 ## Architecture Overview

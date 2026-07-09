@@ -8,7 +8,7 @@
 
 **Tech Stack:** Tauri 2 / Rust (reqwest, keyring, base64, rand, sha2), React 19 + TypeScript, SQLite (rusqlite), Spotify Web API (Development Mode, post-Feb-2026 endpoint set).
 
-**Spec:** `Docs/SpotifyIntegrationPlan.md`. One deliberate deviation: ghosts use `file_path = ''` (empty-string sentinel) instead of SQL `NULL`, because SQLite can't drop `NOT NULL` without a table rebuild and `Track.file_path: String` is used pervasively. Task 1 updates the spec wording.
+**Spec:** [`../specs/2026-07-05-spotify-integration-design.md`](../specs/2026-07-05-spotify-integration-design.md) (formerly `Docs/SpotifyIntegrationPlan.md`). One deliberate deviation: ghosts use `file_path = ''` (empty-string sentinel) instead of SQL `NULL`, because SQLite can't drop `NOT NULL` without a table rebuild and `Track.file_path: String` is used pervasively. Task 1 updates the spec wording.
 
 ## Global Constraints
 
