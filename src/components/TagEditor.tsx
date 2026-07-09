@@ -140,6 +140,12 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         setDismissed((prev) => new Set(prev).add(tagId));
     };
 
+    // Shared keydown activator for pointer-only chips: fires `fn` on Enter/Space
+    // and blocks the page-scroll default that Space would otherwise trigger.
+    const activateOnKey = (fn: () => void) => (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
+    };
+
     const analyzeThisTrack = async () => {
         if (!track) return;
         setAnalyzing(true);
@@ -463,6 +469,9 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
 
     if (!track) return null;
 
+    // Shared by both suggestion IIFEs below so neither recomputes its own copy.
+    const appliedTags = new Set(tags.map((t) => t.toLowerCase()));
+
     return (
         <div style={styles.container}>
             {/* Header Removed */}
@@ -545,9 +554,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 </div>
 
                 {!isMultiSelect && (() => {
-                    const applied = new Set(tags.map(t => t.toLowerCase()));
                     const visible = suggestions.filter(
-                        s => !dismissed.has(s.tag_id) && !applied.has(s.name.toLowerCase())
+                        s => !dismissed.has(s.tag_id) && !appliedTags.has(s.name.toLowerCase())
                     );
                     if (visible.length > 0) {
                         return (
@@ -561,12 +569,20 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                                         style={styles.ghostChip}
                                         onClick={() => acceptSuggestion(s)}
                                         title={`${Math.round(s.score * 100)}% match — click to add`}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Add tag ${s.name}`}
+                                        onKeyDown={activateOnKey(() => acceptSuggestion(s))}
                                     >
                                         {s.name}
                                         <span style={styles.ghostPct}>{Math.round(s.score * 100)}%</span>
                                         <span
                                             style={{ marginLeft: '2px', cursor: 'pointer', opacity: 0.5 }}
                                             onClick={(e) => { e.stopPropagation(); dismissSuggestion(s.tag_id); }}
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-label={`Dismiss ${s.name}`}
+                                            onKeyDown={(e) => { e.stopPropagation(); activateOnKey(() => dismissSuggestion(s.tag_id))(e); }}
                                         >×</span>
                                     </div>
                                 ))}
@@ -592,9 +608,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 })()}
 
                 {!isMultiSelect && (() => {
-                    const applied = new Set(tags.map((t) => t.toLowerCase()));
                     const visibleNew = newTags.filter(
-                        (c) => !dismissedNew.has(c.candidate_id) && !applied.has(c.name.toLowerCase())
+                        (c) => !dismissedNew.has(c.candidate_id) && !appliedTags.has(c.name.toLowerCase())
                     );
                     if (visibleNew.length === 0) return null;
                     return (
@@ -608,6 +623,10 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                                     style={styles.newTagChip}
                                     title={`${Math.round(c.score * 100)}% match — click to add “${c.name}”`}
                                     onClick={() => acceptNewTag(c)}
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-label={`Add new tag ${c.name}`}
+                                    onKeyDown={activateOnKey(() => acceptNewTag(c))}
                                 >
                                     {c.name}
                                     <span style={styles.newTagBadge}>new</span>
@@ -618,6 +637,13 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                                             setDismissedNew((prev) => new Set(prev).add(c.candidate_id));
                                         }}
                                         style={{ marginLeft: 2, cursor: 'pointer', opacity: 0.6 }}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Dismiss ${c.name}`}
+                                        onKeyDown={(e) => {
+                                            e.stopPropagation();
+                                            activateOnKey(() => setDismissedNew((prev) => new Set(prev).add(c.candidate_id)))(e);
+                                        }}
                                     >
                                         ×
                                     </span>

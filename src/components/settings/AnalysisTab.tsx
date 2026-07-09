@@ -55,17 +55,22 @@ export function AnalysisTab() {
 
     useEffect(() => {
         invoke<{ enabled: boolean; threshold: number }>('get_vocab_settings')
-            .then((v) => { setVocabEnabled(v.enabled); setVocabThreshold(v.threshold); })
+            .then((v) => {
+                setVocabEnabled(v.enabled);
+                setVocabThreshold(v.threshold);
+                if (v.enabled) {
+                    invoke<TagCandidate[]>('get_tag_candidates', { status: 'proposed' })
+                        .then(setProposed)
+                        .catch((e) => console.error('get_tag_candidates failed', e));
+                }
+            })
             .catch((e) => console.error('get_vocab_settings failed', e));
-        invoke<TagCandidate[]>('get_tag_candidates', { status: 'proposed' })
-            .then(setProposed)
-            .catch((e) => console.error('get_tag_candidates failed', e));
     }, []);
 
-    const saveVocab = (enabled: boolean, threshold: number) => {
+    const saveVocab = (enabled: boolean, newThreshold: number) => {
         setVocabEnabled(enabled);
-        setVocabThreshold(threshold);
-        invoke('set_vocab_settings', { enabled, threshold }).catch((e) =>
+        setVocabThreshold(newThreshold);
+        invoke('set_vocab_settings', { enabled, threshold: newThreshold }).catch((e) =>
             console.error('set_vocab_settings failed', e)
         );
     };
@@ -316,7 +321,7 @@ export function AnalysisTab() {
                                     </div>
                                     <input
                                         type="range"
-                                        min={0}
+                                        min={0.5}
                                         max={1}
                                         step={0.05}
                                         value={vocabThreshold}
