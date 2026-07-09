@@ -105,6 +105,10 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     // AI tag suggestions (single-select only).
     const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
     const [analyzed, setAnalyzed] = useState(true);
+    // Gates the header analyzed-status indicator: stays false until the first
+    // get_tag_suggestions resolves for the current track, so a never-analyzed
+    // track doesn't briefly flash the solid "analyzed" look (analyzed inits true).
+    const [suggestionsLoaded, setSuggestionsLoaded] = useState(false);
     const [dismissed, setDismissed] = useState<Set<number>>(new Set());
     const [analyzing, setAnalyzing] = useState(false);
     const [newTags, setNewTags] = useState<NewTagSuggestion[]>([]);
@@ -140,6 +144,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             setSuggestions([]);
             setNewTags([]);
             setAnalyzed(false);
+        } finally {
+            setSuggestionsLoaded(true);
         }
     }, []);
 
@@ -149,6 +155,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         setDismissedNew(new Set());
         setProgress(null);
         setAnalyzing(false);
+        setSuggestionsLoaded(false);
         analyzingRef.current = false;
         creepRef.current = null;
         progressActiveRef.current = false;
@@ -631,8 +638,21 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                         }
                     </span>
                 </div>
+                {!isMultiSelect && suggestionsLoaded && (
+                    <span
+                        style={{ display: 'flex', alignItems: 'center', marginLeft: '8px' }}
+                        title={analyzed ? 'Audio analyzed' : 'Not analyzed yet'}
+                    >
+                        <Sparkles
+                            size={14}
+                            style={analyzed
+                                ? { color: 'var(--accent-color)' }
+                                : { color: 'var(--text-secondary)', opacity: 0.35 }}
+                        />
+                    </span>
+                )}
                  {!isMultiSelect && (
-                    <button 
+                    <button
                         onClick={() => setShowInfo(!showInfo)}
                         style={{
                             background: showInfo ? 'var(--bg-tertiary)' : 'transparent',

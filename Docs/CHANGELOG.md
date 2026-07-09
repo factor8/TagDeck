@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- The tag editor header shows a small **Sparkles** icon next to the track name indicating whether that track's audio has been analyzed — solid accent when analyzed, faint when not. Purely a status hint; analysis is still started with the **Suggest tags** button.
 - Single-track "Suggest tags" now shows a phased progress bar (model load → audio read → per-window analysis → suggestions) instead of a bare spinner. The progress bar also appears when analysis is started from the right-click menu for the track you're viewing.
 - The tag editor keeps a persistent **Suggest tags** / **Re-analyze** button for a single selected track (instead of a blank row once a track is analyzed), and the **Suggested** chips can be collapsed/expanded via the header — the collapsed state is remembered across tracks and restarts.
 - **Hardware media keys + Now Playing**: the keyboard's ⏭ next and ⏮ previous keys now change tracks (play/pause already worked), and the current track shows in the macOS Now Playing widget (Control Center / lock screen) with title, artist, and artwork.
