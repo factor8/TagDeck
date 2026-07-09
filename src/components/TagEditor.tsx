@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -6,6 +6,7 @@ import { Info, Sparkles, Loader2, Plus } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
+import { ProgressBar } from './ProgressBar';
 
 interface Props {
     track: Track | null;
@@ -47,6 +48,47 @@ interface BatchTagResult {
 const batchTagFailures = (res: BatchTagResult): number[] =>
     [...(res.missing_ids || []), ...(res.failed_ids || [])];
 
+interface AnalysisProgressEvent {
+    phase: string;
+    current: number;
+    total: number;
+    window?: number | null;
+    window_total?: number | null;
+}
+
+const clamp01 = (f: number) => Math.max(0, Math.min(1, f));
+const lerp = (a: number, b: number, f: number) => a + (b - a) * clamp01(f);
+
+// Map a single-track analysis event to a target ceiling + phase label.
+// Returns null for events the bar should ignore (e.g. the coarse pre-worker
+// "analyzing" tick that carries no window data). `firstRun` widens the layout
+// to make room for the one-time "Preparing tags…" segment.
+function progressForEvent(
+    ev: AnalysisProgressEvent,
+    firstRun: boolean,
+): { ceiling: number; label: string; canCreep: boolean } | null {
+    const seg = firstRun
+        ? { tags: [0, 0.3], load: [0.3, 0.45], decode: [0.45, 0.55], embed: [0.55, 0.9] }
+        : { tags: [0, 0], load: [0, 0.25], decode: [0.25, 0.5], embed: [0.5, 0.9] };
+    switch (ev.phase) {
+        case 'embedding_tags': {
+            const f = ev.total > 0 ? ev.current / ev.total : 0;
+            return { ceiling: lerp(seg.tags[0], seg.tags[1], f), label: 'Preparing tags…', canCreep: false };
+        }
+        case 'loading_model':
+            return { ceiling: seg.load[1], label: 'Loading model…', canCreep: true };
+        case 'decoding':
+            return { ceiling: seg.decode[1], label: 'Reading audio…', canCreep: true };
+        case 'analyzing': {
+            if (ev.window_total == null) return null; // coarse tick, no sub-progress
+            const f = ev.window_total > 0 ? (ev.window ?? 0) / ev.window_total : 0;
+            return { ceiling: lerp(seg.embed[0], seg.embed[1], f), label: 'Analyzing audio…', canCreep: false };
+        }
+        default:
+            return null;
+    }
+}
+
 export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Props) {
     const { showError } = useToast();
     // rawComment is ONLY the Left Side (User Comment)
@@ -66,6 +108,12 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [analyzing, setAnalyzing] = useState(false);
     const [newTags, setNewTags] = useState<NewTagSuggestion[]>([]);
     const [dismissedNew, setDismissedNew] = useState<Set<number>>(new Set());
+    const [progress, setProgress] = useState<{ fraction: number; label: string } | null>(null);
+    const analyzingRef = useRef(false);
+    const sawTagPhaseRef = useRef(false);
+    const creepRef = useRef<number | null>(null); // ceiling to ease toward, or null
+
+    useEffect(() => { analyzingRef.current = analyzing; }, [analyzing]);
 
     const isMultiSelect = selectedTrackIds && selectedTrackIds.size > 1;
 
@@ -87,6 +135,9 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     useEffect(() => {
         setDismissed(new Set());
         setDismissedNew(new Set());
+        setProgress(null);
+        setAnalyzing(false);
+        creepRef.current = null;
         if (track && !isMultiSelect) {
             fetchSuggestions(track.id);
         } else {
@@ -101,9 +152,12 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     useEffect(() => {
         let unlisten: (() => void) | undefined;
         let active = true;
-        listen('analysis-complete', () => {
+        listen('analysis-complete', async () => {
+            creepRef.current = null;
+            setProgress({ fraction: 1, label: 'Finding suggestions…' });
+            if (track && !isMultiSelect) await fetchSuggestions(track.id);
             setAnalyzing(false);
-            if (track && !isMultiSelect) fetchSuggestions(track.id);
+            setProgress(null);
         }).then((u) => {
             if (active) unlisten = u;
             else u();
@@ -113,6 +167,40 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             unlisten?.();
         };
     }, [track, isMultiSelect, fetchSuggestions]);
+
+    // Live progress for THIS component's single-track analyze.
+    useEffect(() => {
+        let unlisten: (() => void) | undefined;
+        let active = true;
+        listen<AnalysisProgressEvent>('analysis-progress', (e) => {
+            if (!analyzingRef.current) return;
+            const ev = e.payload;
+            if (ev.phase === 'embedding_tags') sawTagPhaseRef.current = true;
+            const mapped = progressForEvent(ev, sawTagPhaseRef.current);
+            if (!mapped) return;
+            creepRef.current = mapped.canCreep ? mapped.ceiling : null;
+            setProgress((prev) => {
+                const base = prev?.fraction ?? 0;
+                const fraction = mapped.canCreep ? base : Math.max(base, mapped.ceiling);
+                return { fraction, label: mapped.label };
+            });
+        }).then((u) => { if (active) unlisten = u; else u(); });
+        return () => { active = false; unlisten?.(); };
+    }, []);
+
+    // Cosmetic creep during un-measurable steps (model load / decode).
+    useEffect(() => {
+        const id = setInterval(() => {
+            const ceiling = creepRef.current;
+            if (ceiling == null) return;
+            setProgress((prev) => {
+                if (!prev || prev.fraction >= ceiling) return prev;
+                const next = Math.min(ceiling, prev.fraction + (ceiling - prev.fraction) * 0.08 + 0.003);
+                return { ...prev, fraction: next };
+            });
+        }, 120);
+        return () => clearInterval(id);
+    }, []);
 
     const acceptSuggestion = async (s: Suggestion) => {
         setSuggestions((prev) => prev.filter((x) => x.tag_id !== s.tag_id));
@@ -148,12 +236,17 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
 
     const analyzeThisTrack = async () => {
         if (!track) return;
+        sawTagPhaseRef.current = false;
+        creepRef.current = null;
+        setProgress({ fraction: 0, label: 'Starting…' });
         setAnalyzing(true);
         try {
             await invoke('analyze_tracks', { trackIds: [track.id], force: false });
             // `analysis-complete` listener refetches and clears `analyzing`.
         } catch (e) {
             setAnalyzing(false);
+            setProgress(null);
+            creepRef.current = null;
             const msg = String(e);
             if (msg.includes('not downloaded')) {
                 showError('Enable AI suggestions in Settings → AI Tags first.');
@@ -554,6 +647,22 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                 </div>
 
                 {!isMultiSelect && (() => {
+                    if (progress) {
+                        return (
+                            <div
+                                style={styles.suggestRow}
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={Math.round(progress.fraction * 100)}
+                                aria-valuetext={progress.label}
+                            >
+                                <div style={{ flex: 1 }}>
+                                    <ProgressBar value={Math.round(progress.fraction * 100)} label={progress.label} />
+                                </div>
+                            </div>
+                        );
+                    }
                     const visible = suggestions.filter(
                         s => !dismissed.has(s.tag_id) && !appliedTags.has(s.name.toLowerCase())
                     );
