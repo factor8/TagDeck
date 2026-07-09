@@ -42,16 +42,30 @@ impl AudioEmbedder {
     /// Embed a decoded mono-48k waveform. Averages embeddings of up to three 10s
     /// windows (25/50/75% through the track) for a stable whole-track vector.
     pub fn embed_audio(&mut self, samples: &[f32]) -> Result<Vec<f32>> {
+        self.embed_audio_with(samples, &mut |_, _| {})
+    }
+
+    /// Like [`embed_audio`], but invokes `on_window(done, total)` after each
+    /// window is embedded so a caller can report sub-track progress. `total` is
+    /// the number of windows (1–3), known before the first inference.
+    pub fn embed_audio_with(
+        &mut self,
+        samples: &[f32],
+        on_window: &mut dyn FnMut(usize, usize),
+    ) -> Result<Vec<f32>> {
+        let offsets = window_offsets(samples.len());
+        let total = offsets.len();
         let mut acc = vec![0.0f32; EMBED_DIM];
         let mut count = 0;
-        for start in window_offsets(samples.len()) {
+        for (i, start) in offsets.into_iter().enumerate() {
             let slice = &samples[start..(start + MAX_SAMPLES).min(samples.len())];
             let fitted = fit_window(slice);
             let emb = self.embed_one_window(&fitted)?;
-            for i in 0..EMBED_DIM {
-                acc[i] += emb[i];
+            for k in 0..EMBED_DIM {
+                acc[k] += emb[k];
             }
             count += 1;
+            on_window(i + 1, total);
         }
         if count == 0 {
             return Err(anyhow!("no audio windows"));
@@ -148,5 +162,23 @@ fn l2_normalize(v: &mut [f32]) {
         for x in v.iter_mut() {
             *x /= norm;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_offsets_short_track_is_single_window() {
+        assert_eq!(window_offsets(1000), vec![0]);
+        assert_eq!(window_offsets(MAX_SAMPLES), vec![0]);
+    }
+
+    #[test]
+    fn window_offsets_long_track_is_three_ascending() {
+        let offs = window_offsets(MAX_SAMPLES * 4);
+        assert_eq!(offs.len(), 3);
+        assert!(offs.windows(2).all(|w| w[0] < w[1]), "offsets must ascend: {offs:?}");
     }
 }
