@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import React from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Info, Sparkles, Plus } from 'lucide-react';
+import { Info, Sparkles, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 import { Track } from '../types';
 import { useToast } from './Toast';
 import { MetadataViewer } from './MetadataViewer';
@@ -110,6 +110,10 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const [newTags, setNewTags] = useState<NewTagSuggestion[]>([]);
     const [dismissedNew, setDismissedNew] = useState<Set<number>>(new Set());
     const [progress, setProgress] = useState<{ fraction: number; label: string } | null>(null);
+    // Global (persisted) collapse toggle for the suggested-tags chips.
+    const [suggestCollapsed, setSuggestCollapsed] = useState(
+        () => localStorage.getItem('app_suggestions_collapsed') === 'true'
+    );
     const analyzingRef = useRef(false);
     const sawTagPhaseRef = useRef(false);
     const creepRef = useRef<number | null>(null); // ceiling to ease toward, or null
@@ -253,6 +257,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
 
     const dismissSuggestion = (tagId: number) => {
         setDismissed((prev) => new Set(prev).add(tagId));
+    };
+
+    const toggleSuggestCollapsed = () => {
+        setSuggestCollapsed((v) => {
+            const next = !v;
+            localStorage.setItem('app_suggestions_collapsed', String(next));
+            return next;
+        });
     };
 
     // Shared keydown activator for pointer-only chips: fires `fn` on Enter/Space
@@ -703,10 +715,22 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
                         <div style={styles.suggestRow}>
                             {visible.length > 0 && (
                                 <>
-                                    <span style={styles.suggestLabel}>
-                                        <Sparkles size={11} /> Suggested
+                                    <span
+                                        style={{ ...styles.suggestLabel, cursor: 'pointer' }}
+                                        onClick={toggleSuggestCollapsed}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-expanded={!suggestCollapsed}
+                                        aria-label={suggestCollapsed
+                                            ? `Show ${visible.length} suggested tags`
+                                            : 'Hide suggested tags'}
+                                        title={suggestCollapsed ? 'Show suggested tags' : 'Hide suggested tags'}
+                                        onKeyDown={activateOnKey(toggleSuggestCollapsed)}
+                                    >
+                                        {suggestCollapsed ? <ChevronRight size={11} /> : <ChevronDown size={11} />}
+                                        <Sparkles size={11} /> Suggested ({visible.length})
                                     </span>
-                                    {visible.map(s => (
+                                    {!suggestCollapsed && visible.map(s => (
                                         <div
                                             key={s.tag_id}
                                             style={styles.ghostChip}
