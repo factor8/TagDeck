@@ -379,6 +379,10 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
     // --- Phase 2: embed tracks across a small worker pool ---
     let total = candidates.len();
     let single = total == 1;
+    // For a single-track run, tag the pre-dequeue `loading_model` event with the
+    // track id so the editor can show the bar for the currently-viewed track even
+    // when the run was started from the right-click menu (not its own button).
+    let single_track_id = if single { candidates.first().map(|c| c.0) } else { None };
     set_status("analyzing", 0, total, 0, 0);
     let _ = app.emit(
         PROGRESS_EVENT,
@@ -420,7 +424,7 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
                         total: 1,
                         embedded: 0,
                         failed: 0,
-                        track_id: None,
+                        track_id: single_track_id,
                         window: None,
                         window_total: None,
                     },

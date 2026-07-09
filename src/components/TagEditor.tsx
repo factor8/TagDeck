@@ -52,6 +52,7 @@ interface AnalysisProgressEvent {
     phase: string;
     current: number;
     total: number;
+    track_id?: number | null;
     window?: number | null;
     window_total?: number | null;
 }
@@ -113,6 +114,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const sawTagPhaseRef = useRef(false);
     const creepRef = useRef<number | null>(null); // ceiling to ease toward, or null
     const runIdRef = useRef(0); // bumped per analyze run; guards stale async cleanup
+    const currentTrackIdRef = useRef<number | null>(null); // viewed single track, for event matching
+    const progressActiveRef = useRef(false); // true while a bar is showing for the viewed track
 
     useEffect(() => { analyzingRef.current = analyzing; }, [analyzing]);
 
@@ -125,10 +128,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             setSuggestions(resp.suggestions);
             setNewTags(resp.new_tags ?? []);
         } catch (e) {
-            // No model / no embeddings yet — stay silent, just show nothing.
-            console.debug('get_tag_suggestions:', e);
+            // The backend returns analyzed:false cleanly for un-embedded tracks, so
+            // reaching here means the command itself failed. Don't leave `analyzed`
+            // stale-true (that would hide the "Suggest tags" button); surface the
+            // error loudly so the real cause is visible.
+            console.error('get_tag_suggestions failed:', e);
             setSuggestions([]);
             setNewTags([]);
+            setAnalyzed(false);
         }
     }, []);
 
@@ -140,6 +147,8 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         setAnalyzing(false);
         analyzingRef.current = false;
         creepRef.current = null;
+        progressActiveRef.current = false;
+        currentTrackIdRef.current = track && !isMultiSelect ? track.id : null;
         if (track && !isMultiSelect) {
             fetchSuggestions(track.id);
         } else {
@@ -155,20 +164,22 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         let unlisten: (() => void) | undefined;
         let active = true;
         listen('analysis-complete', async () => {
-            // Only drive the progress bar for THIS component's own analyze run;
-            // a Settings batch completion also fires this event and must not flash
-            // a phantom bar. The suggestion refetch still runs in both cases.
-            const wasOurRun = analyzingRef.current;
+            // Only finish the bar if one was actually showing for the viewed track
+            // (our button run OR a right-click run of this track). A Settings batch
+            // completion leaves progressActiveRef false → no phantom bar. The
+            // suggestion refetch still runs in every case.
+            const wasActive = progressActiveRef.current;
             const myRun = runIdRef.current;
-            if (wasOurRun) {
+            if (wasActive) {
                 creepRef.current = null;
                 setProgress({ fraction: 1, label: 'Finding suggestions…' });
             }
             if (track && !isMultiSelect) await fetchSuggestions(track.id);
             // Skip cleanup if a newer analyze run began during the await above.
-            if (wasOurRun && runIdRef.current === myRun) {
+            if (wasActive && runIdRef.current === myRun) {
                 setAnalyzing(false);
                 setProgress(null);
+                progressActiveRef.current = false;
             }
         }).then((u) => {
             if (active) unlisten = u;
@@ -185,12 +196,16 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         let unlisten: (() => void) | undefined;
         let active = true;
         listen<AnalysisProgressEvent>('analysis-progress', (e) => {
-            if (!analyzingRef.current) return;
             const ev = e.payload;
+            // Drive the bar for our own button run OR any run analyzing the
+            // currently-viewed track (e.g. the right-click context-menu action).
+            const forViewedTrack = ev.track_id != null && ev.track_id === currentTrackIdRef.current;
+            if (!analyzingRef.current && !forViewedTrack) return;
             if (ev.phase === 'embedding_tags') sawTagPhaseRef.current = true;
             const mapped = progressForEvent(ev, sawTagPhaseRef.current);
             if (!mapped) return;
             creepRef.current = mapped.canCreep ? mapped.ceiling : null;
+            progressActiveRef.current = true;
             setProgress((prev) => {
                 const base = prev?.fraction ?? 0;
                 const fraction = mapped.canCreep ? base : Math.max(base, mapped.ceiling);
@@ -251,6 +266,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         runIdRef.current += 1;
         sawTagPhaseRef.current = false;
         creepRef.current = null;
+        progressActiveRef.current = true;
         setProgress({ fraction: 0, label: 'Starting…' });
         setAnalyzing(true);
         try {
@@ -260,6 +276,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             setAnalyzing(false);
             setProgress(null);
             creepRef.current = null;
+            progressActiveRef.current = false;
             const msg = String(e);
             if (msg.includes('not downloaded')) {
                 showError('Enable AI suggestions in Settings → AI Tags first.');
