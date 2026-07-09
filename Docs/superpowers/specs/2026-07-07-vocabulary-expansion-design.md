@@ -96,7 +96,7 @@ This reuses the per-tag library-wide z-score→sigmoid calibration verbatim; can
 - `get_tag_candidates(status: Option<String>) -> Vec<TagCandidate>`
 - `approve_tag_candidate(candidate_id: i64)` / `dismiss_tag_candidate(candidate_id: i64)` / `delete_tag_candidate(candidate_id: i64)`
 - `embed_tag_candidates()` — text-only; embeds every `approved` candidate lacking a `MODEL_VERSION` embedding (reuses the analyze Phase-1 recipe).
-- `accept_tag_candidate(track_id: i64, candidate_id: i64) -> i64` — creates+files+describes the real tag, applies it to the track, retires the candidate, returns the new tag id.
+- `finalize_accepted_candidate(candidate_id: i64) -> i64` — called *after* the tag row already exists (the frontend first applies the tag name via the normal add-tag/`sync_tags` write path). Files the freshly-created tag under the candidate's group, copies the curated zero-shot description, retires the candidate, and returns the new tag id. There is deliberately no `accept_tag_candidate`/create-tag-with-group backend path (see the plan's global constraint) — acceptance reuses the audited tag-write path rather than duplicating tag creation.
 - `get_vocab_settings() -> VocabSettings { enabled: bool, threshold: f32 }` / `set_vocab_settings(enabled: bool, threshold: f32)`
 
 `TagCandidate { id, name, group_id, group_name, description, status, source }` (group_name joined for UI display).
@@ -104,7 +104,7 @@ This reuses the per-tag library-wide z-score→sigmoid calibration verbatim; can
 ## Frontend
 
 - **`AnalysisTab.tsx`** — a new "Vocabulary expansion" card inside the existing `{ready && …}` fragment, matching the card/`<h4>`/`<p>`/`btn` conventions: master toggle (`get/set_vocab_settings`), a new-tag confidence slider, a "Scan my tags for new ideas" button, and a review list of `proposed` candidates with per-row Approve/Dismiss. Approving calls `approve_tag_candidate` then `embed_tag_candidates`.
-- **`TagEditor.tsx`** — the fetch also reads `new_tags`; renders a distinct third chip variant (not the dashed-accent used by normal suggestions — e.g. a dashed *green* border with a `Plus`/`Sparkles` marker and a "new" affordance). Dismissal keyed on `candidate_id` in a separate `Set`. Accept → `accept_tag_candidate({ trackId, candidateId })` → local refetch + `onUpdate()` (to bump `TagDeck`).
+- **`TagEditor.tsx`** — the fetch also reads `new_tags`; renders a distinct third chip variant (not the dashed-accent used by normal suggestions — e.g. a dashed *green* border with a `Plus`/`Sparkles` marker and a "new" affordance). Dismissal keyed on `candidate_id` in a separate `Set`. Accept → apply the tag name via the existing add-tag/`sync_tags` write path (`addTag(name)`), then `finalize_accepted_candidate({ candidateId })` → local refetch + `onUpdate()` (to bump `TagDeck`).
 - **Types** — add `NewTagSuggestion` and extend `SuggestionsResponse` in `TagEditor.tsx`; extend `SuggestionsResponse` consumers accordingly. No `App.tsx` changes (suggestions are self-contained in `TagEditor`).
 
 ## Non-goals (v1)
@@ -119,7 +119,7 @@ This reuses the per-tag library-wide z-score→sigmoid calibration verbatim; can
 1. **Noisy zero-shot on subjective dimensions** (energy/vibe-like) — mitigated by the higher new-tag threshold, the ≤2/track cap, curated prompts, and off-by-default. Concrete/describable dimensions (time of day, instruments, era) fare best.
 2. **Group-name mismatch for generic users** — mitigated by the ≥2 member-overlap fallback so matching doesn't depend solely on a group being literally named "Time of Day".
 3. **Case-insensitive tag uniqueness** (`tags.name UNIQUE COLLATE NOCASE`) — the concept map dedupes case-insensitively so a proposal can never silently merge into an existing tag.
-4. **Accept race** — handled by a single backend command (create→resolve→group→describe→retire) rather than a frontend multi-call sequence.
+4. **Accept race / partial failure** — acceptance is a frontend two-step sequence: `addTag(name)` (creates the real tag via the audited `sync_tags` write path) then `finalize_accepted_candidate` (group → describe → retire). Ordered so the tag row exists before finalize resolves it by name (`COLLATE NOCASE`). If finalize fails after the tag was created, the tag still exists and is applied to the track, the user gets a toast ("…was added, but couldn't be filed in its group automatically"), and the state self-heals: re-accepting re-files it, and `score_new_tags` filters out any candidate whose name already exists as a real tag so a lingering candidate won't resurface as a "new" chip.
 
 ## Verification
 
