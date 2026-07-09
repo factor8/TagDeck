@@ -112,6 +112,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
     const analyzingRef = useRef(false);
     const sawTagPhaseRef = useRef(false);
     const creepRef = useRef<number | null>(null); // ceiling to ease toward, or null
+    const runIdRef = useRef(0); // bumped per analyze run; guards stale async cleanup
 
     useEffect(() => { analyzingRef.current = analyzing; }, [analyzing]);
 
@@ -137,6 +138,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
         setDismissedNew(new Set());
         setProgress(null);
         setAnalyzing(false);
+        analyzingRef.current = false;
         creepRef.current = null;
         if (track && !isMultiSelect) {
             fetchSuggestions(track.id);
@@ -157,12 +159,14 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
             // a Settings batch completion also fires this event and must not flash
             // a phantom bar. The suggestion refetch still runs in both cases.
             const wasOurRun = analyzingRef.current;
+            const myRun = runIdRef.current;
             if (wasOurRun) {
                 creepRef.current = null;
                 setProgress({ fraction: 1, label: 'Finding suggestions…' });
             }
             if (track && !isMultiSelect) await fetchSuggestions(track.id);
-            if (wasOurRun) {
+            // Skip cleanup if a newer analyze run began during the await above.
+            if (wasOurRun && runIdRef.current === myRun) {
                 setAnalyzing(false);
                 setProgress(null);
             }
@@ -244,6 +248,7 @@ export function TagEditor({ track, onUpdate, selectedTrackIds, commonTags }: Pro
 
     const analyzeThisTrack = async () => {
         if (!track) return;
+        runIdRef.current += 1;
         sawTagPhaseRef.current = false;
         creepRef.current = null;
         setProgress({ fraction: 0, label: 'Starting…' });
