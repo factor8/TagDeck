@@ -146,6 +146,12 @@ struct AnalysisProgress {
     failed: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     track_id: Option<i64>,
+    /// Window index (1..=window_total) within a single track's audio embed.
+    /// Only set for single-track runs; None for batch and non-embed phases.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_total: Option<usize>,
 }
 
 #[derive(Serialize, Clone)]
@@ -310,6 +316,8 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
                 embedded: 0,
                 failed: 0,
                 track_id: None,
+                window: None,
+                window_total: None,
             },
         );
         match TextEmbedder::load(&model_dir) {
@@ -357,6 +365,8 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
                             embedded: 0,
                             failed: 0,
                             track_id: None,
+                            window: None,
+                            window_total: None,
                         },
                     );
                 }
@@ -368,6 +378,7 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
 
     // --- Phase 2: embed tracks across a small worker pool ---
     let total = candidates.len();
+    let single = total == 1;
     set_status("analyzing", 0, total, 0, 0);
     let _ = app.emit(
         PROGRESS_EVENT,
@@ -378,6 +389,8 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
             embedded: 0,
             failed: 0,
             track_id: None,
+            window: None,
+            window_total: None,
         },
     );
 
@@ -398,6 +411,21 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
         let failed = Arc::clone(&failed);
         let last_emit = Arc::clone(&last_emit);
         handles.push(std::thread::spawn(move || {
+            if single {
+                let _ = app.emit(
+                    PROGRESS_EVENT,
+                    AnalysisProgress {
+                        phase: "loading_model".into(),
+                        current: 0,
+                        total: 1,
+                        embedded: 0,
+                        failed: 0,
+                        track_id: None,
+                        window: None,
+                        window_total: None,
+                    },
+                );
+            }
             let mut engine = match AudioEmbedder::load(&model_dir) {
                 Ok(e) => e,
                 Err(e) => {
@@ -415,9 +443,45 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
                     Some(x) => x,
                     None => break,
                 };
-                match decode_to_mono_48k(std::path::Path::new(&path))
-                    .and_then(|samples| engine.embed_audio(&samples))
-                {
+                if single {
+                    let _ = app.emit(
+                        PROGRESS_EVENT,
+                        AnalysisProgress {
+                            phase: "decoding".into(),
+                            current: 0,
+                            total: 1,
+                            embedded: 0,
+                            failed: 0,
+                            track_id: Some(track_id),
+                            window: None,
+                            window_total: None,
+                        },
+                    );
+                }
+                let embed_result = decode_to_mono_48k(std::path::Path::new(&path))
+                    .and_then(|samples| {
+                        if single {
+                            let app_win = app.clone();
+                            engine.embed_audio_with(&samples, &mut |done, wtotal| {
+                                let _ = app_win.emit(
+                                    PROGRESS_EVENT,
+                                    AnalysisProgress {
+                                        phase: "analyzing".into(),
+                                        current: 1,
+                                        total: 1,
+                                        embedded: 0,
+                                        failed: 0,
+                                        track_id: Some(track_id),
+                                        window: Some(done),
+                                        window_total: Some(wtotal),
+                                    },
+                                );
+                            })
+                        } else {
+                            engine.embed_audio(&samples)
+                        }
+                    });
+                match embed_result {
                     Ok(vec) => {
                         if let Ok(db) = app.state::<AppState>().db.lock() {
                             match db.upsert_track_embedding(track_id, MODEL_VERSION, &vec, now_ts()) {
@@ -480,6 +544,8 @@ fn run_job(app: AppHandle, candidates: Vec<(i64, String)>, tag_jobs: Vec<TagProm
                             embedded: emb,
                             failed: fail,
                             track_id: Some(track_id),
+                            window: None,
+                            window_total: None,
                         },
                     );
                 }
