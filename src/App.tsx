@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSensors, PointerSensor, closestCenter } from '@dnd-kit/core';
@@ -24,6 +24,7 @@ import { useToast } from './components/Toast';
 import { useDebug } from './components/DebugContext';
 import { usePlayQueue } from './hooks/usePlayQueue';
 import { QueuePane } from './components/QueuePane';
+import { PlaylistBuilderPane } from './components/PlaylistBuilderPane';
 
 function App() {
   const { showSuccess, showError, showToast } = useToast();
@@ -84,8 +85,88 @@ function App() {
   selectedTrackRef.current = selectedTrack;
   const [isLeftCollapsed, setIsLeftCollapsed] = useState(false);
   const [isRightCollapsed, setIsRightCollapsed] = useState(false);
-  const [rightPanelTab, setRightPanelTab] = useState<'tags' | 'queue'>('tags');
+  const [rightPanelTab, setRightPanelTab] = useState<'tags' | 'queue' | 'builder'>('tags');
   const playQueue = usePlayQueue();
+
+  // Playlist Builder: the "target" playlist being filled from the middle list.
+  // Independent of selectedPlaylistId (the viewed playlist).
+  const [builderPlaylistId, setBuilderPlaylistId] = useState<number | null>(() => {
+    const saved = localStorage.getItem('app_builder_playlist_id');
+    return saved ? Number(saved) : null;
+  });
+  const [builderTrackIds, setBuilderTrackIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (builderPlaylistId == null) {
+      localStorage.removeItem('app_builder_playlist_id');
+      setBuilderTrackIds([]);
+      return;
+    }
+    localStorage.setItem('app_builder_playlist_id', String(builderPlaylistId));
+    invoke<number[]>('get_playlist_track_ids', { playlistId: builderPlaylistId })
+      .then(setBuilderTrackIds)
+      .catch(err => {
+        console.error('Failed to load builder playlist', err);
+        setBuilderTrackIds([]);
+      });
+  }, [builderPlaylistId, refreshTrigger]);
+
+  const builderTrackIdSet = useMemo(() => new Set(builderTrackIds), [builderTrackIds]);
+
+  const handleAddToBuilder = useCallback((trackIds: number[]) => {
+    if (builderPlaylistId == null || trackIds.length === 0) return;
+    invoke('add_to_playlist', { trackIds, playlistId: builderPlaylistId })
+      .then(() => {
+        showSuccess(`Added ${trackIds.length} track${trackIds.length > 1 ? 's' : ''}`);
+        setRefreshTrigger(p => p + 1);
+      })
+      .catch(err => {
+        console.error('Failed to add to builder playlist', err);
+        showError('Failed to add tracks');
+      });
+  }, [builderPlaylistId, showSuccess, showError]);
+
+  const handleRemoveFromBuilder = useCallback((trackId: number) => {
+    if (builderPlaylistId == null) return;
+    invoke('remove_from_playlist', { trackIds: [trackId], playlistId: builderPlaylistId })
+      .then(() => setRefreshTrigger(p => p + 1))
+      .catch(err => {
+        console.error('Failed to remove from builder playlist', err);
+        showError('Failed to remove track');
+      });
+  }, [builderPlaylistId, showError]);
+
+  const handleReorderBuilder = useCallback((orderedTrackIds: number[]) => {
+    if (builderPlaylistId == null) return;
+    setBuilderTrackIds(orderedTrackIds); // optimistic
+    invoke('reorder_playlist_tracks', { playlistId: builderPlaylistId, orderedTrackIds })
+      .then(() => setRefreshTrigger(p => p + 1))
+      .catch(err => {
+        console.error('Failed to reorder builder playlist', err);
+        showError('Failed to reorder tracks');
+        setRefreshTrigger(p => p + 1);
+      });
+  }, [builderPlaylistId, showError]);
+
+  const handleBuildPlaylist = useCallback((playlistId: number) => {
+    setBuilderPlaylistId(playlistId);
+    setRightPanelTab('builder');
+    rightPanelRef.current?.expand();
+  }, []);
+
+  const handleCreateBuilderTarget = useCallback((name: string) => {
+    invoke<Playlist>('create_playlist', { name, parentId: null, isFolder: false })
+      .then(created => {
+        setBuilderPlaylistId(created.id);
+        setRightPanelTab('builder');
+        setRefreshTrigger(p => p + 1);
+        showSuccess(`Created "${name}"`);
+      })
+      .catch(err => {
+        console.error('Failed to create playlist', err);
+        showError('Failed to create playlist');
+      });
+  }, [showSuccess, showError]);
 
   useEffect(() => {
     const handlePlayerModeChange = () => {
@@ -552,8 +633,8 @@ function App() {
                   // Clear highlight after animation
                   setTimeout(() => setHighlightedPlaylistId(null), 2000);
 
-                  // If we added to the currently viewed playlist, refresh the view
-                  if (selectedPlaylistId === playlistId) {
+                  // If we added to the currently viewed or builder playlist, refresh
+                  if (selectedPlaylistId === playlistId || builderPlaylistId === playlistId) {
                       setRefreshTrigger(p => p + 1);
                   }
               })
@@ -1195,6 +1276,7 @@ function App() {
             highlightedPlaylistId={highlightedPlaylistId}
             onPlaylistsChanged={() => setRefreshTrigger(p => p + 1)}
             appleMusicAvailable={appleMusicAvailable}
+            onBuildPlaylist={handleBuildPlaylist}
             />
         </Panel>
         
@@ -1237,6 +1319,11 @@ function App() {
               onFileDrop={selectedPlaylistId != null ? handleTrackListFileDrop : undefined}
               onPlayNext={handlePlayNext}
               onPlayLater={handlePlayLater}
+              builderPlaylistId={builderPlaylistId}
+              builderPlaylistName={builderPlaylistId != null ? playlistNames.get(builderPlaylistId) : undefined}
+              builderTrackIdSet={builderTrackIdSet}
+              onAddToBuilder={handleAddToBuilder}
+              onRemoveFromBuilder={handleRemoveFromBuilder}
             />
             </div>
         </Panel>
@@ -1261,9 +1348,13 @@ function App() {
                 flexDirection: 'column',
                 background: 'var(--bg-secondary)'
             }}>
-            {/* Tags / Queue tab bar */}
+            {/* Tags / Queue / Build tab bar */}
             <div style={{ display: 'flex', flexShrink: 0, borderBottom: '1px solid var(--border-color)' }}>
-                {(['tags', 'queue'] as const).map(tab => (
+                {(['tags', 'queue', 'builder'] as const).map(tab => {
+                    const badge = tab === 'queue'
+                        ? playQueue.queue.length
+                        : tab === 'builder' && builderPlaylistId != null ? builderTrackIds.length : 0;
+                    return (
                     <button
                         key={tab}
                         onClick={() => setRightPanelTab(tab)}
@@ -1283,8 +1374,8 @@ function App() {
                             gap: '6px',
                         }}
                     >
-                        {tab === 'tags' ? 'Tags' : 'Queue'}
-                        {tab === 'queue' && playQueue.queue.length > 0 && (
+                        {tab === 'tags' ? 'Tags' : tab === 'queue' ? 'Queue' : 'Build'}
+                        {badge > 0 && (
                             <span style={{
                                 fontSize: '10px',
                                 fontWeight: 700,
@@ -1293,11 +1384,12 @@ function App() {
                                 background: 'var(--accent-color)',
                                 color: '#fff',
                             }}>
-                                {playQueue.queue.length}
+                                {badge}
                             </span>
                         )}
                     </button>
-                ))}
+                    );
+                })}
             </div>
 
             {rightPanelTab === 'tags' ? (
@@ -1325,7 +1417,7 @@ function App() {
                         />
                     </div>
                 </>
-            ) : (
+            ) : rightPanelTab === 'queue' ? (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                     <QueuePane
                         nowPlaying={playingTrack}
@@ -1342,6 +1434,24 @@ function App() {
                                 setShouldAutoPlay(true);
                             }
                         }}
+                    />
+                </div>
+            ) : (
+                <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <PlaylistBuilderPane
+                        targetPlaylistId={builderPlaylistId}
+                        trackIds={builderTrackIds}
+                        onSetTarget={setBuilderPlaylistId}
+                        onCreateAndTarget={handleCreateBuilderTarget}
+                        onClearTarget={() => setBuilderPlaylistId(null)}
+                        onRemove={handleRemoveFromBuilder}
+                        onReorder={handleReorderBuilder}
+                        onPlay={(track) => {
+                            setPlayingTrack(track);
+                            setPlayingPlaylistId(builderPlaylistId);
+                            setShouldAutoPlay(true);
+                        }}
+                        refreshTrigger={refreshTrigger}
                     />
                 </div>
             )}

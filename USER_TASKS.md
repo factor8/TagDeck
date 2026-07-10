@@ -24,6 +24,7 @@ _Depends-on-Jordan items that should halt related work until done._
 _Non-blocking — do when convenient._
 
 - [ ] (2026-07-09) Verify single-track Suggested Tags progress bar: pick an un-analyzed track, click "Suggest tags", confirm phases advance and the bar fills during audio windows, then suggestions render. Repeat on a first-ever analysis to see "Preparing tags…".
+- [ ] (2026-07-09) **Smoke-test the Playlist Builder (Build tab).** `npm run tauri dev` → right-click a playlist → **Build this Playlist** (Build tab opens, header shows count + total time). Then: add via the row **+**, by dragging onto the panel, and via right-click → **Add to "…"** (try a multi-selection); confirm added rows show a check and count/time update. In the panel, reorder by drag, remove a track, double-click to play. Also set a target via the in-tab picker search and via **New playlist**. Confirm Spotify playlists don't offer "Build this Playlist" and an iTunes-synced target reflects the change in Music.app. **⌘Z** should undo an add.
 
 ## Done
 _Recently finished. Trim when this grows long._

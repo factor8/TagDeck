@@ -20,6 +20,7 @@ The docs are organized by **how current and how forward-looking** they are:
 - [reference/MixedInKeyIntegration.md](reference/MixedInKeyIntegration.md) — how "Analyze with Mixed In Key" triggers the external app and reloads BPM/key/energy.
 - [reference/KeyCommands.md](reference/KeyCommands.md) — keyboard shortcuts.
 - [reference/SearchSpecs.md](reference/SearchSpecs.md) — advanced search-bar syntax (with parsed-but-not-yet-functional fields flagged).
+- [reference/PlaylistBuilder.md](reference/PlaylistBuilder.md) — the **Build** tab: promoting a playlist to a target and filling it from the track list.
 
 ## Roadmap (forward-looking)
 
