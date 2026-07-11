@@ -807,6 +807,33 @@ pub struct SyncResult {
     pub conflicts_skipped: usize,
 }
 
+/// Never trip the proportional guard on batches this small — normal small
+/// deletions in any library size should auto-reconcile.
+const MASS_REMOVAL_FLOOR: usize = 25;
+/// Trip the guard when a single sync would remove more than this fraction of
+/// linked items.
+const MASS_REMOVAL_PCT: f64 = 0.20;
+
+/// True when a detected removal batch looks like the empty/partial-library
+/// failure mode (Music.app returned no/too-few items while TagDeck has many
+/// linked) rather than a genuine user deletion.
+///
+/// - `removed`: number of linked items absent from the live snapshot
+/// - `live`:    number of items the snapshot actually returned
+/// - `linked`:  number of linked items in the DB
+fn removal_is_suspicious(removed: usize, live: usize, linked: usize) -> bool {
+    if linked == 0 {
+        return false; // nothing linked -> nothing to protect
+    }
+    // Empty/loading library while we have linked items: always suspicious.
+    if live == 0 {
+        return true;
+    }
+    // Otherwise trip only on a large absolute AND proportional batch.
+    let threshold = MASS_REMOVAL_FLOOR.max((MASS_REMOVAL_PCT * linked as f64) as usize);
+    removed > threshold
+}
+
 #[tauri::command]
 pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppState>, since_timestamp: i64) -> Result<SyncResult, String> {
     
@@ -940,7 +967,47 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
             // Handle removed tracks per the `itunes_deletion_behavior` setting:
             // Keep (default) unlinks — the track and all its TagDeck data stay;
             // Remove mirrors the deletion into TagDeck too.
-            if !deleted_pids.is_empty() {
+            // Safety guard: a transient empty/partial Music.app snapshot makes
+            // every linked track look "removed". Rather than auto-unlink/delete
+            // TagDeck data (tags/ratings/playlist membership — recoverable
+            // nowhere else), route a suspiciously large batch to Sync Review for
+            // manual confirmation, whatever the configured deletion behavior.
+            if !deleted_pids.is_empty()
+                && removal_is_suspicious(deleted_pids.len(), music_pids.len(), db_pids.len())
+            {
+                let reason = if music_pids.is_empty() {
+                    "Music.app reported 0 tracks (library empty or still loading)".to_string()
+                } else {
+                    format!(
+                        "batch exceeds safety threshold ({} of {} linked)",
+                        deleted_pids.len(),
+                        db_pids.len()
+                    )
+                };
+                let warn = format!(
+                    "Skipped auto-removal of {} track(s): {}. Surfaced in Sync Review.",
+                    deleted_pids.len(),
+                    reason
+                );
+                println!("{}", warn);
+                app.state::<crate::logging::LogState>().add_log("WARN", &warn, &app);
+
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                match db.get_tracks_by_itunes_pids(&deleted_pids) {
+                    Ok(tracks) => {
+                        pending_removals.extend(tracks.iter().map(|t| crate::sync_review::RemovedTrack {
+                            track_id: t.id,
+                            itunes_pid: t.itunes_pid.clone().unwrap_or_default(),
+                            title: t.title.clone(),
+                            artist: t.artist.clone(),
+                        }));
+                    }
+                    Err(e) => {
+                        let msg = format!("DB Error loading suspicious removals for review: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    }
+                }
+            } else if !deleted_pids.is_empty() {
                 let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
                 let deletion_behavior = LibraryConfig::load(&db)
                     .map(|c| c.itunes_deletion_behavior)
@@ -1154,7 +1221,35 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 .map(|(pid, _)| pid.clone())
                 .collect();
 
-            if !deleted_pids.is_empty() {
+            // Same empty/partial-snapshot vector as Phase 0: an empty Music.app
+            // playlist snapshot would otherwise remove every synced playlist from
+            // the DB. Guard it. Playlists don't flow through Sync Review, so here
+            // we skip-and-warn — the playlists remain until a healthy sync
+            // confirms the removal.
+            let synced_playlist_count = db_snapshot
+                .values()
+                .filter(|(_name, _is_folder, _parent, _tracks, sync_enabled)| *sync_enabled)
+                .count();
+            if !deleted_pids.is_empty()
+                && removal_is_suspicious(deleted_pids.len(), music_playlists.len(), synced_playlist_count)
+            {
+                let reason = if music_playlists.is_empty() {
+                    "Music.app reported 0 playlists (library empty or still loading)".to_string()
+                } else {
+                    format!(
+                        "batch exceeds safety threshold ({} of {} synced)",
+                        deleted_pids.len(),
+                        synced_playlist_count
+                    )
+                };
+                let warn = format!(
+                    "Skipped removal of {} playlist(s): {}. They remain until a healthy sync confirms.",
+                    deleted_pids.len(),
+                    reason
+                );
+                println!("{}", warn);
+                app.state::<crate::logging::LogState>().add_log("WARN", &warn, &app);
+            } else if !deleted_pids.is_empty() {
                 match db.remove_playlists_by_persistent_ids(&deleted_pids) {
                     Ok(names) => {
                         let count = names.len();
@@ -3018,6 +3113,42 @@ pub async fn restore_playlist_backup(
 mod tests {
     use super::*;
     use crate::db::Database;
+
+    #[test]
+    fn suspicious_when_snapshot_empty_but_linked() {
+        // Empty/loading Music.app library while we have linked tracks.
+        assert!(removal_is_suspicious(1000, 0, 1000));
+        assert!(removal_is_suspicious(1, 0, 1));
+    }
+
+    #[test]
+    fn suspicious_when_batch_over_threshold() {
+        // linked=1000 -> threshold = max(25, 200) = 200.
+        assert!(removal_is_suspicious(201, 800, 1000));
+        assert!(!removal_is_suspicious(200, 800, 1000));
+    }
+
+    #[test]
+    fn not_suspicious_for_small_absolute_batch() {
+        // Floor protects normal small deletions regardless of library size.
+        assert!(!removal_is_suspicious(10, 90, 100)); // 10% but under floor
+        assert!(!removal_is_suspicious(25, 75, 100)); // exactly floor, not over
+        assert!(!removal_is_suspicious(5, 4995, 5000));
+    }
+
+    #[test]
+    fn small_library_floor_over_proportion() {
+        // linked=100 -> threshold = max(25, 20) = 25. Must exceed the floor,
+        // not just the 20% proportion, to trip.
+        assert!(!removal_is_suspicious(20, 80, 100));
+        assert!(removal_is_suspicious(26, 74, 100));
+    }
+
+    #[test]
+    fn never_suspicious_with_nothing_linked() {
+        assert!(!removal_is_suspicious(0, 0, 0));
+        assert!(!removal_is_suspicious(0, 500, 0));
+    }
 
     fn ghost(spotify_id: &str) -> Track {
         Track {
