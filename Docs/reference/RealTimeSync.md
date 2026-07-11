@@ -32,6 +32,16 @@ engine runs at all:
 overwrite the DB comment/grouping or preserve them (`insert_track_preserving_comment`),
 since in `ImportOnly` the audio file is the golden source for those fields.
 
+**Comment push is read-merge (iTunes owns the note, TagDeck owns the tag block).**
+TagDeck stores tags inside the Comments field as `"<user note> && tag1; tag2"`. When a
+**tag** edit pushes to Music.app (`batch_update_track_comments`, and the single-track
+`write_tags` path), the JXA reads each track's *live* comment, keeps the user note before
+the first `" && "`, and replaces only the tag block (`tag_block_of` derives it) — so a
+stale DB copy of the note can never overwrite the user's live iTunes note. The one path
+where the user *authors* the note in TagDeck (inline comment-column edit → `update_track_info`,
+plus its undo and Sync Review "keep TagDeck side") still uses `update_track_comment`, a
+direct `set comment` — there the user's edit is authoritative.
+
 ## Architecture
 
 The system relies on four components:

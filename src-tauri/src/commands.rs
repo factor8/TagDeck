@@ -400,7 +400,10 @@ pub async fn write_tags(
     let push_enabled = LibraryConfig::sync_mode(&db).push_enabled();
     if push_enabled {
         if let Some(itunes_pid) = &track.itunes_pid {
-            if let Err(e) = update_track_comment(itunes_pid, &new_tags) {
+            // Read-merge: this is a tag edit (the editor's free-text field is
+            // read-only), so push via the tag-block path to preserve the live
+            // iTunes note instead of overwriting it with our stored copy.
+            if let Err(e) = batch_update_track_comments(vec![(itunes_pid.clone(), new_tags.clone())]) {
                  println!("Warning: Failed to update track in Music: {}", e);
             }
         }

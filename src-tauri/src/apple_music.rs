@@ -243,8 +243,20 @@ pub fn update_track_comment(persistent_id: &str, comment: &str) -> Result<()> {
     Ok(())
 }
 
-/// Batch updates comments for multiple tracks using a single JXA (JavaScript for Automation) call.
-/// This acts as a massive performance optimization over calling `osascript` per track.
+/// The tag-block portion of a TagDeck comment (`"user && tag1; tag2"`) — i.e.
+/// everything after the first `" && "`. Empty when the comment has no tag block.
+/// TagDeck owns this portion; the free-text before `" && "` belongs to the user.
+pub fn tag_block_of(full_comment: &str) -> &str {
+    full_comment.splitn(2, " && ").nth(1).unwrap_or("")
+}
+
+/// Batch updates the tag block for multiple tracks using a single JXA
+/// (JavaScript for Automation) call. Read-merge: each track's *live* Music.app
+/// comment is read first, its user free-text (everything before the first
+/// `" && "`) is preserved, and only the tag block is replaced. This prevents a
+/// stale DB copy of the user's note from overwriting whatever is currently in
+/// iTunes. `updates` carries the full TagDeck comment (`"user && tags"`); only
+/// its tag block is used — the user portion always comes from the live track.
 pub fn batch_update_track_comments(updates: Vec<(String, String)>) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
@@ -252,16 +264,21 @@ pub fn batch_update_track_comments(updates: Vec<(String, String)>) -> Result<()>
             return Ok(());
         }
 
-        // Temporary struct for JSON serialization
+        // Temporary struct for JSON serialization. We send only the tag block;
+        // the user free-text is re-read live inside the JXA per track.
         #[derive(Serialize)]
         struct TrackUpdate {
             id: String, // Persistent ID
-            comment: String,
+            #[serde(rename = "tagBlock")]
+            tag_block: String,
         }
 
         let payload: Vec<TrackUpdate> = updates
-            .into_iter()
-            .map(|(id, comment)| TrackUpdate { id, comment })
+            .iter()
+            .map(|(id, comment)| TrackUpdate {
+                id: id.clone(),
+                tag_block: tag_block_of(comment).to_string(),
+            })
             .collect();
 
         // Serialize data to pass to JXA
@@ -270,23 +287,37 @@ pub fn batch_update_track_comments(updates: Vec<(String, String)>) -> Result<()>
         // JXA Script
         // Logic: Checks if Music is running, interprets JSON, and loops internally.
         // `whose({ persistentID: ... })` is the most efficient native selector for this.
+        // Read-merge: preserve the live user note, replace only the tag block.
         let script = r#"
         function run(argv) {
             const app = Application('Music');
-            
+
             // Exit early to avoid launching Music if it's closed
             if (!app.running()) return;
 
             const updates = JSON.parse(argv[0]);
-            
+            const SEP = " && ";
+
             updates.forEach(function(item) {
                 try {
-                    // 'whose' returns a live reference collection. 
+                    // 'whose' returns a live reference collection.
                     const tracks = app.tracks.whose({ persistentID: item.id });
-                    
+
                     if (tracks.length > 0) {
-                        // Update the first match
-                        tracks[0].comment = item.comment;
+                        // Preserve the live user note (text before the first SEP);
+                        // TagDeck only owns the tag block after it.
+                        const live = tracks[0].comment() || "";
+                        const idx = live.indexOf(SEP);
+                        const user = idx === -1 ? live : live.substring(0, idx);
+                        let next;
+                        if (!item.tagBlock) {
+                            next = user;
+                        } else if (user === "") {
+                            next = SEP + item.tagBlock;
+                        } else {
+                            next = user + SEP + item.tagBlock;
+                        }
+                        tracks[0].comment = next;
                     }
                 } catch (e) {
                     // Swallow errors for individual tracks so the batch continues
@@ -1096,5 +1127,34 @@ pub fn add_file_to_music_library(file_path: &str) -> Result<String> {
     #[cfg(not(target_os = "macos"))]
     {
         Err(anyhow::anyhow!("Apple Music is only available on macOS"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_block_of_extracts_tags_after_delimiter() {
+        assert_eq!(tag_block_of("my note && house; deep"), "house; deep");
+    }
+
+    #[test]
+    fn tag_block_of_empty_when_no_delimiter() {
+        // Whole comment is user free-text; no tag block to push.
+        assert_eq!(tag_block_of("just a note"), "");
+        assert_eq!(tag_block_of(""), "");
+    }
+
+    #[test]
+    fn tag_block_of_handles_empty_user_prefix() {
+        // TagDeck's empty-user format: leading " && tags".
+        assert_eq!(tag_block_of(" && house; deep"), "house; deep");
+    }
+
+    #[test]
+    fn tag_block_of_splits_on_first_delimiter_only() {
+        // A literal " && " inside the tag block stays in the tag block.
+        assert_eq!(tag_block_of("note && a && b"), "a && b");
     }
 }
