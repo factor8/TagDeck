@@ -1218,6 +1218,34 @@ impl Database {
         Ok(())
     }
 
+    /// Returns a track's current position within a playlist, or None if absent.
+    /// Captured before a removal so an undo can restore the original slot.
+    pub fn get_track_position_in_playlist(&self, playlist_id: i64, track_id: i64) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let pos = self.conn.query_row(
+            "SELECT position FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist_id, track_id],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(pos)
+    }
+
+    /// Re-inserts a track at a specific position, shifting existing tracks at or
+    /// after that position down by one to make room. Used by undo of a removal to
+    /// restore the track's original slot. Inserting removed tracks in ascending
+    /// captured-position order reproduces the original ordering exactly.
+    pub fn insert_track_in_playlist_at(&self, playlist_id: i64, track_id: i64, position: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE playlist_tracks SET position = position + 1 WHERE playlist_id = ?1 AND position >= ?2",
+            params![playlist_id, position],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+            params![playlist_id, track_id, position],
+        )?;
+        Ok(())
+    }
+
     /// Removes multiple tracks from a playlist and re-numbers positions.
     pub fn remove_tracks_from_playlist(&self, playlist_id: i64, track_ids: &[i64]) -> Result<()> {
         for tid in track_ids {
@@ -2402,6 +2430,38 @@ mod tests {
             source: "spotify".into(),
             spotify_id: Some(spotify_id.to_string()),
         }
+    }
+
+    /// Removing tracks from the middle of a playlist and then re-inserting them
+    /// at their captured positions (ascending) must reproduce the original order.
+    /// This is the DB half of playlist-removal undo.
+    #[test]
+    fn remove_then_reinsert_at_positions_restores_order() {
+        let db = Database::new(":memory:").unwrap();
+        let pl = db.create_playlist("Crate", None, false, "PL-1").unwrap();
+        // A0 B1 C2 D3 E4 F5
+        let ids: Vec<i64> = (0..6)
+            .map(|i| db.insert_imported_track(&ghost(&format!("pos-{}", i)), None, None).unwrap())
+            .collect();
+        for id in &ids {
+            db.add_track_to_playlist_db(pl.id, *id).unwrap();
+        }
+        assert_eq!(db.get_playlist_track_ids(pl.id).unwrap(), ids);
+
+        // Remove C (pos 2) and E (pos 4); capture positions first.
+        let cp = db.get_track_position_in_playlist(pl.id, ids[2]).unwrap().unwrap();
+        let ep = db.get_track_position_in_playlist(pl.id, ids[4]).unwrap().unwrap();
+        assert_eq!((cp, ep), (2, 4));
+        db.remove_tracks_from_playlist(pl.id, &[ids[2], ids[4]]).unwrap();
+        assert_eq!(
+            db.get_playlist_track_ids(pl.id).unwrap(),
+            vec![ids[0], ids[1], ids[3], ids[5]]
+        );
+
+        // Undo: re-insert in ascending captured-position order.
+        db.insert_track_in_playlist_at(pl.id, ids[2], cp).unwrap();
+        db.insert_track_in_playlist_at(pl.id, ids[4], ep).unwrap();
+        assert_eq!(db.get_playlist_track_ids(pl.id).unwrap(), ids, "original order restored");
     }
 
     #[test]

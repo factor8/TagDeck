@@ -11,8 +11,8 @@ Keyboard and mouse shortcuts for TagDeck. On Windows/Linux, use **⌃ Ctrl** whe
 | **⌘ 0** | Show the **All Tracks** view |
 | **⌘ ,** | Open/close Settings |
 | **Esc** | Blur the search bar if focused; otherwise clear the current track selection |
-| **⌘ Z** | Undo the last tag edit |
-| **⌘ ⇧ Z** | Redo the last tag edit |
+| **⌘ Z** | Undo the last change — a tag/info edit, a playlist add, or a playlist removal (removed tracks return to their original position) |
+| **⌘ ⇧ Z** | Redo the last undone change |
 | **⌃ Y** | Redo (Windows/Linux) |
 | **⌘ ⌥ L** | Toggle the Logs window |
 

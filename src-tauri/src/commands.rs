@@ -12,7 +12,7 @@ use crate::apple_music::{
     get_all_music_app_pids, get_tracks_by_persistent_ids
 };
 use crate::models::{Track, Playlist};
-use crate::undo::{UndoStack, Action, TrackState, TrackRef};
+use crate::undo::{UndoStack, Action, TrackState, TrackRef, RemovedTrackRef};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{State, Manager};
@@ -1691,7 +1691,11 @@ pub async fn remove_from_playlist(
         let mut data = Vec::new();
         for tid in &track_ids {
             if db.get_track_persistent_id(*tid).is_ok() {
-                data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None)));
+                // Capture the current slot so undo can restore the original order.
+                let position = db.get_track_position_in_playlist(playlist_id, *tid)
+                    .unwrap_or(None)
+                    .unwrap_or(i64::MAX);
+                data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None), position));
             }
         }
         let mode = LibraryConfig::sync_mode(&db);
@@ -1701,7 +1705,7 @@ pub async fn remove_from_playlist(
     // Remove from Apple Music (only for synced playlists, linked tracks,
     // and when the sync mode allows pushing TagDeck edits back to Music.app)
     if sync_enabled && mode.push_enabled() {
-        for (_, itunes_pid) in &track_data {
+        for (_, itunes_pid, _) in &track_data {
             if let Some(tpid) = itunes_pid {
                 if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
                     let msg = format!("Failed to remove track from playlist in Music.app: {}", e);
@@ -1714,11 +1718,29 @@ pub async fn remove_from_playlist(
     // Remove from local DB
     let removed = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-        let tids: Vec<i64> = track_data.iter().map(|(id, _)| *id).collect();
+        let tids: Vec<i64> = track_data.iter().map(|(id, _, _)| *id).collect();
         db.remove_tracks_from_playlist(playlist_id, &tids)
             .map_err(|e| e.to_string())?;
         tids.len()
     };
+
+    // Push Undo Action (mirror of AddToPlaylist) so a removal can be reversed.
+    if !track_data.is_empty() {
+        let removed_tracks: Vec<RemovedTrackRef> = track_data.iter().map(|(id, itunes_pid, position)| RemovedTrackRef {
+            id: *id,
+            // Used only for Music.app write-back; empty = unlinked, skipped
+            persistent_id: itunes_pid.clone().unwrap_or_default(),
+            position: *position,
+        }).collect();
+
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::RemoveFromPlaylist {
+                playlist_id,
+                playlist_persistent_id: playlist_pid.clone(),
+                tracks: removed_tracks,
+            });
+        }
+    }
 
     Ok(removed)
 }

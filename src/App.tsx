@@ -807,29 +807,32 @@ function App() {
                  if (e.shiftKey) {
                      // Redo
                      e.preventDefault();
-                     invoke('redo')
-                        .then(() => {
+                     invoke<string | null>('redo')
+                        .then((msg) => {
+                            if (!msg) return; // nothing on the redo stack
                             setRefreshTrigger(p => p + 1);
-                            showSuccess("Redone");
+                            showSuccess(msg);
                         })
                         .catch(err => console.error(err));
                  } else {
                      // Undo
                      e.preventDefault();
-                     invoke('undo')
-                        .then(() => {
+                     invoke<string | null>('undo')
+                        .then((msg) => {
+                            if (!msg) return; // nothing on the undo stack
                             setRefreshTrigger(p => p + 1);
-                            showSuccess("Undone");
+                            showSuccess(msg);
                         })
                         .catch(err => console.error(err));
                  }
              } else if (e.key.toLowerCase() === 'y' && !navigator.platform.toUpperCase().includes('MAC')) {
                  // Windows/Linux Redo (Ctrl+Y)
                  e.preventDefault();
-                 invoke('redo')
-                    .then(() => {
+                 invoke<string | null>('redo')
+                    .then((msg) => {
+                        if (!msg) return;
                         setRefreshTrigger(p => p + 1);
-                        showSuccess("Redone");
+                        showSuccess(msg);
                     })
                     .catch(err => console.error(err));
              }

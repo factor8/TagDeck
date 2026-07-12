@@ -19,6 +19,12 @@ pub enum Action {
     UpdateTrackInfo {
         track: TrackInfoState,
     },
+    RemoveFromPlaylist {
+        playlist_id: i64,
+        playlist_persistent_id: String,
+        // Tracks removed, each with its original position so undo can restore the slot
+        tracks: Vec<RemovedTrackRef>,
+    },
 }
 
 /// Stores old and new values for a track info edit (title, artist, album, bpm, comment).
@@ -53,6 +59,17 @@ pub struct TrackState {
 pub struct TrackRef {
     pub id: i64,
     pub persistent_id: String,
+}
+
+/// A track removed from a playlist, captured for undo. `persistent_id` is the
+/// track's Music.app (iTunes) persistent ID — empty for unlinked tracks, in
+/// which case the Music.app write-back is skipped. `position` is the track's
+/// original slot in the playlist, restored on undo.
+#[derive(Debug, Clone)]
+pub struct RemovedTrackRef {
+    pub id: i64,
+    pub persistent_id: String,
+    pub position: i64,
 }
 
 pub struct UndoStack {
@@ -163,8 +180,42 @@ impl UndoStack {
                     apply_track_info(db, track, true);
                     "Undo Edit Track Info".to_string()
                 }
+                Action::RemoveFromPlaylist { playlist_id, playlist_persistent_id, tracks } => {
+                    // Reverse: re-add the removed tracks.
+
+                    // 1. DB — restore each track to its original slot. Inserting in
+                    // ascending captured-position order reproduces the original order.
+                    let mut ordered: Vec<&RemovedTrackRef> = tracks.iter().collect();
+                    ordered.sort_by_key(|t| t.position);
+                    for track in &ordered {
+                        if let Err(e) = db.insert_track_in_playlist_at(*playlist_id, track.id, track.position) {
+                            eprintln!("Undo Remove: DB re-insert error: {}", e);
+                        }
+                    }
+
+                    // 2. Apple Music (only for synced playlists, when the sync mode
+                    // allows pushing). Music.app has no insert-at-position, so this
+                    // appends; the DB above is the source of truth for order.
+                    #[cfg(target_os = "macos")]
+                    if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled()
+                        && db.get_playlist_sync_enabled(*playlist_id).unwrap_or(false)
+                    {
+                        for track in tracks {
+                            if track.persistent_id.is_empty() {
+                                continue; // unlinked track — nothing to add in Music.app
+                            }
+                            let _ = crate::apple_music::add_track_to_playlist(&track.persistent_id, playlist_persistent_id);
+                        }
+                    }
+
+                    if tracks.len() == 1 {
+                        "Undo Remove from Playlist".to_string()
+                    } else {
+                        format!("Undo Remove from Playlist ({} tracks)", tracks.len())
+                    }
+                }
             };
-            
+
             self.redo_stack.push(action);
             Ok(Some(message))
         } else {
@@ -238,8 +289,37 @@ impl UndoStack {
                     apply_track_info(db, track, false);
                     "Redo Edit Track Info".to_string()
                 }
+                Action::RemoveFromPlaylist { playlist_id, playlist_persistent_id, tracks } => {
+                    // Re-apply the removal.
+
+                    // 1. Apple Music (only for synced playlists, when the sync mode
+                    // allows pushing).
+                    #[cfg(target_os = "macos")]
+                    if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled()
+                        && db.get_playlist_sync_enabled(*playlist_id).unwrap_or(false)
+                    {
+                        for track in tracks {
+                            if track.persistent_id.is_empty() {
+                                continue;
+                            }
+                            let _ = crate::apple_music::remove_track_from_playlist(&track.persistent_id, playlist_persistent_id);
+                        }
+                    }
+
+                    // 2. DB — remove and re-number remaining positions.
+                    let ids: Vec<i64> = tracks.iter().map(|t| t.id).collect();
+                    if let Err(e) = db.remove_tracks_from_playlist(*playlist_id, &ids) {
+                        eprintln!("Redo Remove: DB error: {}", e);
+                    }
+
+                    if tracks.len() == 1 {
+                        "Redo Remove from Playlist".to_string()
+                    } else {
+                        format!("Redo Remove from Playlist ({} tracks)", tracks.len())
+                    }
+                }
              };
-             
+
              self.undo_stack.push(action);
              Ok(Some(message))
         } else {

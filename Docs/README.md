@@ -42,6 +42,7 @@ Data-loss safety fixes (from the file/data-loss risk audit):
 - Move-import safety — [spec](superpowers/specs/2026-07-12-move-import-safety-design.md)
 - Atomic tag writes — [spec](superpowers/specs/2026-07-12-atomic-tag-writes-design.md)
 - Safe playlist reorder — [spec](superpowers/specs/2026-07-12-safe-playlist-reorder-design.md)
+- Undo playlist-track removal (with position restore) — [spec](superpowers/specs/2026-07-12-undo-playlist-removal-design.md)
 
 ## Archive (historical)
 
