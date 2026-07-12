@@ -66,7 +66,7 @@ export function TagDeck({ onTagClick, currentTrackTags, refreshTrigger, keyboard
     };
 
     const handleDeleteGroup = async (id: number) => {
-        if (!confirm('Are you sure you want to delete this group? Tags will be ungrouped.')) return;
+        if (!confirm('Delete this group? Its tags will be ungrouped. You can undo this with ⌘Z.')) return;
         try {
             await invoke('delete_tag_group', { id });
             loadData();

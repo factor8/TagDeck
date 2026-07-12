@@ -1,6 +1,7 @@
 use crate::db::Database;
 use crate::apple_music::{batch_update_track_comments, update_track_info as apple_update_track_info, update_track_comment, update_track_rating as apple_update_track_rating, touch_file};
 use crate::db::DeletedPlaylistSnapshot;
+use crate::models::{Tag, TagGroup};
 use crate::metadata::{write_metadata as write_tags_to_file, write_track_info};
 use anyhow::Result;
 use std::process::Command;
@@ -36,6 +37,33 @@ pub enum Action {
     DeletePlaylist {
         // Full subtree snapshot (target + folder children + memberships), restored on undo
         snapshot: DeletedPlaylistSnapshot,
+    },
+    DeleteTag {
+        tag: Tag,
+    },
+    DeleteTagGroup {
+        group: TagGroup,
+    },
+    ReorderPlaylistTracks {
+        playlist_id: i64,
+        playlist_persistent_id: String,
+        old_order: Vec<i64>,
+        new_order: Vec<i64>,
+    },
+    MovePlaylist {
+        playlist_id: i64,
+        old_parent_pid: Option<String>,
+        new_parent_pid: Option<String>,
+    },
+    RenamePlaylist {
+        playlist_id: i64,
+        playlist_persistent_id: String,
+        old_name: String,
+        new_name: String,
+    },
+    ReorderSiblingPlaylists {
+        old_order: Vec<i64>,
+        new_order: Vec<i64>,
     },
 }
 
@@ -241,6 +269,38 @@ impl UndoStack {
                         format!("Undo Delete \"{}\"", name)
                     }
                 }
+                Action::DeleteTag { tag } => {
+                    if let Err(e) = db.insert_tag_row(tag) {
+                        eprintln!("Undo Delete Tag Error: {}", e);
+                    }
+                    format!("Undo Delete Tag \"{}\"", tag.name)
+                }
+                Action::DeleteTagGroup { group } => {
+                    if let Err(e) = db.insert_tag_group_row(group) {
+                        eprintln!("Undo Delete Tag Group Error: {}", e);
+                    }
+                    format!("Undo Delete Group \"{}\"", group.name)
+                }
+                Action::ReorderPlaylistTracks { playlist_id, playlist_persistent_id, old_order, .. } => {
+                    apply_track_order(db, *playlist_id, playlist_persistent_id, old_order);
+                    "Undo Reorder Playlist".to_string()
+                }
+                Action::MovePlaylist { playlist_id, old_parent_pid, .. } => {
+                    if let Err(e) = db.move_playlist(*playlist_id, old_parent_pid.as_deref()) {
+                        eprintln!("Undo Move Playlist Error: {}", e);
+                    }
+                    "Undo Move Playlist".to_string()
+                }
+                Action::RenamePlaylist { playlist_id, playlist_persistent_id, old_name, .. } => {
+                    apply_rename(db, *playlist_id, playlist_persistent_id, old_name);
+                    "Undo Rename Playlist".to_string()
+                }
+                Action::ReorderSiblingPlaylists { old_order, .. } => {
+                    if let Err(e) = db.reorder_sibling_playlists(old_order) {
+                        eprintln!("Undo Reorder Sidebar Error: {}", e);
+                    }
+                    "Undo Reorder Sidebar".to_string()
+                }
             };
 
             self.redo_stack.push(action);
@@ -358,12 +418,77 @@ impl UndoStack {
                     }
                     "Redo Delete Playlist".to_string()
                 }
+                Action::DeleteTag { tag } => {
+                    if let Err(e) = db.delete_tag(tag.id) {
+                        eprintln!("Redo Delete Tag Error: {}", e);
+                    }
+                    format!("Redo Delete Tag \"{}\"", tag.name)
+                }
+                Action::DeleteTagGroup { group } => {
+                    if let Err(e) = db.delete_tag_group(group.id) {
+                        eprintln!("Redo Delete Tag Group Error: {}", e);
+                    }
+                    format!("Redo Delete Group \"{}\"", group.name)
+                }
+                Action::ReorderPlaylistTracks { playlist_id, playlist_persistent_id, new_order, .. } => {
+                    apply_track_order(db, *playlist_id, playlist_persistent_id, new_order);
+                    "Redo Reorder Playlist".to_string()
+                }
+                Action::MovePlaylist { playlist_id, new_parent_pid, .. } => {
+                    if let Err(e) = db.move_playlist(*playlist_id, new_parent_pid.as_deref()) {
+                        eprintln!("Redo Move Playlist Error: {}", e);
+                    }
+                    "Redo Move Playlist".to_string()
+                }
+                Action::RenamePlaylist { playlist_id, playlist_persistent_id, new_name, .. } => {
+                    apply_rename(db, *playlist_id, playlist_persistent_id, new_name);
+                    "Redo Rename Playlist".to_string()
+                }
+                Action::ReorderSiblingPlaylists { new_order, .. } => {
+                    if let Err(e) = db.reorder_sibling_playlists(new_order) {
+                        eprintln!("Redo Reorder Sidebar Error: {}", e);
+                    }
+                    "Redo Reorder Sidebar".to_string()
+                }
              };
 
              self.undo_stack.push(action);
              Ok(Some(message))
         } else {
             Ok(None)
+        }
+    }
+}
+
+/// Applies a playlist track order for undo/redo: updates the DB, then pushes the
+/// order to Music.app for synced playlists when the sync mode allows (mirroring
+/// the `reorder_playlist_tracks` command). The Music.app push uses the same safe
+/// reorder as the live command.
+fn apply_track_order(db: &Database, playlist_id: i64, playlist_persistent_id: &str, order: &[i64]) {
+    if let Err(e) = db.reorder_playlist_tracks(playlist_id, order) {
+        eprintln!("Undo/Redo reorder: DB error: {}", e);
+    }
+    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
+    if push_enabled && db.get_playlist_sync_enabled(playlist_id).unwrap_or(false) {
+        let pids: Vec<String> = order.iter()
+            .filter_map(|tid| db.get_track_itunes_pid(*tid).ok().flatten())
+            .collect();
+        if let Err(e) = crate::apple_music::reorder_playlist(playlist_persistent_id, &pids) {
+            eprintln!("Undo/Redo reorder: Music.app error: {}", e);
+        }
+    }
+}
+
+/// Renames a playlist for undo/redo: updates the DB, then renames in Music.app for
+/// synced playlists when the sync mode allows (mirroring the `rename_playlist` command).
+fn apply_rename(db: &Database, playlist_id: i64, playlist_persistent_id: &str, name: &str) {
+    if let Err(e) = db.rename_playlist(playlist_id, name) {
+        eprintln!("Undo/Redo rename: DB error: {}", e);
+    }
+    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
+    if push_enabled && db.get_playlist_sync_enabled(playlist_id).unwrap_or(false) && !playlist_persistent_id.is_empty() {
+        if let Err(e) = crate::apple_music::rename_playlist_in_music(playlist_persistent_id, name) {
+            eprintln!("Undo/Redo rename: Music.app error: {}", e);
         }
     }
 }

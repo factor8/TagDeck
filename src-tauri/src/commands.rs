@@ -1421,22 +1421,35 @@ pub async fn rename_playlist(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
+    let (old_name, playlist_pid, sync_enabled, mode) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let old_name = db.get_playlist_name(id).map_err(|e| e.to_string())?; // capture for undo
+        db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
+        let sync_enabled = db.get_playlist_sync_enabled(id).unwrap_or(false);
+        let pid = db.get_playlist_persistent_id(id).unwrap_or_default();
+        (old_name, pid, sync_enabled, LibraryConfig::sync_mode(&db))
+    };
 
     // If this playlist syncs with iTunes, also rename in Music.app — only when
     // the sync mode allows pushing TagDeck edits back to Music.app
-    let sync_enabled = db.get_playlist_sync_enabled(id).unwrap_or(false);
-    let mode = LibraryConfig::sync_mode(&db);
-    if sync_enabled && mode.push_enabled() {
-        let pid = db.get_playlist_persistent_id(id).map_err(|e| e.to_string())?;
-        drop(db); // Release lock before AppleScript call
-        if let Err(e) = crate::apple_music::rename_playlist_in_music(&pid, &name) {
+    if sync_enabled && mode.push_enabled() && !playlist_pid.is_empty() {
+        if let Err(e) = crate::apple_music::rename_playlist_in_music(&playlist_pid, &name) {
             let msg = format!("Warning: Failed to rename playlist in Music.app: {}", e);
             app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
         }
     }
 
+    // Push Undo (only if the name actually changed).
+    if old_name != name {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::RenamePlaylist {
+                playlist_id: id,
+                playlist_persistent_id: playlist_pid,
+                old_name,
+                new_name: name,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -1553,16 +1566,34 @@ pub async fn move_playlist(
     new_parent_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    // Never hold the DB lock while locking the undo stack (undo/redo lock them in
+    // the opposite order) — capture, mutate, drop DB, then push.
+    let (old_parent_pid, new_parent_persistent_id) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
 
-    let new_parent_persistent_id = if let Some(pid) = new_parent_id {
-        Some(db.get_playlist_persistent_id(pid).map_err(|e| e.to_string())?)
-    } else {
-        None
+        let new_parent_persistent_id = if let Some(pid) = new_parent_id {
+            Some(db.get_playlist_persistent_id(pid).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let old_parent_pid = db.get_playlist_parent(id).unwrap_or(None); // capture for undo
+
+        db.move_playlist(id, new_parent_persistent_id.as_deref())
+            .map_err(|e| e.to_string())?;
+        (old_parent_pid, new_parent_persistent_id)
     };
 
-    db.move_playlist(id, new_parent_persistent_id.as_deref())
-        .map_err(|e| e.to_string())
+    // Push Undo (only if the parent actually changed).
+    if old_parent_pid != new_parent_persistent_id {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::MovePlaylist {
+                playlist_id: id,
+                old_parent_pid,
+                new_parent_pid: new_parent_persistent_id,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1582,9 +1613,24 @@ pub async fn reorder_sibling_playlists(
     ordered_ids: Vec<i64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    db.reorder_sibling_playlists(&ordered_ids)
-        .map_err(|e| e.to_string())
+    let old_order = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let old_order = db.get_sibling_order(&ordered_ids).unwrap_or_default(); // capture for undo
+        db.reorder_sibling_playlists(&ordered_ids)
+            .map_err(|e| e.to_string())?;
+        old_order
+    };
+
+    // Push Undo (only if the order actually changed).
+    if old_order != ordered_ids {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::ReorderSiblingPlaylists {
+                old_order,
+                new_order: ordered_ids,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1778,11 +1824,25 @@ pub async fn reorder_playlist_tracks(
         (ppid, pids, sync_enabled, LibraryConfig::sync_mode(&db))
     };
 
-    // 2. Update local DB
-    {
+    // 2. Update local DB (capturing the prior order for undo first).
+    let old_order = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let old_order = db.get_playlist_track_ids(playlist_id).unwrap_or_default();
         db.reorder_playlist_tracks(playlist_id, &ordered_track_ids)
             .map_err(|e| e.to_string())?;
+        old_order
+    };
+
+    // Push Undo (only if the order actually changed).
+    if old_order != ordered_track_ids {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::ReorderPlaylistTracks {
+                playlist_id,
+                playlist_persistent_id: playlist_pid.clone(),
+                old_order,
+                new_order: ordered_track_ids.clone(),
+            });
+        }
     }
 
     // 3. Sync to Apple Music (in background — don't block the UI), only for
@@ -1959,8 +2019,16 @@ pub async fn update_tag_group(id: i64, name: String, state: State<'_, AppState>)
 
 #[tauri::command]
 pub async fn delete_tag_group(id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
-        .delete_tag_group(id).map_err(|e| e.to_string())
+    let group = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let group = db.get_tag_group_row(id).map_err(|e| e.to_string())?; // capture for undo
+        db.delete_tag_group(id).map_err(|e| e.to_string())?;
+        group
+    };
+    if let Ok(mut stack) = state.undo_stack.lock() {
+        stack.push(Action::DeleteTagGroup { group });
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1984,8 +2052,16 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::model
 
 #[tauri::command]
 pub async fn delete_tag(tag_id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
-        .delete_tag(tag_id).map_err(|e| e.to_string())
+    let tag = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let tag = db.get_tag_row(tag_id).map_err(|e| e.to_string())?; // capture for undo
+        db.delete_tag(tag_id).map_err(|e| e.to_string())?;
+        tag
+    };
+    if let Ok(mut stack) = state.undo_stack.lock() {
+        stack.push(Action::DeleteTag { tag });
+    }
+    Ok(())
 }
 
 #[tauri::command]

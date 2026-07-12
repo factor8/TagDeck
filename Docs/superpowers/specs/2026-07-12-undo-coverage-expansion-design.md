@@ -1,8 +1,14 @@
 # Undo/redo coverage expansion — 8 missing actions
 
 **Date:** 2026-07-12
-**Status:** Proposed
+**Status:** Shipped (all 8 — checkpoint 1: rating + delete_playlist; checkpoint 2: the other six)
 **Type:** Feature (data-recovery / UX)
+
+> **Implementation note.** Commands must never hold the DB lock while acquiring the
+> undo-stack lock — `undo`/`redo` acquire them stack-then-DB, so the reverse order
+> risks a deadlock. Every command captures old state + mutates under the DB lock,
+> **drops it**, then pushes the action. Undo entries are only pushed when the value
+> actually changed (no-op rename/move/reorder/rating records nothing).
 
 ## Goal
 

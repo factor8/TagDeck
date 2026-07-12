@@ -1520,6 +1520,90 @@ impl Database {
         Ok(())
     }
 
+    /// Reads a single tag row (for undo capture before deletion).
+    pub fn get_tag_row(&self, tag_id: i64) -> Result<crate::models::Tag> {
+        Ok(self.conn.query_row(
+            "SELECT id, name, usage_count, group_id, description FROM tags WHERE id = ?1",
+            params![tag_id],
+            |row| Ok(crate::models::Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                usage_count: row.get(2)?,
+                group_id: row.get(3)?,
+                description: row.get(4)?,
+            }),
+        )?)
+    }
+
+    /// Re-inserts a tag row at its original id (undo of a tag deletion). Tracks
+    /// keep the tag text in their comments regardless; this restores the vocab
+    /// entry, its group link, usage count, and description.
+    pub fn insert_tag_row(&self, tag: &crate::models::Tag) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO tags (id, name, usage_count, group_id, description) VALUES (?1,?2,?3,?4,?5)",
+            params![tag.id, tag.name, tag.usage_count, tag.group_id, tag.description],
+        )?;
+        Ok(())
+    }
+
+    /// Reads a single tag-group row (for undo capture before deletion).
+    pub fn get_tag_group_row(&self, id: i64) -> Result<crate::models::TagGroup> {
+        Ok(self.conn.query_row(
+            "SELECT id, name, position FROM tag_groups WHERE id = ?1",
+            params![id],
+            |row| Ok(crate::models::TagGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                position: row.get(2)?,
+            }),
+        )?)
+    }
+
+    /// Re-inserts a tag-group row at its original id (undo of a group deletion).
+    /// Member tags kept their `group_id` (foreign keys are off), so restoring the
+    /// row at the same id re-associates them automatically.
+    pub fn insert_tag_group_row(&self, group: &crate::models::TagGroup) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO tag_groups (id, name, position) VALUES (?1,?2,?3)",
+            params![group.id, group.name, group.position],
+        )?;
+        Ok(())
+    }
+
+    /// A playlist's current parent persistent id (for undo of a move).
+    pub fn get_playlist_parent(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.conn.query_row(
+            "SELECT parent_persistent_id FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// A playlist's current name (for undo of a rename).
+    pub fn get_playlist_name(&self, id: i64) -> Result<String> {
+        Ok(self.conn.query_row(
+            "SELECT name FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Returns the given playlist ids ordered by their current `sort_position`
+    /// (for capturing the pre-reorder sidebar order before applying a new one).
+    pub fn get_sibling_order(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        let mut with_pos: Vec<(i64, i64)> = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let pos: i64 = self.conn.query_row(
+                "SELECT COALESCE(sort_position, 0) FROM playlists WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            with_pos.push((id, pos));
+        }
+        with_pos.sort_by_key(|(_, pos)| *pos);
+        Ok(with_pos.into_iter().map(|(id, _)| id).collect())
+    }
+
     /// Set (or clear, with None) a tag's optional zero-shot prompt override.
     pub fn set_tag_description(&self, tag_id: i64, description: Option<&str>) -> Result<()> {
         self.conn.execute(
@@ -2594,6 +2678,40 @@ mod tests {
         let restored_child = pls.iter().find(|p| p.id == child.id).expect("child restored at original id");
         assert_eq!(restored_child.parent_persistent_id.as_deref(), Some("FOLDER-1"));
         assert_eq!(db.get_playlist_track_ids(child.id).unwrap(), ids, "membership + order restored");
+    }
+
+    /// Tag / tag-group delete-undo relies on capturing the row and re-inserting it
+    /// at the original id. Round-trip the getters/inserters.
+    #[test]
+    fn tag_and_group_row_roundtrip_preserves_id_and_fields() {
+        let db = Database::new(":memory:").unwrap();
+        let group = crate::models::TagGroup { id: 5, name: "Mood".into(), position: 2 };
+        db.insert_tag_group_row(&group).unwrap();
+        let got_group = db.get_tag_group_row(5).unwrap();
+        assert_eq!((got_group.name.as_str(), got_group.position), ("Mood", 2));
+
+        let tag = crate::models::Tag {
+            id: 7, name: "deep".into(), usage_count: 3, group_id: Some(5),
+            description: Some("prompt".into()),
+        };
+        db.insert_tag_row(&tag).unwrap();
+        let got = db.get_tag_row(7).unwrap();
+        assert_eq!(got.name, "deep");
+        assert_eq!(got.usage_count, 3);
+        assert_eq!(got.group_id, Some(5));
+        assert_eq!(got.description.as_deref(), Some("prompt"));
+    }
+
+    /// Sibling-reorder undo captures the pre-reorder order via sort_position.
+    #[test]
+    fn get_sibling_order_sorts_by_sort_position() {
+        let db = Database::new(":memory:").unwrap();
+        let a = db.create_playlist("A", None, false, "S-A").unwrap(); // sort_position 0
+        let b = db.create_playlist("B", None, false, "S-B").unwrap(); // 1
+        let c = db.create_playlist("C", None, false, "S-C").unwrap(); // 2
+        // Regardless of the id order passed in, result is by current sort_position.
+        let order = db.get_sibling_order(&[c.id, a.id, b.id]).unwrap();
+        assert_eq!(order, vec![a.id, b.id, c.id]);
     }
 
     #[test]

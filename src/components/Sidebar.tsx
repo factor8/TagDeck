@@ -1376,7 +1376,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                           ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Apple Music.`
                           : deleteTarget.origin === 'spotify'
                           ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Spotify — you can re-import it later.`
-                          : `Are you sure you want to permanently delete "${deleteTarget.name}"? This cannot be undone.`
+                          : `Are you sure you want to delete "${deleteTarget.name}" from TagDeck? You can undo this with ⌘Z.`
                       }
                       {deleteTarget.is_folder && deleteTarget.children.length > 0 && (
                           <><br /><br /><strong>This folder contains {deleteTarget.children.length} item{deleteTarget.children.length !== 1 ? 's' : ''} that will also be deleted.</strong></>
