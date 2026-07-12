@@ -41,6 +41,7 @@ Data-loss safety fixes (from the file/data-loss risk audit):
 - iTunes comment read-merge — [spec](superpowers/specs/2026-07-11-itunes-comment-readmerge-design.md)
 - Move-import safety — [spec](superpowers/specs/2026-07-12-move-import-safety-design.md)
 - Atomic tag writes — [spec](superpowers/specs/2026-07-12-atomic-tag-writes-design.md)
+- Safe playlist reorder — [spec](superpowers/specs/2026-07-12-safe-playlist-reorder-design.md)
 
 ## Archive (historical)
 

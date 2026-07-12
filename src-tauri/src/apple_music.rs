@@ -596,50 +596,86 @@ pub fn remove_track_from_playlist(track_pid: &str, playlist_pid: &str) -> Result
 /// This is the only reliable way to reorder via AppleScript since Music.app doesn't expose
 /// a direct "move track to position" API.
 pub fn reorder_playlist(playlist_pid: &str, track_pids: &[String]) -> Result<()> {
+    // Never run the destructive delete-then-re-add against an empty target set — that would
+    // wipe the Music.app playlist. Nothing to push if no linked tracks were resolved.
+    if track_pids.is_empty() {
+        return Ok(());
+    }
+
     #[cfg(target_os = "macos")]
     {
-        // Build a comma-separated list of quoted PIDs for the AppleScript
-        let pid_list: Vec<String> = track_pids.iter().map(|p| format!("\"{}\"" , p)).collect();
+        // Build a comma-separated list of quoted PIDs for the AppleScript list literal.
+        let pid_list: Vec<String> = track_pids.iter().map(|p| format!("\"{}\"", p)).collect();
         let pid_array = pid_list.join(", ");
 
-        let script = format!(
-            r##"
+        // Built via placeholder replacement (not format!) so AppleScript's many literal
+        // list braces `{}` don't need escaping. Safety properties:
+        //   * target must be a user playlist (never the library or a folder);
+        //   * every desired track is resolved BEFORE any deletion — a missing PID aborts
+        //     with the playlist untouched (no silent shrink);
+        //   * the destructive rebuild is wrapped so ANY failure (bad duplicate, or a final
+        //     count mismatch) restores the original membership before erroring;
+        //   * success returns "OK"; failure raises an AppleScript error → osascript exits
+        //     non-zero → surfaced to the caller instead of being swallowed.
+        const TEMPLATE: &str = r#"
             if application "Music" is running then
                 tell application "Music"
+                    set thePlaylist to (first playlist whose persistent ID is "__PLAYLIST_PID__")
+                    if class of thePlaylist is not user playlist then
+                        error "reorder target is not a user playlist"
+                    end if
+
+                    -- Snapshot current membership so we can restore on failure.
+                    set originalPIDs to (get persistent ID of every track of thePlaylist)
+
+                    set desiredPIDs to {__PID_ARRAY__}
+
+                    -- Resolve every desired track BEFORE deleting anything. No swallowing
+                    -- try here: an unresolvable PID aborts with the playlist intact.
+                    set trackRefs to {}
+                    repeat with pid in desiredPIDs
+                        set end of trackRefs to (first track whose persistent ID is pid)
+                    end repeat
+                    if (count of trackRefs) is not (count of desiredPIDs) then
+                        error "could not resolve all tracks for reorder"
+                    end if
+
+                    -- Destructive section: any failure restores the original membership.
+                    delete every track of thePlaylist
                     try
-                        set thePlaylist to (first playlist whose persistent ID is "{}")
-                        set trackPIDs to {{{}}}
-                        
-                        -- Collect references to the tracks before deleting
-                        set trackRefs to {{}}
-                        repeat with pid in trackPIDs
-                            try
-                                set end of trackRefs to (first track whose persistent ID is pid)
-                            end try
-                        end repeat
-                        
-                        -- Delete all tracks from the playlist
-                        delete every track of thePlaylist
-                        
-                        -- Re-add in the desired order
                         repeat with aTrack in trackRefs
+                            duplicate aTrack to thePlaylist
+                        end repeat
+                        if (count of tracks of thePlaylist) is not (count of desiredPIDs) then
+                            error "playlist count mismatch after reorder"
+                        end if
+                    on error rebuildErr
+                        try
+                            delete every track of thePlaylist
+                        end try
+                        repeat with opid in originalPIDs
                             try
-                                duplicate aTrack to thePlaylist
+                                duplicate (first track whose persistent ID is opid) to thePlaylist
                             end try
                         end repeat
-                    on error errMsg
-                        -- log but don't fail
+                        error "reorder failed (" & rebuildErr & "); restored original playlist"
                     end try
+
+                    return "OK"
                 end tell
             end if
-            "##,
-            playlist_pid, pid_array
-        );
+        "#;
 
-        Command::new("osascript")
-            .arg("-e")
-            .arg(&script)
-            .output()?;
+        let script = TEMPLATE
+            .replace("__PLAYLIST_PID__", playlist_pid)
+            .replace("__PID_ARRAY__", &pid_array);
+
+        let output = Command::new("osascript").arg("-e").arg(&script).output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Music.app reorder failed: {}", stderr.trim());
+        }
     }
     Ok(())
 }
@@ -1156,5 +1192,12 @@ mod tests {
     fn tag_block_of_splits_on_first_delimiter_only() {
         // A literal " && " inside the tag block stays in the tag block.
         assert_eq!(tag_block_of("note && a && b"), "a && b");
+    }
+
+    #[test]
+    fn reorder_playlist_noops_on_empty_set() {
+        // An empty desired set must never run the destructive delete-then-re-add
+        // (which would wipe the Music.app playlist) — it returns Ok without touching anything.
+        assert!(reorder_playlist("SOMEPID", &[]).is_ok());
     }
 }
