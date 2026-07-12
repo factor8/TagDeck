@@ -70,6 +70,7 @@ The existing sync engine already computes every diff we need (Phase 0 adds/remov
 ### File management (always-on, not a fallback)
 
 - Library root / Copy-Move-InPlace / organize settings become always visible. In Two-way mode with "add to Music.app" enabled, Music still organizes files (current behavior); otherwise `file_manager` handles every import.
+  - **Move-mode safety** (`import_file`): `Move` is the only mode that removes a user's original. It copies to the library, then **content-hashes** source vs destination (SHA-256, not a size comparison) and removes the original only when they match; the original goes to the **Trash** (`trash` crate), never a hard delete. Any failure to verify or trash leaves the original untouched. The settings UI labels it "deletes originals" and confirms before switching to it.
 - Populate the existing dead `file_hash` column on import; dedup by hash **or** path (today it's path-only).
 - Extend `library_watcher` to also watch the TagDeck root: mark tracks `missing` on delete, offer relocate on move.
 - Add **Consolidate Library**: copy all InPlace/external tracks into the organized root (already sketched in [FileManagementPlan.md](../roadmap/FileManagementPlan.md)).

@@ -36,6 +36,11 @@ Design specs and task-by-task implementation plans for features built via spec-d
 - Play queue — [spec](superpowers/specs/2026-07-07-play-queue-design.md) · [plan](superpowers/plans/2026-07-07-play-queue.md)
 - Vocabulary expansion — [spec](superpowers/specs/2026-07-07-vocabulary-expansion-design.md) · [plan](superpowers/plans/2026-07-07-vocabulary-expansion.md)
 
+Data-loss safety fixes (from the file/data-loss risk audit):
+- Mass-removal safety guard — [spec](superpowers/specs/2026-07-11-mass-removal-safety-guard-design.md)
+- iTunes comment read-merge — [spec](superpowers/specs/2026-07-11-itunes-comment-readmerge-design.md)
+- Move-import safety — [spec](superpowers/specs/2026-07-12-move-import-safety-design.md)
+
 ## Archive (historical)
 
 Superseded plans and Feb-2026 snapshots, each with a banner explaining why. Notable: `PRD.md` (original vision), `THE_STORY_OF_THIS_REPO.md` / `REPOSITORY_SUMMARY.md` (origin-sprint snapshots), and `BpmKeyAnalysis.md` (a native BPM/key-detection plan that was never built — TagDeck uses Mixed In Key instead).
