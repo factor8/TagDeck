@@ -1,5 +1,6 @@
 use crate::db::Database;
-use crate::apple_music::{batch_update_track_comments, update_track_info as apple_update_track_info, update_track_comment, touch_file};
+use crate::apple_music::{batch_update_track_comments, update_track_info as apple_update_track_info, update_track_comment, update_track_rating as apple_update_track_rating, touch_file};
+use crate::db::DeletedPlaylistSnapshot;
 use crate::metadata::{write_metadata as write_tags_to_file, write_track_info};
 use anyhow::Result;
 use std::process::Command;
@@ -24,6 +25,17 @@ pub enum Action {
         playlist_persistent_id: String,
         // Tracks removed, each with its original position so undo can restore the slot
         tracks: Vec<RemovedTrackRef>,
+    },
+    UpdateRating {
+        track_id: i64,
+        // Track's Music.app persistent ID; empty = unlinked (Music.app write skipped)
+        persistent_id: String,
+        old_rating: u32,
+        new_rating: u32,
+    },
+    DeletePlaylist {
+        // Full subtree snapshot (target + folder children + memberships), restored on undo
+        snapshot: DeletedPlaylistSnapshot,
     },
 }
 
@@ -214,6 +226,21 @@ impl UndoStack {
                         format!("Undo Remove from Playlist ({} tracks)", tracks.len())
                     }
                 }
+                Action::UpdateRating { track_id, persistent_id, old_rating, .. } => {
+                    apply_rating(db, *track_id, persistent_id, *old_rating);
+                    "Undo Rating Change".to_string()
+                }
+                Action::DeletePlaylist { snapshot } => {
+                    if let Err(e) = db.restore_playlist_subtree(snapshot) {
+                        eprintln!("Undo Delete Playlist Error: {}", e);
+                    }
+                    let name = snapshot.playlists.first().map(|p| p.name.as_str()).unwrap_or("");
+                    if name.is_empty() {
+                        "Undo Delete Playlist".to_string()
+                    } else {
+                        format!("Undo Delete \"{}\"", name)
+                    }
+                }
             };
 
             self.redo_stack.push(action);
@@ -318,12 +345,47 @@ impl UndoStack {
                         format!("Redo Remove from Playlist ({} tracks)", tracks.len())
                     }
                 }
+                Action::UpdateRating { track_id, persistent_id, new_rating, .. } => {
+                    apply_rating(db, *track_id, persistent_id, *new_rating);
+                    "Redo Rating Change".to_string()
+                }
+                Action::DeletePlaylist { snapshot } => {
+                    // Re-delete the target (restored at its original id by undo).
+                    if let Some(target) = snapshot.playlists.first() {
+                        if let Err(e) = db.delete_playlist(target.id) {
+                            eprintln!("Redo Delete Playlist Error: {}", e);
+                        }
+                    }
+                    "Redo Delete Playlist".to_string()
+                }
              };
 
              self.undo_stack.push(action);
              Ok(Some(message))
         } else {
             Ok(None)
+        }
+    }
+}
+
+/// Sets a track's rating for undo/redo, mirroring the `update_rating` command:
+/// pushes to Music.app for linked tracks when the sync mode allows, otherwise
+/// marks the track dirty so it reconciles later. Rating is not stored in file
+/// metadata, so there is no file write.
+fn apply_rating(db: &Database, track_id: i64, persistent_id: &str, rating: u32) {
+    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
+    if push_enabled && !persistent_id.is_empty() {
+        if let Err(e) = apple_update_track_rating(persistent_id, rating) {
+            eprintln!("Undo/Redo rating: Music.app error: {}", e);
+        }
+    }
+    if let Err(e) = db.update_track_rating(track_id, rating) {
+        eprintln!("Undo/Redo rating: DB error: {}", e);
+    }
+    if !push_enabled {
+        let is_ghost = db.get_track(track_id).ok().flatten().map(|t| t.is_ghost()).unwrap_or(false);
+        if !is_ghost {
+            let _ = db.mark_tracks_dirty(&[track_id]);
         }
     }
 }

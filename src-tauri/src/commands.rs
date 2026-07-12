@@ -1446,8 +1446,18 @@ pub async fn delete_playlist(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    // Capture the full subtree first so the deletion can be undone.
+    let snapshot = db.snapshot_playlist_subtree(id).map_err(|e| e.to_string())?;
     // Safety: We never delete playlists from Music.app, only from TagDeck's DB
-    db.delete_playlist(id).map_err(|e| e.to_string())
+    db.delete_playlist(id).map_err(|e| e.to_string())?;
+    drop(db);
+
+    if !snapshot.playlists.is_empty() {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::DeletePlaylist { snapshot });
+        }
+    }
+    Ok(())
 }
 
 /// Toggles per-playlist iTunes sync. Disabling just flips the flag — the
@@ -1801,8 +1811,9 @@ pub async fn update_rating(
     
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
 
-    // 1. Get iTunes link
+    // 1. Get iTunes link + capture the current rating for undo.
     let itunes_pid = db.get_track_itunes_pid(track_id).map_err(|e| e.to_string())?;
+    let old_rating = db.get_track(track_id).ok().flatten().map(|t| t.rating as u32).unwrap_or(0);
 
     // 2. Update Music.app (linked tracks only, and only when the sync mode
     // allows pushing TagDeck edits back to Music.app)
@@ -1829,6 +1840,19 @@ pub async fn update_rating(
                 let msg = format!("Failed to mark track dirty: {}", e);
                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
             }
+        }
+    }
+
+    // 4. Push Undo (only if the rating actually changed).
+    if old_rating != rating {
+        drop(db);
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::UpdateRating {
+                track_id,
+                persistent_id: itunes_pid.unwrap_or_default(),
+                old_rating,
+                new_rating: rating,
+            });
         }
     }
 

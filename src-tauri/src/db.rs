@@ -855,6 +855,77 @@ impl Database {
         Ok(())
     }
 
+    /// Captures a playlist and (if it's a folder) its direct children — the exact
+    /// set `delete_playlist` removes — plus all their track memberships, so a
+    /// deletion can be fully undone. `playlists[0]` is the deletion target.
+    pub fn snapshot_playlist_subtree(&self, id: i64) -> Result<DeletedPlaylistSnapshot> {
+        const COLS: &str = "id, persistent_id, parent_persistent_id, name, is_folder,
+             COALESCE(origin, 'itunes'), COALESCE(itunes_sync_enabled, 0),
+             description, color, COALESCE(sort_position, 0),
+             COALESCE(created_at, 0), COALESCE(updated_at, 0),
+             spotify_playlist_id, spotify_snapshot_id";
+
+        let target: crate::models::Playlist = self.conn.query_row(
+            &format!("SELECT {} FROM playlists WHERE id = ?1", COLS),
+            params![id],
+            row_to_playlist,
+        )?;
+
+        let mut playlists = vec![target.clone()];
+        {
+            let mut stmt = self.conn.prepare(
+                &format!("SELECT {} FROM playlists WHERE parent_persistent_id = ?1 ORDER BY sort_position ASC", COLS)
+            )?;
+            let children = stmt.query_map(params![target.persistent_id], row_to_playlist)?
+                .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+            playlists.extend(children);
+        }
+
+        let mut memberships = Vec::new();
+        for p in &playlists {
+            let mut mstmt = self.conn.prepare(
+                "SELECT playlist_id, track_id, position FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position ASC"
+            )?;
+            let rows = mstmt.query_map(params![p.id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
+            memberships.extend(rows);
+        }
+
+        Ok(DeletedPlaylistSnapshot { playlists, memberships })
+    }
+
+    /// Restores a subtree captured by `snapshot_playlist_subtree`, re-inserting the
+    /// playlist rows at their original ids (safe: AUTOINCREMENT never reuses them)
+    /// and their memberships. Used to undo a playlist deletion.
+    pub fn restore_playlist_subtree(&self, snap: &DeletedPlaylistSnapshot) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut pstmt = tx.prepare(
+                "INSERT OR IGNORE INTO playlists
+                 (id, persistent_id, parent_persistent_id, name, is_folder, origin,
+                  itunes_sync_enabled, description, color, sort_position, created_at,
+                  updated_at, spotify_playlist_id, spotify_snapshot_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"
+            )?;
+            for p in &snap.playlists {
+                pstmt.execute(params![
+                    p.id, p.persistent_id, p.parent_persistent_id, p.name, p.is_folder,
+                    p.origin, p.itunes_sync_enabled, p.description, p.color, p.sort_position,
+                    p.created_at, p.updated_at, p.spotify_playlist_id, p.spotify_snapshot_id
+                ])?;
+            }
+            let mut mstmt = tx.prepare(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1,?2,?3)"
+            )?;
+            for (playlist_id, track_id, position) in &snap.memberships {
+                mstmt.execute(params![playlist_id, track_id, position])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Moves a playlist to a new parent folder (or root if parent_persistent_id is None).
     pub fn move_playlist(&self, id: i64, new_parent_persistent_id: Option<&str>) -> Result<()> {
         let now = std::time::SystemTime::now()
@@ -2356,6 +2427,37 @@ pub struct PlaylistBackupEntry {
     pub tracks: Vec<BackupTrackRef>,
 }
 
+/// Full-fidelity snapshot of a deleted playlist subtree, for undo. `playlists[0]`
+/// is the deletion target; the rest are its direct children (folders). Memberships
+/// are `(playlist_id, track_id, position)`.
+#[derive(Debug, Clone)]
+pub struct DeletedPlaylistSnapshot {
+    pub playlists: Vec<crate::models::Playlist>,
+    pub memberships: Vec<(i64, i64, i64)>,
+}
+
+/// Maps a full playlists-table row (the column order used by `snapshot_playlist_subtree`
+/// and `get_playlists`) to a `Playlist`.
+fn row_to_playlist(row: &rusqlite::Row) -> rusqlite::Result<crate::models::Playlist> {
+    Ok(crate::models::Playlist {
+        id: row.get(0)?,
+        persistent_id: row.get(1)?,
+        parent_persistent_id: row.get(2)?,
+        name: row.get(3)?,
+        is_folder: row.get(4)?,
+        track_ids: None,
+        origin: row.get(5)?,
+        itunes_sync_enabled: row.get(6)?,
+        description: row.get(7)?,
+        color: row.get(8)?,
+        sort_position: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        spotify_playlist_id: row.get(12).unwrap_or(None),
+        spotify_snapshot_id: row.get(13).unwrap_or(None),
+    })
+}
+
 /// Minimal track reference for backup — enough info to match on restore.
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct BackupTrackRef {
@@ -2462,6 +2564,36 @@ mod tests {
         db.insert_track_in_playlist_at(pl.id, ids[2], cp).unwrap();
         db.insert_track_in_playlist_at(pl.id, ids[4], ep).unwrap();
         assert_eq!(db.get_playlist_track_ids(pl.id).unwrap(), ids, "original order restored");
+    }
+
+    /// Deleting a folder (with a child playlist that has tracks) and undoing it must
+    /// restore the whole subtree at the original ids, with membership + order intact.
+    #[test]
+    fn delete_then_restore_playlist_subtree_roundtrips() {
+        let db = Database::new(":memory:").unwrap();
+        let folder = db.create_playlist("Folder", None, true, "FOLDER-1").unwrap();
+        let child = db.create_playlist("Crate", Some("FOLDER-1"), false, "PL-1").unwrap();
+        let ids: Vec<i64> = (0..3)
+            .map(|i| db.insert_imported_track(&ghost(&format!("sub-{}", i)), None, None).unwrap())
+            .collect();
+        for id in &ids {
+            db.add_track_to_playlist_db(child.id, *id).unwrap();
+        }
+
+        let snap = db.snapshot_playlist_subtree(folder.id).unwrap();
+        assert_eq!(snap.playlists[0].id, folder.id, "target is first");
+        assert_eq!(snap.playlists.len(), 2, "folder + child captured");
+        assert_eq!(snap.memberships.len(), 3);
+
+        db.delete_playlist(folder.id).unwrap();
+        assert!(db.get_playlists().unwrap().iter().all(|p| p.id != folder.id && p.id != child.id));
+
+        db.restore_playlist_subtree(&snap).unwrap();
+        let pls = db.get_playlists().unwrap();
+        assert!(pls.iter().any(|p| p.id == folder.id && p.is_folder && p.name == "Folder"));
+        let restored_child = pls.iter().find(|p| p.id == child.id).expect("child restored at original id");
+        assert_eq!(restored_child.parent_persistent_id.as_deref(), Some("FOLDER-1"));
+        assert_eq!(db.get_playlist_track_ids(child.id).unwrap(), ids, "membership + order restored");
     }
 
     #[test]
