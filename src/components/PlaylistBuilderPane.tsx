@@ -5,6 +5,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, ListPlus, Music, Plus, Search, X } from 'lucide-react';
 import { Playlist, Track } from '../types';
+import { useArmedDroppableId } from './DragArmContext';
 
 interface Props {
     /** The playlist being built, or null to show the picker. */
@@ -158,9 +159,10 @@ export const PlaylistBuilderPane = ({
 
     const totalSecs = useMemo(() => rows.reduce((sum, t) => sum + (t.duration_secs || 0), 0), [rows]);
 
-    const { setNodeRef: setDropRef, isOver } = useDroppable({
-        id: targetPlaylistId != null ? `playlist-${targetPlaylistId}` : 'builder-no-target',
-    });
+    const dropId = targetPlaylistId != null ? `playlist-${targetPlaylistId}` : 'builder-no-target';
+    const { setNodeRef: setDropRef, isOver } = useDroppable({ id: dropId });
+    // Held past the dwell → "release to add"; hovering but not yet armed → "hold to add…".
+    const isArmed = useArmedDroppableId() === dropId;
 
     const handleReorderEnd = (event: DragEndEvent) => {
         const { active, over } = event;
@@ -257,8 +259,12 @@ export const PlaylistBuilderPane = ({
     return (
         <div ref={setDropRef} style={{
             height: '100%', display: 'flex', flexDirection: 'column', overflowY: 'auto',
-            outline: isOver ? '2px solid var(--accent-color)' : '2px solid transparent',
+            outline: isArmed ? '2px solid var(--accent-color)'
+              : isOver ? '2px dashed var(--accent-color)'
+              : '2px solid transparent',
             outlineOffset: '-2px',
+            background: isArmed ? 'rgba(59, 130, 246, 0.08)' : undefined,
+            transition: 'background-color 0.2s ease',
         }}>
             <div style={{ ...sectionHeaderStyle, alignItems: 'flex-start' }}>
                 <div style={{ minWidth: 0 }}>

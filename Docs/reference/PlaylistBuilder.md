@@ -32,7 +32,10 @@ the undo stack, so **⌘Z** reverses them. Three add gestures, all from the midd
   a multi-selection adds the whole selection. Rows already in the target show a **check** instead;
   clicking it removes the track.
 - **Drag onto the panel** — the pane is a dnd-kit droppable with id `playlist-${builderPlaylistId}`,
-  so App's existing `handleDragEnd` track→playlist routing handles it with no extra wiring.
+  so App's existing `handleDragEnd` track→playlist routing handles it with no extra wiring. The add
+  now requires a brief **hold** over the pane (the dashed "hold to add…" outline turns solid when
+  it's ready) — same hover-hold that gates adds onto sidebar playlists. See
+  [DragAndDrop.md](DragAndDrop.md).
 - **Right-click → "Add to '<target>'"** in the track context menu (multi-selection aware). Hidden
   when the target is also the currently-viewed playlist.
 

@@ -21,6 +21,7 @@ The docs are organized by **how current and how forward-looking** they are:
 - [reference/KeyCommands.md](reference/KeyCommands.md) — keyboard shortcuts.
 - [reference/SearchSpecs.md](reference/SearchSpecs.md) — advanced search-bar syntax (with parsed-but-not-yet-functional fields flagged).
 - [reference/PlaylistBuilder.md](reference/PlaylistBuilder.md) — the **Build** tab: promoting a playlist to a target and filling it from the track list.
+- [reference/DragAndDrop.md](reference/DragAndDrop.md) — how dragging tracks behaves: reorder-vs-add disambiguation, the hold-to-add dwell, and no-sideways-scroll.
 
 ## Roadmap (forward-looking)
 
@@ -35,6 +36,7 @@ Design specs and task-by-task implementation plans for features built via spec-d
 - Spotify playlist ↔ library match scan — [spec](superpowers/specs/2026-07-06-spotify-playlist-library-match-scan-design.md) · [plan](superpowers/plans/2026-07-06-spotify-playlist-library-match-scan.md)
 - Play queue — [spec](superpowers/specs/2026-07-07-play-queue-design.md) · [plan](superpowers/plans/2026-07-07-play-queue.md)
 - Vocabulary expansion — [spec](superpowers/specs/2026-07-07-vocabulary-expansion-design.md) · [plan](superpowers/plans/2026-07-07-vocabulary-expansion.md)
+- Drag-and-drop disambiguation — [spec](superpowers/specs/2026-07-24-drag-drop-disambiguation-design.md)
 
 Data-loss safety fixes (from the file/data-loss risk audit):
 - Mass-removal safety guard — [spec](superpowers/specs/2026-07-11-mass-removal-safety-guard-design.md)

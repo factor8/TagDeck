@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
+import { useArmedDroppableId } from './DragArmContext';
 import { Playlist, Track } from '../types';
 import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, SearchCheck, X, AudioLines, CloudOff, RefreshCw } from 'lucide-react';
 import { useToast } from './Toast';
@@ -83,6 +84,11 @@ const PlaylistRow = ({
         },
         disabled: node.is_folder
     });
+    const isArmed = useArmedDroppableId() === `playlist-${node.id}`;
+    // "ready to add" (held past the dwell, or a native file drag) vs. the fainter
+    // "hold to add…" state while a track drag first hovers.
+    const dropActive = isArmed || isFileDragOver;
+    const dropPending = isOver && !isArmed && !isFileDragOver;
 
     const isExpanded = expandedFolders.has(node.persistent_id);
     const isSelected = selectedPlaylistId === node.id;
@@ -163,14 +169,18 @@ const PlaylistRow = ({
                       cursor: 'default',
                       backgroundColor: isSelected
                         ? 'var(--accent-color)'
-                        : (isOver || isFileDragOver ? 'rgba(59, 130, 246, 0.3)' : 'transparent'),
+                        : dropActive ? 'rgba(59, 130, 246, 0.4)'
+                        : dropPending ? 'rgba(59, 130, 246, 0.15)'
+                        : 'transparent',
                       color: isSelected ? '#fff' : 'var(--text-primary)',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '6px',
                       userSelect: 'none',
                       transition: 'background-color 0.2s ease',
-                      outline: isFileDragOver ? '2px dashed var(--accent-color)' : 'none',
+                      outline: dropActive ? '2px solid var(--accent-color)'
+                        : dropPending ? '2px dashed var(--accent-color)'
+                        : 'none',
                       outlineOffset: '-2px',
                   }}
                   onMouseEnter={(e) => {

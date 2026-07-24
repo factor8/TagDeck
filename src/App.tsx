@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSensors, PointerSensor, closestCenter } from '@dnd-kit/core';
+import { DndContext, DragEndEvent, DragStartEvent, DragOverEvent, DragOverlay, useSensor, useSensors, PointerSensor, closestCenter, pointerWithin, CollisionDetection } from '@dnd-kit/core';
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
@@ -25,6 +25,13 @@ import { useDebug } from './components/DebugContext';
 import { usePlayQueue } from './hooks/usePlayQueue';
 import { QueuePane } from './components/QueuePane';
 import { PlaylistBuilderPane } from './components/PlaylistBuilderPane';
+import { DragArmContext } from './components/DragArmContext';
+import { isTrackId, pickTrackCollision, shouldCommitAdd, nextDwellAction } from './utils/dragCollision';
+
+// How long a track must hover an add target (sidebar playlist / Build pane)
+// before the add "arms" and a drop commits. Short enough to feel responsive,
+// long enough that reordering never accidentally becomes an add.
+const ADD_DWELL_MS = 250;
 
 function App() {
   const { showSuccess, showError, showToast } = useToast();
@@ -53,6 +60,15 @@ function App() {
   });
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [activeDragItem, setActiveDragItem] = useState<any>(null);
+  // Add target (sidebar playlist / Build pane) currently "armed" for a drop,
+  // i.e. hovered by a track drag past the dwell delay. Drives the target's
+  // "release to add" highlight and gates the actual add in handleDragEnd.
+  const [armedDroppableId, setArmedDroppableId] = useState<string | null>(null);
+  const dwellTargetRef = useRef<string | null>(null);
+  const dwellTimerRef = useRef<number | null>(null);
+  // Mirror of armedDroppableId read at drop time, so the add gate never depends
+  // on React having re-rendered before the drop fires. State drives the visual.
+  const armedRef = useRef<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [hideMissing, setHideMissing] = useState(() => {
     return localStorage.getItem('app_hide_missing_tracks') === 'true';
@@ -608,20 +624,82 @@ function App() {
       })
   );
 
+  // Pointer-based collision: a track drag reorders while the pointer is over the
+  // list, and only resolves to an add target (sidebar playlist / Build pane) when
+  // the pointer is genuinely inside it. Column/other drags keep closestCenter.
+  const collisionDetectionStrategy = useCallback<CollisionDetection>((args) => {
+      const activeId = String(args.active.id);
+      if (!isTrackId(activeId)) {
+          return closestCenter(args);
+      }
+      const pointerHits = pointerWithin(args);
+      const picked = pickTrackCollision(pointerHits);
+      if (picked.kind !== 'fallback') {
+          return [picked.collision];
+      }
+      // Empty list space: fall back to the nearest reorder row (if any exist).
+      const rowContainers = args.droppableContainers.filter(
+          (c) => isTrackId(String(c.id)) && String(c.id) !== activeId,
+      );
+      if (rowContainers.length === 0) return [];
+      return closestCenter({ ...args, droppableContainers: rowContainers });
+  }, []);
+
+  const setArmed = (id: string | null) => {
+      armedRef.current = id;
+      setArmedDroppableId(id);
+  };
+
+  const resetDwell = () => {
+      if (dwellTimerRef.current != null) {
+          clearTimeout(dwellTimerRef.current);
+          dwellTimerRef.current = null;
+      }
+      dwellTargetRef.current = null;
+      setArmed(null);
+  };
+
+  // Hover-hold: an add target must be held ~ADD_DWELL_MS before it arms. This is
+  // what keeps reordering the confident default and makes adds deliberate.
+  const handleDragOver = (event: DragOverEvent) => {
+      const activeIsTrack = isTrackId(String(event.active.id));
+      const overId = event.over ? String(event.over.id) : null;
+      const { action, target } = nextDwellAction(dwellTargetRef.current, overId, activeIsTrack);
+      if (action === 'keep') return; // timer already running over this target
+      if (dwellTimerRef.current != null) {
+          clearTimeout(dwellTimerRef.current);
+          dwellTimerRef.current = null;
+      }
+      dwellTargetRef.current = target;
+      setArmed(null);
+      if (action === 'start' && target) {
+          dwellTimerRef.current = window.setTimeout(() => setArmed(target), ADD_DWELL_MS);
+      }
+  };
+
   const handleDragStart = (event: DragStartEvent) => {
       setActiveDragItem(event.active.data.current);
+      resetDwell();
+  };
+
+  const handleDragCancel = () => {
+      setActiveDragItem(null);
+      resetDwell();
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
       setActiveDragItem(null);
+      const armed = armedRef.current;
+      resetDwell();
       const { active, over } = event;
       if (!over) return;
-      
+
       const activeId = String(active.id);
       const overId = String(over.id);
 
-      // Track -> Playlist
+      // Track -> Playlist (add) — only commits if the target was held long enough.
       if (activeId.startsWith('track-') && overId.startsWith('playlist-')) {
+          if (!shouldCommitAdd(armed, overId)) return; // released before dwell → no-op
           const trackId = Number(activeId.replace('track-', ''));
           const playlistId = Number(overId.replace('playlist-', ''));
           
@@ -1039,12 +1117,16 @@ function App() {
 
   return (
     <>
-      <DndContext 
-          collisionDetection={closestCenter} 
-          onDragEnd={handleDragEnd}  
+      <DndContext
+          collisionDetection={collisionDetectionStrategy}
+          onDragEnd={handleDragEnd}
           onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragCancel={handleDragCancel}
+          autoScroll={activeDragItem?.type === 'Track' ? { threshold: { x: 0, y: 0.2 } } : true}
           sensors={sensors}
       >
+        <DragArmContext.Provider value={armedDroppableId}>
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       
       {/* Header */}
@@ -1559,6 +1641,7 @@ function App() {
                 ) : null
            ) : null}
         </DragOverlay>
+        </DragArmContext.Provider>
       </DndContext>
 
       {/* Copy Playlist Memberships Modal */}
