@@ -5,7 +5,7 @@ import { DndContext, DragEndEvent, DragStartEvent, DragOverlay, useSensor, useSe
 import './App.css';
 import './Panel.css';
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, PanelImperativeHandle } from "react-resizable-panels";
-import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X, Info, FolderOpen } from 'lucide-react';
+import { Search, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Settings, X, Info, FolderOpen, Eye, EyeOff } from 'lucide-react';
 import { SettingsPanel } from './components/SettingsPanel';
 import { PlaylistCommandPalette } from './components/PlaylistCommandPalette';
 import { SearchHelpPanel } from './components/SearchHelpPanel';
@@ -54,6 +54,10 @@ function App() {
   const [currentTags, setCurrentTags] = useState<string[]>([]);
   const [activeDragItem, setActiveDragItem] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [hideMissing, setHideMissing] = useState(() => {
+    return localStorage.getItem('app_hide_missing_tracks') === 'true';
+  });
+  const [missingCount, setMissingCount] = useState(0);
   const [highlightedPlaylistId, setHighlightedPlaylistId] = useState<number | null>(null);
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const [isSidebarArtworkVisible, setIsSidebarArtworkVisible] = useState(() => {
@@ -692,6 +696,10 @@ function App() {
     }
   }, [selectedPlaylistId]);
 
+  useEffect(() => {
+    localStorage.setItem('app_hide_missing_tracks', String(hideMissing));
+  }, [hideMissing]);
+
   // Restore search term when switching playlists
   useEffect(() => {
     const key = selectedPlaylistId === null ? 'search_all' : `search_${selectedPlaylistId}`;
@@ -1151,6 +1159,36 @@ function App() {
             </div>
             
             <BpmCounter />
+
+            <button
+                onClick={() => setHideMissing(v => !v)}
+                onMouseDown={(e) => e.stopPropagation()}
+                disabled={missingCount === 0}
+                title={
+                    missingCount === 0
+                        ? 'No missing-file tracks in view'
+                        : hideMissing
+                            ? `Show ${missingCount} missing-file track${missingCount === 1 ? '' : 's'}`
+                            : `Hide ${missingCount} missing-file track${missingCount === 1 ? '' : 's'}`
+                }
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px',
+                    background: hideMissing ? 'var(--accent-color)' : 'transparent',
+                    border: hideMissing ? '1px solid var(--accent-color)' : '1px solid var(--border-color)',
+                    color: hideMissing ? '#fff' : 'var(--text-secondary)',
+                    borderRadius: '6px',
+                    padding: '6px 8px',
+                    fontSize: '12px',
+                    cursor: missingCount === 0 ? 'default' : 'pointer',
+                    opacity: missingCount === 0 ? 0.4 : 1,
+                    whiteSpace: 'nowrap'
+                }}
+            >
+                {hideMissing ? <EyeOff size={15} /> : <Eye size={15} />}
+                <span>{missingCount} missing</span>
+            </button>
         </div>
         
         <SearchHelpPanel 
@@ -1304,6 +1342,8 @@ function App() {
               playingTrackId={playingTrack?.id}
               isPlaying={isPlaying}
               searchTerm={searchTerm}
+              hideMissing={hideMissing}
+              onMissingCountChange={setMissingCount}
               onRefresh={handleRefresh}
               onCopyPlaylistMemberships={setCopyPlaylistsTarget}
               onNavigateToPlaylist={(playlistId, track) => {
