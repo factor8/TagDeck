@@ -31,28 +31,31 @@ describe('isAddTargetId', () => {
 });
 
 describe('pickTrackCollision', () => {
-  it('prefers a track-row hit (reorder) even when an add-target is also present', () => {
-    const hits = [{ id: 'playlist-3' }, { id: 'track-9' }];
-    expect(pickTrackCollision(hits)).toEqual({ kind: 'reorder', collision: { id: 'track-9' } });
+  // The pointer being over a list row means "reorder" — the caller then resolves
+  // the exact row with closestCenter (robust for sortable lists). An add only
+  // happens when the pointer is genuinely over an add target and NOT over a row.
+  it('is reorder when a track row is under the pointer (even if an add-target also is)', () => {
+    expect(pickTrackCollision([{ id: 'playlist-3' }, { id: 'track-9' }])).toEqual({ mode: 'reorder' });
   });
 
-  it('returns add when only an add-target is under the pointer', () => {
-    const hits = [{ id: 'playlist-3' }];
-    expect(pickTrackCollision(hits)).toEqual({ kind: 'add', collision: { id: 'playlist-3' } });
+  it('is reorder when only a track row is under the pointer', () => {
+    expect(pickTrackCollision([{ id: 'track-9' }])).toEqual({ mode: 'reorder' });
   });
 
-  it('returns add for the builder-no-target droppable', () => {
-    const hits = [{ id: 'builder-no-target' }];
-    expect(pickTrackCollision(hits)).toEqual({ kind: 'add', collision: { id: 'builder-no-target' } });
+  it('is add when only an add-target is under the pointer', () => {
+    expect(pickTrackCollision([{ id: 'playlist-3' }])).toEqual({ mode: 'add', collision: { id: 'playlist-3' } });
   });
 
-  it('falls back when the pointer is over nothing droppable (empty list space)', () => {
-    expect(pickTrackCollision([])).toEqual({ kind: 'fallback' });
+  it('is add for the builder-no-target droppable', () => {
+    expect(pickTrackCollision([{ id: 'builder-no-target' }])).toEqual({ mode: 'add', collision: { id: 'builder-no-target' } });
   });
 
-  it('falls back when only non-droppable-ish (column) ids are present', () => {
-    const hits = [{ id: 'col-title' }];
-    expect(pickTrackCollision(hits)).toEqual({ kind: 'fallback' });
+  it('is reorder when the pointer is over nothing droppable (empty list space)', () => {
+    expect(pickTrackCollision([])).toEqual({ mode: 'reorder' });
+  });
+
+  it('is reorder when only a non-add, non-row id (column) is present', () => {
+    expect(pickTrackCollision([{ id: 'col-title' }])).toEqual({ mode: 'reorder' });
   });
 });
 

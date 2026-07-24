@@ -1,7 +1,19 @@
 # Drag-and-Drop Disambiguation — Design
 
 **Date:** 2026-07-24
-**Status:** Approved, ready for implementation
+**Status:** Shipped, with two corrections during implementation (see note)
+
+> **Correction (2026-07-24, post-first-pass).** Two details below were wrong and
+> were fixed after testing — the live behavior is in
+> [`reference/DragAndDrop.md`](../../reference/DragAndDrop.md):
+> 1. **Reorder target must be resolved with `closestCenter`, not `pointerWithin`.**
+>    `pointerWithin` is unreliable for a shifting sortable list, which broke
+>    reordering entirely. `pointerWithin` is now used only to detect the add
+>    *region*; the row is resolved with `closestCenter`.
+> 2. **`autoScroll` for track drags is `false`, not `{ threshold: { x: 0, y: 0.2 } }`.**
+>    `threshold.x: 0` divides by zero in dnd-kit and scrolls right at infinite
+>    speed. dnd-kit has no per-axis toggle, so auto-scroll is disabled outright
+>    for track drags (column drags keep it).
 
 ## Problem
 

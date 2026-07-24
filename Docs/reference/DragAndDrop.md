@@ -24,15 +24,23 @@ All in-app track/playlist/Build drags share **one** `DndContext` in
 [`src/App.tsx`](../../src/App.tsx). It uses a custom `collisionDetectionStrategy`
 (not bare `closestCenter`):
 
-- For a **track** drag it runs dnd-kit's `pointerWithin` — only targets the pointer
-  is actually inside count. A track row under the pointer wins (**reorder**); a
-  `playlist-…` / `builder-…` droppable under the pointer is an **add**; over empty
-  list space it falls back to the nearest track row; over nothing it is a no-op.
+- For a **track** drag, `pointerWithin` decides the *region*: if the pointer is
+  genuinely over a sidebar playlist / Build pane (`playlist-…` / `builder-…`) and
+  **not** over a list row, it's an **add**. Otherwise it's a **reorder**, and the
+  exact row is resolved with `closestCenter` over the sortable rows.
 - For any other drag (column reordering) it keeps `closestCenter` unchanged.
 
-This is why dragging straight up/down no longer resolves to a far-away playlist:
-`closestCenter` picked the nearest droppable *center* regardless of the pointer;
-`pointerWithin` requires the pointer to be over the target.
+Two important details:
+
+- Dragging straight up/down no longer resolves to a far-away playlist: bare
+  `closestCenter` picked the nearest droppable *center* regardless of the pointer,
+  so a sidebar/Build target could win; now an add requires the pointer to be over
+  that target.
+- The reorder target is resolved with `closestCenter` (over the rows), **not**
+  `pointerWithin`. `pointerWithin` tests the pointer against each row's measured
+  rect, which is unreliable while `verticalListSortingStrategy` shifts rows under
+  the pointer; `closestCenter` uses the dragging rect's center and is the dnd-kit
+  recommendation for sortable lists.
 
 The pure decision helpers live in [`src/utils/dragCollision.ts`](../../src/utils/dragCollision.ts)
 (`isTrackId`, `isAddTargetId`, `pickTrackCollision`, `shouldCommitAdd`,
@@ -60,11 +68,18 @@ the scheme, App's single Track→Playlist add branch handles both.
 ## No sideways scroll during a track drag
 
 The track table is horizontally scrollable, and dnd-kit's auto-scroll defaults to
-scrolling the nearest scrollable ancestor on **both** axes. The App `DndContext`
-passes `autoScroll={{ threshold: { x: 0, y: 0.2 } }}` **while a track is being
-dragged**, which disables horizontal auto-scroll (vertical still works for long
-lists). Column-reorder drags keep the default (`autoScroll={true}`) so a wide
-table can still scroll sideways while moving a column.
+scrolling the nearest scrollable ancestor on **both** axes — so dragging a track
+toward the right edge scrolled the table sideways. dnd-kit has **no per-axis
+auto-scroll toggle** (`threshold.x: 0` doesn't disable the x-axis; it divides by
+zero in `getScrollDirectionAndSpeed` and scrolls right at infinite speed). So the
+App `DndContext` passes `autoScroll={false}` **while a track is being dragged**,
+disabling auto-scroll entirely for track drags. Column-reorder drags keep the
+default (`autoScroll={true}`) so a wide table can still scroll sideways while
+moving a column.
+
+Trade-off: there is no vertical auto-scroll while dragging a track (the list is
+virtualized, so cross-screen reorder is already limited). If that becomes a
+problem, add a custom vertical-only scroller rather than re-enabling dnd-kit's.
 
 ## Key files
 

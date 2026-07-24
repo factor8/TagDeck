@@ -22,25 +22,25 @@ export const isAddTargetId = (id: string): boolean =>
   id.startsWith('playlist-') || id === 'builder-no-target';
 
 export type TrackCollisionPick<T extends CollisionLike> =
-  | { kind: 'reorder'; collision: T }
-  | { kind: 'add'; collision: T }
-  | { kind: 'fallback' };
+  | { mode: 'reorder' }
+  | { mode: 'add'; collision: T };
 
 /**
  * Given the droppables the pointer is actually inside (from dnd-kit's
- * `pointerWithin`), choose the winner for a track drag:
- *   - a track row under the pointer  -> reorder (wins over any add target)
- *   - else an add target under it    -> add
- *   - else                           -> fallback (caller picks nearest row / no-op)
+ * `pointerWithin`), decide whether a track drag is an add or a reorder:
+ *   - pointer over an add target (sidebar playlist / Build pane) and NOT over a
+ *     list row -> `add` (with the add collision)
+ *   - anything else (over a row, empty list space, a column header, nothing)
+ *     -> `reorder` — the caller then resolves the exact row with `closestCenter`,
+ *     which (unlike `pointerWithin`) is reliable for a shifting sortable list.
  */
 export function pickTrackCollision<T extends CollisionLike>(
   pointerHits: T[],
 ): TrackCollisionPick<T> {
-  const trackHit = pointerHits.find((c) => isTrackId(String(c.id)));
-  if (trackHit) return { kind: 'reorder', collision: trackHit };
+  const overTrackRow = pointerHits.some((c) => isTrackId(String(c.id)));
   const addHit = pointerHits.find((c) => isAddTargetId(String(c.id)));
-  if (addHit) return { kind: 'add', collision: addHit };
-  return { kind: 'fallback' };
+  if (addHit && !overTrackRow) return { mode: 'add', collision: addHit };
+  return { mode: 'reorder' };
 }
 
 /**

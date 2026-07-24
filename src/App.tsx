@@ -624,24 +624,22 @@ function App() {
       })
   );
 
-  // Pointer-based collision: a track drag reorders while the pointer is over the
-  // list, and only resolves to an add target (sidebar playlist / Build pane) when
-  // the pointer is genuinely inside it. Column/other drags keep closestCenter.
+  // Pointer decides *region*: a track drag only becomes an add when the pointer
+  // is genuinely over a sidebar playlist / Build pane. Otherwise it's a reorder,
+  // and the exact row is resolved with closestCenter over the sortable rows —
+  // pointerWithin is unreliable for a shifting sortable list, closestCenter isn't.
+  // Column/other drags keep plain closestCenter.
   const collisionDetectionStrategy = useCallback<CollisionDetection>((args) => {
       const activeId = String(args.active.id);
       if (!isTrackId(activeId)) {
           return closestCenter(args);
       }
-      const pointerHits = pointerWithin(args);
-      const picked = pickTrackCollision(pointerHits);
-      if (picked.kind !== 'fallback') {
+      const picked = pickTrackCollision(pointerWithin(args));
+      if (picked.mode === 'add') {
           return [picked.collision];
       }
-      // Empty list space: fall back to the nearest reorder row (if any exist).
-      const rowContainers = args.droppableContainers.filter(
-          (c) => isTrackId(String(c.id)) && String(c.id) !== activeId,
-      );
-      if (rowContainers.length === 0) return [];
+      const rowContainers = args.droppableContainers.filter((c) => isTrackId(String(c.id)));
+      if (rowContainers.length === 0) return []; // non-reorderable view, not over an add target
       return closestCenter({ ...args, droppableContainers: rowContainers });
   }, []);
 
@@ -1123,7 +1121,7 @@ function App() {
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
           onDragCancel={handleDragCancel}
-          autoScroll={activeDragItem?.type === 'Track' ? { threshold: { x: 0, y: 0.2 } } : true}
+          autoScroll={activeDragItem?.type !== 'Track'}
           sensors={sensors}
       >
         <DragArmContext.Provider value={armedDroppableId}>
