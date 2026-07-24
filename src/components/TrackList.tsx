@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { StarRating } from './StarRating';
 import { parseSearchQuery, matchesAllTokens } from '../utils/searchParser';
+import { countMissing, filterMissing } from '../utils/missingFilter';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
@@ -52,6 +53,10 @@ interface Props {
     onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
     onTrackDoubleClick?: (track: Track) => void;
     searchTerm: string;
+    /** When true, hide tracks whose file is missing on disk. Global toggle. */
+    hideMissing?: boolean;
+    /** Reports how many in-view tracks are missing (pre-missing-filter, composes with search). */
+    onMissingCountChange?: (count: number) => void;
     playlistId: number | null;
     onRefresh?: () => void;
     onCopyPlaylistMemberships?: (track: Track) => void;
@@ -770,7 +775,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, hideMissing, onMissingCountChange, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder }, ref) => {
     const { debugMode } = useDebug();
     const { showSuccess, showError } = useToast();
     const [tracks, setTracks] = useState<Track[]>([]);
@@ -923,8 +928,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         return new Map(playlistTrackOrder.map((id, index) => [id, index]));
     }, [playlistTrackOrder]);
 
-    // Filter tracks based on search term and playlist
-    const filteredTracks = useMemo(() => {
+    // All filters EXCEPT the missing-file toggle (playlist, ghost, search).
+    const baseFilteredTracks = useMemo(() => {
         let result = tracks;
 
         // Filter by playlist
@@ -1056,6 +1061,18 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             return true;
         });
     }, [tracks, searchTerm, allowedTrackIds, playlistOrderMap, playlistId]);
+
+    // Apply the global "hide missing" toggle on top of the base filters.
+    const filteredTracks = useMemo(
+        () => filterMissing(baseFilteredTracks, !!hideMissing),
+        [baseFilteredTracks, hideMissing]
+    );
+
+    // Report in-view missing count (from the pre-missing-filter set, so it is
+    // stable when the toggle flips and still reflects the active search).
+    useEffect(() => {
+        onMissingCountChange?.(countMissing(baseFilteredTracks));
+    }, [baseFilteredTracks, onMissingCountChange]);
 
     // Remove selected tracks from current playlist
     const handleRemoveFromPlaylist = useCallback(async () => {
