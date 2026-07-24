@@ -32,6 +32,16 @@ engine runs at all:
 overwrite the DB comment/grouping or preserve them (`insert_track_preserving_comment`),
 since in `ImportOnly` the audio file is the golden source for those fields.
 
+**Comment push is read-merge (iTunes owns the note, TagDeck owns the tag block).**
+TagDeck stores tags inside the Comments field as `"<user note> && tag1; tag2"`. When a
+**tag** edit pushes to Music.app (`batch_update_track_comments`, and the single-track
+`write_tags` path), the JXA reads each track's *live* comment, keeps the user note before
+the first `" && "`, and replaces only the tag block (`tag_block_of` derives it) — so a
+stale DB copy of the note can never overwrite the user's live iTunes note. The one path
+where the user *authors* the note in TagDeck (inline comment-column edit → `update_track_info`,
+plus its undo and Sync Review "keep TagDeck side") still uses `update_track_comment`, a
+direct `set comment` — there the user's edit is authoritative.
+
 ## Architecture
 
 The system relies on four components:
@@ -81,6 +91,13 @@ Compares the set of persistent IDs in Music.app against TagDeck's linked tracks.
   - `Remove` (mirror the deletion into TagDeck),
   - `Ask` (don't decide — report the removals as `pending_removals` so the frontend can
     open Sync Review; each sync re-reports them until resolved via `apply_sync_changes`).
+- **Mass-removal safety guard** (`removal_is_suspicious` in `commands.rs`): before honoring
+  the deletion behavior, the removal batch is sanity-checked against the empty/partial-snapshot
+  failure mode (Music.app still loading, an empty/switched library, iCloud sync). A batch is
+  *suspicious* when Music.app returned zero tracks while the DB has linked tracks, **or** when
+  it exceeds `max(25, 20% × linked)`. A suspicious batch is **never** auto-unlinked/removed —
+  it's routed to `pending_removals` (Sync Review) with a `WARN` log, regardless of the
+  configured behavior. This prevents a transient empty snapshot from wiping all TagDeck data.
 
 **Phase 1 — Date-Based Query (Metadata)**
 Uses AppleScript `whose modification date >= sinceDate` to find tracks with changed metadata.
@@ -97,7 +114,10 @@ Good for: rating, BPM — any field that `modification date` ignores.
 Fetches all playlists from Music.app with their names, folder status, parent relationships,
 and track membership lists. Compares against our DB snapshot to detect:
 - **Added playlists** (in Music.app but not in DB)
-- **Removed playlists** (in DB but not in Music.app — cascade-deletes playlist_tracks)
+- **Removed playlists** (in DB but not in Music.app — cascade-deletes playlist_tracks).
+  Guarded by the same empty/threshold check as Phase 0 (against synced-playlist count): a
+  suspicious batch is **skipped with a `WARN`** (playlists don't flow through Sync Review, so
+  they simply remain until a healthy sync confirms the removal).
 - **Renamed playlists** (name changed)
 - **Reordered/changed membership** (track list differs)
 - **Folder hierarchy changes** (parent_persistent_id changed)

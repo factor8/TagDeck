@@ -17,6 +17,8 @@ interface SidebarProps {
   highlightedPlaylistId?: number | null;
   onPlaylistsChanged?: () => void;
   appleMusicAvailable?: boolean;
+  /** Promote a playlist to the Build tab as the target being filled. */
+  onBuildPlaylist?: (playlistId: number) => void;
 }
 
 interface ContextMenuState {
@@ -297,7 +299,7 @@ const PlaylistRow = ({
     );
 };
 
-export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged, appleMusicAvailable }: SidebarProps) {
+export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged, appleMusicAvailable, onBuildPlaylist }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -1256,6 +1258,14 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                           </>
                       ) : (
                           <>
+                              {!contextMenu.node.is_folder && onBuildPlaylist && (
+                                  <>
+                                      <button className="ctx-item" onClick={() => { const n = contextMenu.node!; setContextMenu(null); onBuildPlaylist(n.id); }}>
+                                          <ListMusic size={14} /> Build this Playlist
+                                      </button>
+                                      <div className="ctx-separator" />
+                                  </>
+                              )}
                               <button className="ctx-item" onClick={() => { setContextMenu(null); onStartRename(contextMenu.node!); }}>
                                   <Pencil size={14} /> Rename
                               </button>
@@ -1366,7 +1376,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                           ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Apple Music.`
                           : deleteTarget.origin === 'spotify'
                           ? `Are you sure you want to remove "${deleteTarget.name}" from TagDeck? This will not delete it from Spotify — you can re-import it later.`
-                          : `Are you sure you want to permanently delete "${deleteTarget.name}"? This cannot be undone.`
+                          : `Are you sure you want to delete "${deleteTarget.name}" from TagDeck? You can undo this with ⌘Z.`
                       }
                       {deleteTarget.is_folder && deleteTarget.children.length > 0 && (
                           <><br /><br /><strong>This folder contains {deleteTarget.children.length} item{deleteTarget.children.length !== 1 ? 's' : ''} that will also be deleted.</strong></>

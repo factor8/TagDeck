@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { StarRating } from './StarRating';
 import { parseSearchQuery, matchesAllTokens } from '../utils/searchParser';
+import { countMissing, filterMissing } from '../utils/missingFilter';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
@@ -36,7 +37,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles, Plus, Check } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
@@ -52,6 +53,10 @@ interface Props {
     onSelectionChange: (selectedIds: Set<number>, lastSelectedId: number | null, primaryTrack: Track | null, commonTags: string[]) => void;
     onTrackDoubleClick?: (track: Track) => void;
     searchTerm: string;
+    /** When true, hide tracks whose file is missing on disk. Global toggle. */
+    hideMissing?: boolean;
+    /** Reports how many in-view tracks are missing (pre-missing-filter, composes with search). */
+    onMissingCountChange?: (count: number) => void;
     playlistId: number | null;
     onRefresh?: () => void;
     onCopyPlaylistMemberships?: (track: Track) => void;
@@ -64,7 +69,46 @@ interface Props {
     onPlayNext?: (tracks: Track[]) => void;
     /** Append tracks to the end of the manual play queue. */
     onPlayLater?: (tracks: Track[]) => void;
+    /** Playlist Builder: id of the target playlist, or null when Build tab has no target. */
+    builderPlaylistId?: number | null;
+    /** Name of the builder target, for the context-menu label. */
+    builderPlaylistName?: string;
+    /** Ids currently in the builder target, for the added-cue and toggle button. */
+    builderTrackIdSet?: Set<number>;
+    /** Add the given track ids to the builder target. */
+    onAddToBuilder?: (trackIds: number[]) => void;
+    /** Remove a track from the builder target. */
+    onRemoveFromBuilder?: (trackId: number) => void;
 }
+
+// Per-row +/added toggle shown in the "#" column while the Build tab has a target.
+const BuilderAddButton = ({ added, onAdd, onRemove }: {
+    added: boolean;
+    onAdd: () => void;
+    onRemove: () => void;
+}) => {
+    const [hovered, setHovered] = useState(false);
+    return (
+        <button
+            onClick={(e) => { e.stopPropagation(); added ? onRemove() : onAdd(); }}
+            onDoubleClick={(e) => e.stopPropagation()}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            title={added ? 'In target playlist — click to remove' : 'Add to target playlist'}
+            style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: '18px', height: '18px', flexShrink: 0, padding: 0,
+                border: 'none', borderRadius: '4px', cursor: 'pointer',
+                background: added && hovered ? 'rgba(220,53,69,0.15)' : 'transparent',
+                color: added
+                    ? (hovered ? '#dc3545' : 'var(--accent-color)')
+                    : 'var(--text-secondary)',
+            }}
+        >
+            {added ? (hovered ? <X size={13} /> : <Check size={13} />) : <Plus size={13} />}
+        </button>
+    );
+};
 
 interface ContextMenuState {
     x: number;
@@ -731,7 +775,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, hideMissing, onMissingCountChange, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder }, ref) => {
     const { debugMode } = useDebug();
     const { showSuccess, showError } = useToast();
     const [tracks, setTracks] = useState<Track[]>([]);
@@ -756,6 +800,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     const handleStartEdit = useCallback((trackId: number, field: EditingCell['field']) => {
         setEditingCell({ trackId, field });
     }, []);
+
+    // Builder add is selection-aware: adding a row that's part of a multi-selection adds the whole selection.
+    const getBuilderAddIds = useCallback((trackId: number): number[] => {
+        if (selectedTrackIds.has(trackId) && selectedTrackIds.size > 1) {
+            return Array.from(selectedTrackIds);
+        }
+        return [trackId];
+    }, [selectedTrackIds]);
 
     const handleCancelEdit = useCallback(() => {
         setEditingCell(null);
@@ -876,8 +928,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         return new Map(playlistTrackOrder.map((id, index) => [id, index]));
     }, [playlistTrackOrder]);
 
-    // Filter tracks based on search term and playlist
-    const filteredTracks = useMemo(() => {
+    // All filters EXCEPT the missing-file toggle (playlist, ghost, search).
+    const baseFilteredTracks = useMemo(() => {
         let result = tracks;
 
         // Filter by playlist
@@ -1009,6 +1061,18 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             return true;
         });
     }, [tracks, searchTerm, allowedTrackIds, playlistOrderMap, playlistId]);
+
+    // Apply the global "hide missing" toggle on top of the base filters.
+    const filteredTracks = useMemo(
+        () => filterMissing(baseFilteredTracks, !!hideMissing),
+        [baseFilteredTracks, hideMissing]
+    );
+
+    // Report in-view missing count (from the pre-missing-filter set, so it is
+    // stable when the toggle flips and still reflects the active search).
+    useEffect(() => {
+        onMissingCountChange?.(countMissing(baseFilteredTracks));
+    }, [baseFilteredTracks, onMissingCountChange]);
 
     // Remove selected tracks from current playlist
     const handleRemoveFromPlaylist = useCallback(async () => {
@@ -1253,7 +1317,30 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
 
     const columnHelper = createColumnHelper<Track>();
 
-    const columns = useMemo<ColumnDef<Track, any>[]>(() => [
+    const columns = useMemo<ColumnDef<Track, any>[]>(() => {
+        // Contextual column shown only while a Build target is set. Not user-hideable
+        // or reorderable — it's pinned leftmost via effectiveColumnOrder below.
+        const builderColumn = columnHelper.display({
+            id: 'builder',
+            size: 44,
+            enableSorting: false,
+            enableHiding: false,
+            header: () => null,
+            cell: ({ row }) => {
+                const trackId = row.original.id;
+                return (
+                    <div style={{ display: 'flex', justifyContent: 'center' }}>
+                        <BuilderAddButton
+                            added={builderTrackIdSet?.has(trackId) ?? false}
+                            onAdd={() => onAddToBuilder!(getBuilderAddIds(trackId))}
+                            onRemove={() => onRemoveFromBuilder?.(trackId)}
+                        />
+                    </div>
+                );
+            },
+        });
+        return [
+        ...(builderPlaylistId != null && onAddToBuilder ? [builderColumn] : []),
         columnHelper.accessor(
             row => {
                 if (playlistOrderMap) {
@@ -1266,29 +1353,18 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             header: '#',
             cell: info => {
                 const isCurrentTrack = playingTrackId === info.row.original.id;
-                if (playlistOrderMap) {
-                    const val = info.getValue() as number;
-                    const position = val < Number.MAX_SAFE_INTEGER ? val + 1 : '';
-                    return (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ minWidth: '20px', textAlign: 'right' }}>{position}</span>
-                            {isCurrentTrack && (
-                                isPlaying 
-                                ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
-                                : <Volume size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-                            )}
-                        </div>
-                    );
-                }
-                const position = info.row.index + 1;
+                const speaker = isCurrentTrack ? (
+                    isPlaying
+                        ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
+                        : <Volume size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
+                ) : null;
+                const position = playlistOrderMap
+                    ? ((info.getValue() as number) < Number.MAX_SAFE_INTEGER ? (info.getValue() as number) + 1 : '')
+                    : info.row.index + 1;
                 return (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ minWidth: '20px', textAlign: 'right' }}>{position}</span>
-                        {isCurrentTrack && (
-                            isPlaying 
-                            ? <Volume2 size={12} color="var(--accent-color)" style={{ flexShrink: 0 }} />
-                            : <Volume size={12} style={{ flexShrink: 0, color: 'var(--text-secondary)' }} />
-                        )}
+                        {speaker}
                     </div>
                 );
             },
@@ -1569,7 +1645,17 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 </div>
             )
         })
-    ], [isMenuOpen, playingTrackId, isPlaying, handleRatingChange, playlistOrderMap, editingCell, selectedTrackIds, handleStartEdit, handleCommitEdit, handleCancelEdit]);
+    ];
+    }, [isMenuOpen, playingTrackId, isPlaying, handleRatingChange, playlistOrderMap, editingCell, selectedTrackIds, handleStartEdit, handleCommitEdit, handleCancelEdit, builderPlaylistId, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder, getBuilderAddIds]);
+
+    // Pin the contextual builder column leftmost, without persisting it into the
+    // user's saved column order.
+    const effectiveColumnOrder = useMemo(
+        () => (builderPlaylistId != null && onAddToBuilder
+            ? ['builder', ...columnOrder.filter(c => c !== 'builder')]
+            : columnOrder),
+        [builderPlaylistId, onAddToBuilder, columnOrder],
+    );
 
     const table = useReactTable({
         data: filteredTracks,
@@ -1577,7 +1663,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         state: {
             sorting,
             columnVisibility,
-            columnOrder,
+            columnOrder: effectiveColumnOrder,
             columnSizing,
         },
         columnResizeMode: 'onChange',
@@ -1851,14 +1937,14 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             collisionDetection={closestCenter} 
                             onDragEnd={handleMenuDragEnd}
                         >
-                            <SortableContext 
-                                items={table.getAllLeafColumns().map(c => c.id)}
+                            <SortableContext
+                                items={table.getAllLeafColumns().filter(c => c.id !== 'builder').map(c => c.id)}
                                 strategy={verticalListSortingStrategy}
                             >
-                                {table.getAllLeafColumns().map(column => {
-                                    const label = column.id === 'actions' ? 'File Link' 
+                                {table.getAllLeafColumns().filter(c => c.id !== 'builder').map(column => {
+                                    const label = column.id === 'actions' ? 'File Link'
                                         : (typeof column.columnDef.header === 'string' ? column.columnDef.header : column.id);
-                                    
+
                                     return <SortableMenuItem key={column.id} column={column} label={label as string} />;
                                 })}
                             </SortableContext>
@@ -1894,11 +1980,29 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         }}>
                              {table.getHeaderGroups().map(headerGroup => (
                                 <tr key={headerGroup.id}>
-                                    <SortableContext 
-                                        items={columnOrder} 
+                                    {headerGroup.headers
+                                        .filter(header => header.column.id === 'builder')
+                                        .map(header => (
+                                            <th
+                                                key={header.id}
+                                                className="no-select"
+                                                style={{
+                                                    width: header.getSize(),
+                                                    height: '34px',
+                                                    padding: 0,
+                                                    borderBottom: '1px solid var(--border-color)',
+                                                    borderRight: '1px solid var(--border-color)',
+                                                    background: 'var(--bg-primary)',
+                                                }}
+                                            />
+                                        ))}
+                                    <SortableContext
+                                        items={columnOrder}
                                         strategy={horizontalListSortingStrategy}
                                     >
-                                        {headerGroup.headers.map(header => (
+                                        {headerGroup.headers
+                                            .filter(header => header.column.id !== 'builder')
+                                            .map(header => (
                                             <DraggableTableHeader key={header.id} header={header} table={table} />
                                         ))}
                                     </SortableContext>
@@ -2128,6 +2232,25 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             </span>
                             <span style={{ marginLeft: 'auto', fontSize: '11px', opacity: 0.6 }}>Q</span>
                         </div>
+                        {builderPlaylistId != null && onAddToBuilder && builderPlaylistId !== playlistId && (
+                            <>
+                                <div className="context-menu-separator" />
+                                <div
+                                    className="context-menu-item"
+                                    onClick={() => {
+                                        onAddToBuilder(getActionTracks(contextMenu.track).map(t => t.id));
+                                        setContextMenu(null);
+                                    }}
+                                >
+                                    <Plus size={14} className="context-menu-icon" />
+                                    <span>
+                                        {selectedTrackIds.has(contextMenu.track.id) && selectedTrackIds.size > 1
+                                            ? `Add ${selectedTrackIds.size} to “${builderPlaylistName ?? 'target'}”`
+                                            : `Add to “${builderPlaylistName ?? 'target'}”`}
+                                    </span>
+                                </div>
+                            </>
+                        )}
                         <div className="context-menu-separator" />
                         {contextMenu.track.source !== 'spotify' && (
                         <div

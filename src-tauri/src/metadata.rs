@@ -85,16 +85,45 @@ pub fn normalize_mpeg_junk_gap<P: AsRef<Path>>(path: P) -> Result<bool> {
     Ok(true)
 }
 
-/// Saves `tag` to `path`. If lofty rejects the write because it can't determine
-/// the format (the ID3v2-to-audio junk-gap failure mode above), normalize the
-/// file once and retry. Any other failure is returned unchanged.
+/// Saves `tag` to `path` **atomically**: lofty's `save_to_path` rewrites the file in
+/// place, so a crash/kill/power-loss mid-write can leave the user's audio file truncated
+/// or corrupted. Instead we copy the file to a sibling temp, write the tag to the temp,
+/// then atomically rename it over the original. A failure at any point deletes the temp
+/// and leaves the original byte-for-byte untouched.
+///
+/// If lofty rejects the write because it can't determine the format (the ID3v2-to-audio
+/// junk-gap failure mode above), the temp is normalized once and the write retried — the
+/// same repair logic as before, just applied to the temp copy.
 fn save_tag_repairing(path: &Path, tag: &Tag, ctx: &'static str) -> Result<()> {
-    match tag.save_to_path(path, WriteOptions::default()) {
+    // Sibling temp in the SAME directory so the final rename stays on one filesystem
+    // (cross-device rename is not atomic and would fail).
+    let tmp = path.with_extension("tagdeck-writing");
+
+    // lofty edits in place, so the temp must start as a full byte copy of the original.
+    // fs::copy truncates any stale temp left by a prior crash and preserves permissions.
+    std::fs::copy(path, &tmp).with_context(|| {
+        format!("Failed to stage temp copy for atomic tag write: {:?}", tmp)
+    })?;
+
+    let write_result = match tag.save_to_path(&tmp, WriteOptions::default()) {
         Ok(()) => Ok(()),
-        Err(first_err) => match normalize_mpeg_junk_gap(path) {
-            Ok(true) => tag.save_to_path(path, WriteOptions::default()).context(ctx),
+        Err(first_err) => match normalize_mpeg_junk_gap(&tmp) {
+            Ok(true) => tag.save_to_path(&tmp, WriteOptions::default()).context(ctx),
             _ => Err(first_err).context(ctx),
         },
+    };
+
+    match write_result {
+        Ok(()) => {
+            // Atomic swap: readers/crashes see either the old file or the new one.
+            std::fs::rename(&tmp, path)
+                .with_context(|| format!("Failed to atomically replace {:?}", path))
+        }
+        Err(e) => {
+            // Leave the original untouched; discard the partial temp.
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
     }
 }
 
@@ -376,5 +405,67 @@ mod tests {
         std::fs::File::create(&path).unwrap().write_all(&data).unwrap();
         assert!(!normalize_mpeg_junk_gap(&path).unwrap());
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Minimal valid mono 8-bit PCM WAV (44-byte header + `data_len` sample bytes).
+    fn minimal_wav(data_len: u32) -> Vec<u8> {
+        let mut w = Vec::new();
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data_len).to_le_bytes());
+        w.extend_from_slice(b"WAVE");
+        w.extend_from_slice(b"fmt ");
+        w.extend_from_slice(&16u32.to_le_bytes()); // fmt chunk size
+        w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        w.extend_from_slice(&1u16.to_le_bytes()); // mono
+        w.extend_from_slice(&8000u32.to_le_bytes()); // sample rate
+        w.extend_from_slice(&8000u32.to_le_bytes()); // byte rate
+        w.extend_from_slice(&1u16.to_le_bytes()); // block align
+        w.extend_from_slice(&8u16.to_le_bytes()); // bits per sample
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data_len.to_le_bytes());
+        w.extend(std::iter::repeat(0u8).take(data_len as usize));
+        w
+    }
+
+    #[test]
+    fn atomic_write_roundtrips_and_leaves_no_temp() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("tagdeck_atomic_roundtrip.wav");
+        std::fs::write(&path, minimal_wav(8)).unwrap();
+
+        write_metadata(&path, "my note && house; techno").unwrap();
+
+        // The comment survives the atomic swap and the file is still a valid, readable WAV.
+        let (comment, _grouping) = read_metadata(&path).unwrap();
+        assert_eq!(comment, "my note && house; techno");
+
+        // No temp file left behind on the happy path.
+        let tmp = path.with_extension("tagdeck-writing");
+        assert!(!tmp.exists(), "temp file should be renamed away, not left behind");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn failed_write_leaves_original_intact_and_cleans_temp() {
+        // A non-audio file makes lofty's save fail; the atomic path must leave the
+        // original byte-for-byte intact and delete the staged temp.
+        let dir = std::env::temp_dir();
+        let path = dir.join("tagdeck_atomic_failpath.txt");
+        let original = b"not an audio file - do not corrupt me".to_vec();
+        std::fs::write(&path, &original).unwrap();
+
+        let mut tag = Tag::new(TagType::Id3v2);
+        tag.insert_text(ItemKey::Comment, "nope".to_string());
+        let result = save_tag_repairing(&path, &tag, "test");
+
+        assert!(result.is_err(), "writing a tag to a text file should fail");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "original must be untouched");
+        let tmp = path.with_extension("tagdeck-writing");
+        assert!(!tmp.exists(), "temp must be cleaned up on failure");
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&tmp).ok();
     }
 }

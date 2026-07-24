@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Loader2, FolderSync, HardDrive } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, confirm } from '@tauri-apps/plugin-dialog';
 import { useToast } from '../Toast';
 import { ToggleSwitch } from './ToggleSwitch';
 import { PlaylistBackupSection } from './PlaylistBackupSection';
@@ -119,22 +119,40 @@ export function LibraryTab({ libraryConfig, updateLibraryConfig, appleMusicAvail
                 {(['Copy', 'Move', 'InPlace'] as const).map((mode) => {
                     const labels: Record<string, string> = {
                         Copy: 'Copy to library (recommended)',
-                        Move: 'Move to library',
+                        Move: 'Move to library (deletes originals)',
                         InPlace: 'Keep files in place (advanced)',
                     };
+                    const subLabels: Record<string, string> = {
+                        Move: 'Originals are moved to the Trash after a verified copy.',
+                    };
                     return (
-                        <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', marginBottom: '4px', cursor: 'pointer' }}>
+                        <label key={mode} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '13px', color: 'var(--text-primary)', marginBottom: '4px', cursor: 'pointer' }}>
                             <input
                                 type="radio"
                                 name="import-mode"
                                 checked={libraryConfig?.import_mode === mode}
-                                onChange={() => {
+                                onChange={async () => {
                                     if (!libraryConfig) return;
+                                    // Confirm before switching TO Move — it's the one mode that removes originals.
+                                    if (mode === 'Move' && libraryConfig.import_mode !== 'Move') {
+                                        const ok = await confirm(
+                                            'New imports will be copied into your library and the original files moved to the Trash (after a verified, byte-for-byte copy). Existing files aren’t touched.',
+                                            { title: 'Move originals into the library?', kind: 'warning', okLabel: 'Use Move mode', cancelLabel: 'Cancel' }
+                                        );
+                                        if (!ok) return;
+                                    }
                                     updateLibraryConfig({ import_mode: mode });
                                 }}
-                                style={{ accentColor: 'var(--accent-color)' }}
+                                style={{ accentColor: 'var(--accent-color)', marginTop: '2px' }}
                             />
-                            {labels[mode]}
+                            <span>
+                                {labels[mode]}
+                                {subLabels[mode] && (
+                                    <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-secondary)', marginTop: '1px' }}>
+                                        {subLabels[mode]}
+                                    </span>
+                                )}
+                            </span>
                         </label>
                     );
                 })}

@@ -20,6 +20,7 @@ The docs are organized by **how current and how forward-looking** they are:
 - [reference/MixedInKeyIntegration.md](reference/MixedInKeyIntegration.md) — how "Analyze with Mixed In Key" triggers the external app and reloads BPM/key/energy.
 - [reference/KeyCommands.md](reference/KeyCommands.md) — keyboard shortcuts.
 - [reference/SearchSpecs.md](reference/SearchSpecs.md) — advanced search-bar syntax (with parsed-but-not-yet-functional fields flagged).
+- [reference/PlaylistBuilder.md](reference/PlaylistBuilder.md) — the **Build** tab: promoting a playlist to a target and filling it from the track list.
 
 ## Roadmap (forward-looking)
 
@@ -34,6 +35,14 @@ Design specs and task-by-task implementation plans for features built via spec-d
 - Spotify playlist ↔ library match scan — [spec](superpowers/specs/2026-07-06-spotify-playlist-library-match-scan-design.md) · [plan](superpowers/plans/2026-07-06-spotify-playlist-library-match-scan.md)
 - Play queue — [spec](superpowers/specs/2026-07-07-play-queue-design.md) · [plan](superpowers/plans/2026-07-07-play-queue.md)
 - Vocabulary expansion — [spec](superpowers/specs/2026-07-07-vocabulary-expansion-design.md) · [plan](superpowers/plans/2026-07-07-vocabulary-expansion.md)
+
+Data-loss safety fixes (from the file/data-loss risk audit):
+- Mass-removal safety guard — [spec](superpowers/specs/2026-07-11-mass-removal-safety-guard-design.md)
+- iTunes comment read-merge — [spec](superpowers/specs/2026-07-11-itunes-comment-readmerge-design.md)
+- Move-import safety — [spec](superpowers/specs/2026-07-12-move-import-safety-design.md)
+- Atomic tag writes — [spec](superpowers/specs/2026-07-12-atomic-tag-writes-design.md)
+- Safe playlist reorder — [spec](superpowers/specs/2026-07-12-safe-playlist-reorder-design.md)
+- Undo playlist-track removal (with position restore) — [spec](superpowers/specs/2026-07-12-undo-playlist-removal-design.md)
 
 ## Archive (historical)
 

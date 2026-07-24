@@ -376,30 +376,47 @@ pub fn import_file(
         fs::create_dir_all(parent).context("Failed to create destination directory")?;
     }
 
+    // If Move mode, hash the source BEFORE the copy so we can prove the destination
+    // is byte-identical before we ever touch the original.
+    let src_digest = if config.import_mode == ImportMode::Move {
+        Some(hash_file(source_path).context("Failed to hash source before move")?)
+    } else {
+        None
+    };
+
     // Copy the file
     fs::copy(source_path, &destination).context("Failed to copy file to library")?;
 
-    // If Move mode, verify then delete original
+    // If Move mode, verify (content hash, not size) then move the original to Trash.
     if config.import_mode == ImportMode::Move {
-        let src_size = fs::metadata(source_path)
-            .context("Failed to stat source")?
-            .len();
-        let dst_size = fs::metadata(&destination)
-            .context("Failed to stat destination")?
-            .len();
+        let src_digest = src_digest.expect("src_digest computed in Move mode");
+        let dst_digest =
+            hash_file(&destination).context("Failed to hash destination after copy")?;
 
-        if src_size == dst_size {
-            fs::remove_file(source_path).context("Failed to remove source after move")?;
-        } else {
+        if !contents_match(&src_digest, &dst_digest) {
+            // The copy is not byte-identical. Leave BOTH files in place — never delete
+            // the original when we can't prove the copy is good.
             bail!(
-                "File size mismatch after copy ({} vs {}), aborting move",
-                src_size,
-                dst_size
+                "Content mismatch after copy (source {} vs destination {}), aborting move — original left untouched",
+                src_digest,
+                dst_digest
             );
         }
+
+        // Move the original to the Trash (recoverable). A failure here must NOT escalate
+        // to a permanent delete — bail and leave the original in place.
+        trash::delete(source_path)
+            .with_context(|| format!("Failed to move original to Trash: {}", source_path.display()))?;
     }
 
     Ok(destination)
+}
+
+/// Whether two file digests are equal — the gate for removing a `Move`-mode original.
+/// Factored out so the "is the copy good enough to delete the original?" decision is
+/// unit-testable without touching the filesystem.
+fn contents_match(src_digest: &str, dst_digest: &str) -> bool {
+    src_digest == dst_digest
 }
 
 /// SHA-256 of a file's contents, streamed in 1 MB chunks. Used for duplicate
@@ -446,4 +463,47 @@ pub fn collect_audio_files(paths: &[String]) -> Vec<PathBuf> {
     }
 
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contents_match_true_for_equal_digests() {
+        // Byte-identical copy → original may be removed.
+        assert!(contents_match("abc123", "abc123"));
+    }
+
+    #[test]
+    fn contents_match_false_for_differing_digests() {
+        // A same-size but corrupted copy yields a different hash → original is kept.
+        assert!(!contents_match("abc123", "def456"));
+    }
+
+    #[test]
+    fn contents_match_false_for_empty_vs_nonempty() {
+        assert!(!contents_match("", "abc123"));
+    }
+
+    #[test]
+    fn hash_file_is_stable_and_distinguishes_content() {
+        // Two files of the SAME length but different bytes must hash differently — this
+        // is exactly the case the old size-only check missed.
+        let dir = std::env::temp_dir().join("tagdeck_hash_test");
+        let _ = fs::create_dir_all(&dir);
+        let a = dir.join("a.bin");
+        let b = dir.join("b.bin");
+        fs::write(&a, b"AAAA").unwrap();
+        fs::write(&b, b"BBBB").unwrap();
+
+        let ha = hash_file(&a).unwrap();
+        let hb = hash_file(&b).unwrap();
+        assert_eq!(ha, hash_file(&a).unwrap(), "hash must be stable");
+        assert_ne!(ha, hb, "same-length differing content must not collide");
+        assert!(!contents_match(&ha, &hb));
+
+        let _ = fs::remove_file(&a);
+        let _ = fs::remove_file(&b);
+    }
 }

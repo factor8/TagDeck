@@ -12,7 +12,7 @@ use crate::apple_music::{
     get_all_music_app_pids, get_tracks_by_persistent_ids
 };
 use crate::models::{Track, Playlist};
-use crate::undo::{UndoStack, Action, TrackState, TrackRef};
+use crate::undo::{UndoStack, Action, TrackState, TrackRef, RemovedTrackRef};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{State, Manager};
@@ -400,7 +400,10 @@ pub async fn write_tags(
     let push_enabled = LibraryConfig::sync_mode(&db).push_enabled();
     if push_enabled {
         if let Some(itunes_pid) = &track.itunes_pid {
-            if let Err(e) = update_track_comment(itunes_pid, &new_tags) {
+            // Read-merge: this is a tag edit (the editor's free-text field is
+            // read-only), so push via the tag-block path to preserve the live
+            // iTunes note instead of overwriting it with our stored copy.
+            if let Err(e) = batch_update_track_comments(vec![(itunes_pid.clone(), new_tags.clone())]) {
                  println!("Warning: Failed to update track in Music: {}", e);
             }
         }
@@ -807,6 +810,33 @@ pub struct SyncResult {
     pub conflicts_skipped: usize,
 }
 
+/// Never trip the proportional guard on batches this small — normal small
+/// deletions in any library size should auto-reconcile.
+const MASS_REMOVAL_FLOOR: usize = 25;
+/// Trip the guard when a single sync would remove more than this fraction of
+/// linked items.
+const MASS_REMOVAL_PCT: f64 = 0.20;
+
+/// True when a detected removal batch looks like the empty/partial-library
+/// failure mode (Music.app returned no/too-few items while TagDeck has many
+/// linked) rather than a genuine user deletion.
+///
+/// - `removed`: number of linked items absent from the live snapshot
+/// - `live`:    number of items the snapshot actually returned
+/// - `linked`:  number of linked items in the DB
+fn removal_is_suspicious(removed: usize, live: usize, linked: usize) -> bool {
+    if linked == 0 {
+        return false; // nothing linked -> nothing to protect
+    }
+    // Empty/loading library while we have linked items: always suspicious.
+    if live == 0 {
+        return true;
+    }
+    // Otherwise trip only on a large absolute AND proportional batch.
+    let threshold = MASS_REMOVAL_FLOOR.max((MASS_REMOVAL_PCT * linked as f64) as usize);
+    removed > threshold
+}
+
 #[tauri::command]
 pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppState>, since_timestamp: i64) -> Result<SyncResult, String> {
     
@@ -940,7 +970,47 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
             // Handle removed tracks per the `itunes_deletion_behavior` setting:
             // Keep (default) unlinks — the track and all its TagDeck data stay;
             // Remove mirrors the deletion into TagDeck too.
-            if !deleted_pids.is_empty() {
+            // Safety guard: a transient empty/partial Music.app snapshot makes
+            // every linked track look "removed". Rather than auto-unlink/delete
+            // TagDeck data (tags/ratings/playlist membership — recoverable
+            // nowhere else), route a suspiciously large batch to Sync Review for
+            // manual confirmation, whatever the configured deletion behavior.
+            if !deleted_pids.is_empty()
+                && removal_is_suspicious(deleted_pids.len(), music_pids.len(), db_pids.len())
+            {
+                let reason = if music_pids.is_empty() {
+                    "Music.app reported 0 tracks (library empty or still loading)".to_string()
+                } else {
+                    format!(
+                        "batch exceeds safety threshold ({} of {} linked)",
+                        deleted_pids.len(),
+                        db_pids.len()
+                    )
+                };
+                let warn = format!(
+                    "Skipped auto-removal of {} track(s): {}. Surfaced in Sync Review.",
+                    deleted_pids.len(),
+                    reason
+                );
+                println!("{}", warn);
+                app.state::<crate::logging::LogState>().add_log("WARN", &warn, &app);
+
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                match db.get_tracks_by_itunes_pids(&deleted_pids) {
+                    Ok(tracks) => {
+                        pending_removals.extend(tracks.iter().map(|t| crate::sync_review::RemovedTrack {
+                            track_id: t.id,
+                            itunes_pid: t.itunes_pid.clone().unwrap_or_default(),
+                            title: t.title.clone(),
+                            artist: t.artist.clone(),
+                        }));
+                    }
+                    Err(e) => {
+                        let msg = format!("DB Error loading suspicious removals for review: {}", e);
+                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                    }
+                }
+            } else if !deleted_pids.is_empty() {
                 let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
                 let deletion_behavior = LibraryConfig::load(&db)
                     .map(|c| c.itunes_deletion_behavior)
@@ -1154,7 +1224,35 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 .map(|(pid, _)| pid.clone())
                 .collect();
 
-            if !deleted_pids.is_empty() {
+            // Same empty/partial-snapshot vector as Phase 0: an empty Music.app
+            // playlist snapshot would otherwise remove every synced playlist from
+            // the DB. Guard it. Playlists don't flow through Sync Review, so here
+            // we skip-and-warn — the playlists remain until a healthy sync
+            // confirms the removal.
+            let synced_playlist_count = db_snapshot
+                .values()
+                .filter(|(_name, _is_folder, _parent, _tracks, sync_enabled)| *sync_enabled)
+                .count();
+            if !deleted_pids.is_empty()
+                && removal_is_suspicious(deleted_pids.len(), music_playlists.len(), synced_playlist_count)
+            {
+                let reason = if music_playlists.is_empty() {
+                    "Music.app reported 0 playlists (library empty or still loading)".to_string()
+                } else {
+                    format!(
+                        "batch exceeds safety threshold ({} of {} synced)",
+                        deleted_pids.len(),
+                        synced_playlist_count
+                    )
+                };
+                let warn = format!(
+                    "Skipped removal of {} playlist(s): {}. They remain until a healthy sync confirms.",
+                    deleted_pids.len(),
+                    reason
+                );
+                println!("{}", warn);
+                app.state::<crate::logging::LogState>().add_log("WARN", &warn, &app);
+            } else if !deleted_pids.is_empty() {
                 match db.remove_playlists_by_persistent_ids(&deleted_pids) {
                     Ok(names) => {
                         let count = names.len();
@@ -1323,22 +1421,35 @@ pub async fn rename_playlist(
     name: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
+    let (old_name, playlist_pid, sync_enabled, mode) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let old_name = db.get_playlist_name(id).map_err(|e| e.to_string())?; // capture for undo
+        db.rename_playlist(id, &name).map_err(|e| e.to_string())?;
+        let sync_enabled = db.get_playlist_sync_enabled(id).unwrap_or(false);
+        let pid = db.get_playlist_persistent_id(id).unwrap_or_default();
+        (old_name, pid, sync_enabled, LibraryConfig::sync_mode(&db))
+    };
 
     // If this playlist syncs with iTunes, also rename in Music.app — only when
     // the sync mode allows pushing TagDeck edits back to Music.app
-    let sync_enabled = db.get_playlist_sync_enabled(id).unwrap_or(false);
-    let mode = LibraryConfig::sync_mode(&db);
-    if sync_enabled && mode.push_enabled() {
-        let pid = db.get_playlist_persistent_id(id).map_err(|e| e.to_string())?;
-        drop(db); // Release lock before AppleScript call
-        if let Err(e) = crate::apple_music::rename_playlist_in_music(&pid, &name) {
+    if sync_enabled && mode.push_enabled() && !playlist_pid.is_empty() {
+        if let Err(e) = crate::apple_music::rename_playlist_in_music(&playlist_pid, &name) {
             let msg = format!("Warning: Failed to rename playlist in Music.app: {}", e);
             app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
         }
     }
 
+    // Push Undo (only if the name actually changed).
+    if old_name != name {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::RenamePlaylist {
+                playlist_id: id,
+                playlist_persistent_id: playlist_pid,
+                old_name,
+                new_name: name,
+            });
+        }
+    }
     Ok(())
 }
 
@@ -1348,8 +1459,18 @@ pub async fn delete_playlist(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    // Capture the full subtree first so the deletion can be undone.
+    let snapshot = db.snapshot_playlist_subtree(id).map_err(|e| e.to_string())?;
     // Safety: We never delete playlists from Music.app, only from TagDeck's DB
-    db.delete_playlist(id).map_err(|e| e.to_string())
+    db.delete_playlist(id).map_err(|e| e.to_string())?;
+    drop(db);
+
+    if !snapshot.playlists.is_empty() {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::DeletePlaylist { snapshot });
+        }
+    }
+    Ok(())
 }
 
 /// Toggles per-playlist iTunes sync. Disabling just flips the flag — the
@@ -1445,16 +1566,34 @@ pub async fn move_playlist(
     new_parent_id: Option<i64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    // Never hold the DB lock while locking the undo stack (undo/redo lock them in
+    // the opposite order) — capture, mutate, drop DB, then push.
+    let (old_parent_pid, new_parent_persistent_id) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
 
-    let new_parent_persistent_id = if let Some(pid) = new_parent_id {
-        Some(db.get_playlist_persistent_id(pid).map_err(|e| e.to_string())?)
-    } else {
-        None
+        let new_parent_persistent_id = if let Some(pid) = new_parent_id {
+            Some(db.get_playlist_persistent_id(pid).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let old_parent_pid = db.get_playlist_parent(id).unwrap_or(None); // capture for undo
+
+        db.move_playlist(id, new_parent_persistent_id.as_deref())
+            .map_err(|e| e.to_string())?;
+        (old_parent_pid, new_parent_persistent_id)
     };
 
-    db.move_playlist(id, new_parent_persistent_id.as_deref())
-        .map_err(|e| e.to_string())
+    // Push Undo (only if the parent actually changed).
+    if old_parent_pid != new_parent_persistent_id {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::MovePlaylist {
+                playlist_id: id,
+                old_parent_pid,
+                new_parent_pid: new_parent_persistent_id,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1474,9 +1613,24 @@ pub async fn reorder_sibling_playlists(
     ordered_ids: Vec<i64>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    db.reorder_sibling_playlists(&ordered_ids)
-        .map_err(|e| e.to_string())
+    let old_order = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let old_order = db.get_sibling_order(&ordered_ids).unwrap_or_default(); // capture for undo
+        db.reorder_sibling_playlists(&ordered_ids)
+            .map_err(|e| e.to_string())?;
+        old_order
+    };
+
+    // Push Undo (only if the order actually changed).
+    if old_order != ordered_ids {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::ReorderSiblingPlaylists {
+                old_order,
+                new_order: ordered_ids,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1593,7 +1747,11 @@ pub async fn remove_from_playlist(
         let mut data = Vec::new();
         for tid in &track_ids {
             if db.get_track_persistent_id(*tid).is_ok() {
-                data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None)));
+                // Capture the current slot so undo can restore the original order.
+                let position = db.get_track_position_in_playlist(playlist_id, *tid)
+                    .unwrap_or(None)
+                    .unwrap_or(i64::MAX);
+                data.push((*tid, db.get_track_itunes_pid(*tid).unwrap_or(None), position));
             }
         }
         let mode = LibraryConfig::sync_mode(&db);
@@ -1603,7 +1761,7 @@ pub async fn remove_from_playlist(
     // Remove from Apple Music (only for synced playlists, linked tracks,
     // and when the sync mode allows pushing TagDeck edits back to Music.app)
     if sync_enabled && mode.push_enabled() {
-        for (_, itunes_pid) in &track_data {
+        for (_, itunes_pid, _) in &track_data {
             if let Some(tpid) = itunes_pid {
                 if let Err(e) = apple_remove_from_playlist(tpid, &playlist_pid) {
                     let msg = format!("Failed to remove track from playlist in Music.app: {}", e);
@@ -1616,11 +1774,29 @@ pub async fn remove_from_playlist(
     // Remove from local DB
     let removed = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-        let tids: Vec<i64> = track_data.iter().map(|(id, _)| *id).collect();
+        let tids: Vec<i64> = track_data.iter().map(|(id, _, _)| *id).collect();
         db.remove_tracks_from_playlist(playlist_id, &tids)
             .map_err(|e| e.to_string())?;
         tids.len()
     };
+
+    // Push Undo Action (mirror of AddToPlaylist) so a removal can be reversed.
+    if !track_data.is_empty() {
+        let removed_tracks: Vec<RemovedTrackRef> = track_data.iter().map(|(id, itunes_pid, position)| RemovedTrackRef {
+            id: *id,
+            // Used only for Music.app write-back; empty = unlinked, skipped
+            persistent_id: itunes_pid.clone().unwrap_or_default(),
+            position: *position,
+        }).collect();
+
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::RemoveFromPlaylist {
+                playlist_id,
+                playlist_persistent_id: playlist_pid.clone(),
+                tracks: removed_tracks,
+            });
+        }
+    }
 
     Ok(removed)
 }
@@ -1648,11 +1824,25 @@ pub async fn reorder_playlist_tracks(
         (ppid, pids, sync_enabled, LibraryConfig::sync_mode(&db))
     };
 
-    // 2. Update local DB
-    {
+    // 2. Update local DB (capturing the prior order for undo first).
+    let old_order = {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let old_order = db.get_playlist_track_ids(playlist_id).unwrap_or_default();
         db.reorder_playlist_tracks(playlist_id, &ordered_track_ids)
             .map_err(|e| e.to_string())?;
+        old_order
+    };
+
+    // Push Undo (only if the order actually changed).
+    if old_order != ordered_track_ids {
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::ReorderPlaylistTracks {
+                playlist_id,
+                playlist_persistent_id: playlist_pid.clone(),
+                old_order,
+                new_order: ordered_track_ids.clone(),
+            });
+        }
     }
 
     // 3. Sync to Apple Music (in background — don't block the UI), only for
@@ -1681,8 +1871,9 @@ pub async fn update_rating(
     
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
 
-    // 1. Get iTunes link
+    // 1. Get iTunes link + capture the current rating for undo.
     let itunes_pid = db.get_track_itunes_pid(track_id).map_err(|e| e.to_string())?;
+    let old_rating = db.get_track(track_id).ok().flatten().map(|t| t.rating as u32).unwrap_or(0);
 
     // 2. Update Music.app (linked tracks only, and only when the sync mode
     // allows pushing TagDeck edits back to Music.app)
@@ -1709,6 +1900,19 @@ pub async fn update_rating(
                 let msg = format!("Failed to mark track dirty: {}", e);
                 app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
             }
+        }
+    }
+
+    // 4. Push Undo (only if the rating actually changed).
+    if old_rating != rating {
+        drop(db);
+        if let Ok(mut stack) = state.undo_stack.lock() {
+            stack.push(Action::UpdateRating {
+                track_id,
+                persistent_id: itunes_pid.unwrap_or_default(),
+                old_rating,
+                new_rating: rating,
+            });
         }
     }
 
@@ -1815,8 +2019,16 @@ pub async fn update_tag_group(id: i64, name: String, state: State<'_, AppState>)
 
 #[tauri::command]
 pub async fn delete_tag_group(id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
-        .delete_tag_group(id).map_err(|e| e.to_string())
+    let group = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let group = db.get_tag_group_row(id).map_err(|e| e.to_string())?; // capture for undo
+        db.delete_tag_group(id).map_err(|e| e.to_string())?;
+        group
+    };
+    if let Ok(mut stack) = state.undo_stack.lock() {
+        stack.push(Action::DeleteTagGroup { group });
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1840,8 +2052,16 @@ pub async fn get_all_tags(state: State<'_, AppState>) -> Result<Vec<crate::model
 
 #[tauri::command]
 pub async fn delete_tag(tag_id: i64, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
-        .delete_tag(tag_id).map_err(|e| e.to_string())
+    let tag = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let tag = db.get_tag_row(tag_id).map_err(|e| e.to_string())?; // capture for undo
+        db.delete_tag(tag_id).map_err(|e| e.to_string())?;
+        tag
+    };
+    if let Ok(mut stack) = state.undo_stack.lock() {
+        stack.push(Action::DeleteTag { tag });
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -3018,6 +3238,42 @@ pub async fn restore_playlist_backup(
 mod tests {
     use super::*;
     use crate::db::Database;
+
+    #[test]
+    fn suspicious_when_snapshot_empty_but_linked() {
+        // Empty/loading Music.app library while we have linked tracks.
+        assert!(removal_is_suspicious(1000, 0, 1000));
+        assert!(removal_is_suspicious(1, 0, 1));
+    }
+
+    #[test]
+    fn suspicious_when_batch_over_threshold() {
+        // linked=1000 -> threshold = max(25, 200) = 200.
+        assert!(removal_is_suspicious(201, 800, 1000));
+        assert!(!removal_is_suspicious(200, 800, 1000));
+    }
+
+    #[test]
+    fn not_suspicious_for_small_absolute_batch() {
+        // Floor protects normal small deletions regardless of library size.
+        assert!(!removal_is_suspicious(10, 90, 100)); // 10% but under floor
+        assert!(!removal_is_suspicious(25, 75, 100)); // exactly floor, not over
+        assert!(!removal_is_suspicious(5, 4995, 5000));
+    }
+
+    #[test]
+    fn small_library_floor_over_proportion() {
+        // linked=100 -> threshold = max(25, 20) = 25. Must exceed the floor,
+        // not just the 20% proportion, to trip.
+        assert!(!removal_is_suspicious(20, 80, 100));
+        assert!(removal_is_suspicious(26, 74, 100));
+    }
+
+    #[test]
+    fn never_suspicious_with_nothing_linked() {
+        assert!(!removal_is_suspicious(0, 0, 0));
+        assert!(!removal_is_suspicious(0, 500, 0));
+    }
 
     fn ghost(spotify_id: &str) -> Track {
         Track {

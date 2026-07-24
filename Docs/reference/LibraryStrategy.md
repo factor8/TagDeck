@@ -65,11 +65,13 @@ The existing sync engine already computes every diff we need (Phase 0 adds/remov
 - Defaults: iTunes-origin playlists → on; TagDeck-origin → off.
 - Sync Phase 3 and the write-back gates in `add_to_playlist` / `remove_from_playlist` / `rename_playlist` switch from `origin == "itunes"` checks to `itunes_sync_enabled && mode == TwoWay`.
 - Context-menu actions: **"Stop syncing with iTunes"** (flag off — playlist becomes TagDeck-owned, survives sync) and **"Sync to iTunes"** (creates the playlist in Music.app if missing, links, flag on).
+- **Reorder safety** (`reorder_playlist` in `apple_music.rs`): pushing a new track order to Music.app has no transactional API, so it deletes the playlist's tracks and re-adds them in order. To keep a mid-operation failure from dropping membership, it only targets a *user playlist*, resolves every track **before** deleting (a missing track aborts untouched — no silent shrink), snapshots the original membership and **restores** it if the rebuild fails or the resulting count is wrong, and surfaces real errors to the caller (logged WARN) instead of swallowing them. TagDeck's DB copy is updated first and is the source of truth regardless.
 - Turning the global mode Off simply stops all sync; nothing is converted or deleted. Links are kept so re-enabling reconnects cleanly.
 
 ### File management (always-on, not a fallback)
 
 - Library root / Copy-Move-InPlace / organize settings become always visible. In Two-way mode with "add to Music.app" enabled, Music still organizes files (current behavior); otherwise `file_manager` handles every import.
+  - **Move-mode safety** (`import_file`): `Move` is the only mode that removes a user's original. It copies to the library, then **content-hashes** source vs destination (SHA-256, not a size comparison) and removes the original only when they match; the original goes to the **Trash** (`trash` crate), never a hard delete. Any failure to verify or trash leaves the original untouched. The settings UI labels it "deletes originals" and confirms before switching to it.
 - Populate the existing dead `file_hash` column on import; dedup by hash **or** path (today it's path-only).
 - Extend `library_watcher` to also watch the TagDeck root: mark tracks `missing` on delete, offer relocate on move.
 - Add **Consolidate Library**: copy all InPlace/external tracks into the organized root (already sketched in [FileManagementPlan.md](../roadmap/FileManagementPlan.md)).

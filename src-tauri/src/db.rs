@@ -855,6 +855,77 @@ impl Database {
         Ok(())
     }
 
+    /// Captures a playlist and (if it's a folder) its direct children — the exact
+    /// set `delete_playlist` removes — plus all their track memberships, so a
+    /// deletion can be fully undone. `playlists[0]` is the deletion target.
+    pub fn snapshot_playlist_subtree(&self, id: i64) -> Result<DeletedPlaylistSnapshot> {
+        const COLS: &str = "id, persistent_id, parent_persistent_id, name, is_folder,
+             COALESCE(origin, 'itunes'), COALESCE(itunes_sync_enabled, 0),
+             description, color, COALESCE(sort_position, 0),
+             COALESCE(created_at, 0), COALESCE(updated_at, 0),
+             spotify_playlist_id, spotify_snapshot_id";
+
+        let target: crate::models::Playlist = self.conn.query_row(
+            &format!("SELECT {} FROM playlists WHERE id = ?1", COLS),
+            params![id],
+            row_to_playlist,
+        )?;
+
+        let mut playlists = vec![target.clone()];
+        {
+            let mut stmt = self.conn.prepare(
+                &format!("SELECT {} FROM playlists WHERE parent_persistent_id = ?1 ORDER BY sort_position ASC", COLS)
+            )?;
+            let children = stmt.query_map(params![target.persistent_id], row_to_playlist)?
+                .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+            playlists.extend(children);
+        }
+
+        let mut memberships = Vec::new();
+        for p in &playlists {
+            let mut mstmt = self.conn.prepare(
+                "SELECT playlist_id, track_id, position FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position ASC"
+            )?;
+            let rows = mstmt.query_map(params![p.id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+            })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
+            memberships.extend(rows);
+        }
+
+        Ok(DeletedPlaylistSnapshot { playlists, memberships })
+    }
+
+    /// Restores a subtree captured by `snapshot_playlist_subtree`, re-inserting the
+    /// playlist rows at their original ids (safe: AUTOINCREMENT never reuses them)
+    /// and their memberships. Used to undo a playlist deletion.
+    pub fn restore_playlist_subtree(&self, snap: &DeletedPlaylistSnapshot) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut pstmt = tx.prepare(
+                "INSERT OR IGNORE INTO playlists
+                 (id, persistent_id, parent_persistent_id, name, is_folder, origin,
+                  itunes_sync_enabled, description, color, sort_position, created_at,
+                  updated_at, spotify_playlist_id, spotify_snapshot_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"
+            )?;
+            for p in &snap.playlists {
+                pstmt.execute(params![
+                    p.id, p.persistent_id, p.parent_persistent_id, p.name, p.is_folder,
+                    p.origin, p.itunes_sync_enabled, p.description, p.color, p.sort_position,
+                    p.created_at, p.updated_at, p.spotify_playlist_id, p.spotify_snapshot_id
+                ])?;
+            }
+            let mut mstmt = tx.prepare(
+                "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1,?2,?3)"
+            )?;
+            for (playlist_id, track_id, position) in &snap.memberships {
+                mstmt.execute(params![playlist_id, track_id, position])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Moves a playlist to a new parent folder (or root if parent_persistent_id is None).
     pub fn move_playlist(&self, id: i64, new_parent_persistent_id: Option<&str>) -> Result<()> {
         let now = std::time::SystemTime::now()
@@ -1218,6 +1289,34 @@ impl Database {
         Ok(())
     }
 
+    /// Returns a track's current position within a playlist, or None if absent.
+    /// Captured before a removal so an undo can restore the original slot.
+    pub fn get_track_position_in_playlist(&self, playlist_id: i64, track_id: i64) -> Result<Option<i64>> {
+        use rusqlite::OptionalExtension;
+        let pos = self.conn.query_row(
+            "SELECT position FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist_id, track_id],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(pos)
+    }
+
+    /// Re-inserts a track at a specific position, shifting existing tracks at or
+    /// after that position down by one to make room. Used by undo of a removal to
+    /// restore the track's original slot. Inserting removed tracks in ascending
+    /// captured-position order reproduces the original ordering exactly.
+    pub fn insert_track_in_playlist_at(&self, playlist_id: i64, track_id: i64, position: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE playlist_tracks SET position = position + 1 WHERE playlist_id = ?1 AND position >= ?2",
+            params![playlist_id, position],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+            params![playlist_id, track_id, position],
+        )?;
+        Ok(())
+    }
+
     /// Removes multiple tracks from a playlist and re-numbers positions.
     pub fn remove_tracks_from_playlist(&self, playlist_id: i64, track_ids: &[i64]) -> Result<()> {
         for tid in track_ids {
@@ -1419,6 +1518,90 @@ impl Database {
     pub fn delete_tag(&self, tag_id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
         Ok(())
+    }
+
+    /// Reads a single tag row (for undo capture before deletion).
+    pub fn get_tag_row(&self, tag_id: i64) -> Result<crate::models::Tag> {
+        Ok(self.conn.query_row(
+            "SELECT id, name, usage_count, group_id, description FROM tags WHERE id = ?1",
+            params![tag_id],
+            |row| Ok(crate::models::Tag {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                usage_count: row.get(2)?,
+                group_id: row.get(3)?,
+                description: row.get(4)?,
+            }),
+        )?)
+    }
+
+    /// Re-inserts a tag row at its original id (undo of a tag deletion). Tracks
+    /// keep the tag text in their comments regardless; this restores the vocab
+    /// entry, its group link, usage count, and description.
+    pub fn insert_tag_row(&self, tag: &crate::models::Tag) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO tags (id, name, usage_count, group_id, description) VALUES (?1,?2,?3,?4,?5)",
+            params![tag.id, tag.name, tag.usage_count, tag.group_id, tag.description],
+        )?;
+        Ok(())
+    }
+
+    /// Reads a single tag-group row (for undo capture before deletion).
+    pub fn get_tag_group_row(&self, id: i64) -> Result<crate::models::TagGroup> {
+        Ok(self.conn.query_row(
+            "SELECT id, name, position FROM tag_groups WHERE id = ?1",
+            params![id],
+            |row| Ok(crate::models::TagGroup {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                position: row.get(2)?,
+            }),
+        )?)
+    }
+
+    /// Re-inserts a tag-group row at its original id (undo of a group deletion).
+    /// Member tags kept their `group_id` (foreign keys are off), so restoring the
+    /// row at the same id re-associates them automatically.
+    pub fn insert_tag_group_row(&self, group: &crate::models::TagGroup) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO tag_groups (id, name, position) VALUES (?1,?2,?3)",
+            params![group.id, group.name, group.position],
+        )?;
+        Ok(())
+    }
+
+    /// A playlist's current parent persistent id (for undo of a move).
+    pub fn get_playlist_parent(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.conn.query_row(
+            "SELECT parent_persistent_id FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// A playlist's current name (for undo of a rename).
+    pub fn get_playlist_name(&self, id: i64) -> Result<String> {
+        Ok(self.conn.query_row(
+            "SELECT name FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// Returns the given playlist ids ordered by their current `sort_position`
+    /// (for capturing the pre-reorder sidebar order before applying a new one).
+    pub fn get_sibling_order(&self, ids: &[i64]) -> Result<Vec<i64>> {
+        let mut with_pos: Vec<(i64, i64)> = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let pos: i64 = self.conn.query_row(
+                "SELECT COALESCE(sort_position, 0) FROM playlists WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            ).unwrap_or(0);
+            with_pos.push((id, pos));
+        }
+        with_pos.sort_by_key(|(_, pos)| *pos);
+        Ok(with_pos.into_iter().map(|(id, _)| id).collect())
     }
 
     /// Set (or clear, with None) a tag's optional zero-shot prompt override.
@@ -2328,6 +2511,37 @@ pub struct PlaylistBackupEntry {
     pub tracks: Vec<BackupTrackRef>,
 }
 
+/// Full-fidelity snapshot of a deleted playlist subtree, for undo. `playlists[0]`
+/// is the deletion target; the rest are its direct children (folders). Memberships
+/// are `(playlist_id, track_id, position)`.
+#[derive(Debug, Clone)]
+pub struct DeletedPlaylistSnapshot {
+    pub playlists: Vec<crate::models::Playlist>,
+    pub memberships: Vec<(i64, i64, i64)>,
+}
+
+/// Maps a full playlists-table row (the column order used by `snapshot_playlist_subtree`
+/// and `get_playlists`) to a `Playlist`.
+fn row_to_playlist(row: &rusqlite::Row) -> rusqlite::Result<crate::models::Playlist> {
+    Ok(crate::models::Playlist {
+        id: row.get(0)?,
+        persistent_id: row.get(1)?,
+        parent_persistent_id: row.get(2)?,
+        name: row.get(3)?,
+        is_folder: row.get(4)?,
+        track_ids: None,
+        origin: row.get(5)?,
+        itunes_sync_enabled: row.get(6)?,
+        description: row.get(7)?,
+        color: row.get(8)?,
+        sort_position: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        spotify_playlist_id: row.get(12).unwrap_or(None),
+        spotify_snapshot_id: row.get(13).unwrap_or(None),
+    })
+}
+
 /// Minimal track reference for backup — enough info to match on restore.
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct BackupTrackRef {
@@ -2402,6 +2616,102 @@ mod tests {
             source: "spotify".into(),
             spotify_id: Some(spotify_id.to_string()),
         }
+    }
+
+    /// Removing tracks from the middle of a playlist and then re-inserting them
+    /// at their captured positions (ascending) must reproduce the original order.
+    /// This is the DB half of playlist-removal undo.
+    #[test]
+    fn remove_then_reinsert_at_positions_restores_order() {
+        let db = Database::new(":memory:").unwrap();
+        let pl = db.create_playlist("Crate", None, false, "PL-1").unwrap();
+        // A0 B1 C2 D3 E4 F5
+        let ids: Vec<i64> = (0..6)
+            .map(|i| db.insert_imported_track(&ghost(&format!("pos-{}", i)), None, None).unwrap())
+            .collect();
+        for id in &ids {
+            db.add_track_to_playlist_db(pl.id, *id).unwrap();
+        }
+        assert_eq!(db.get_playlist_track_ids(pl.id).unwrap(), ids);
+
+        // Remove C (pos 2) and E (pos 4); capture positions first.
+        let cp = db.get_track_position_in_playlist(pl.id, ids[2]).unwrap().unwrap();
+        let ep = db.get_track_position_in_playlist(pl.id, ids[4]).unwrap().unwrap();
+        assert_eq!((cp, ep), (2, 4));
+        db.remove_tracks_from_playlist(pl.id, &[ids[2], ids[4]]).unwrap();
+        assert_eq!(
+            db.get_playlist_track_ids(pl.id).unwrap(),
+            vec![ids[0], ids[1], ids[3], ids[5]]
+        );
+
+        // Undo: re-insert in ascending captured-position order.
+        db.insert_track_in_playlist_at(pl.id, ids[2], cp).unwrap();
+        db.insert_track_in_playlist_at(pl.id, ids[4], ep).unwrap();
+        assert_eq!(db.get_playlist_track_ids(pl.id).unwrap(), ids, "original order restored");
+    }
+
+    /// Deleting a folder (with a child playlist that has tracks) and undoing it must
+    /// restore the whole subtree at the original ids, with membership + order intact.
+    #[test]
+    fn delete_then_restore_playlist_subtree_roundtrips() {
+        let db = Database::new(":memory:").unwrap();
+        let folder = db.create_playlist("Folder", None, true, "FOLDER-1").unwrap();
+        let child = db.create_playlist("Crate", Some("FOLDER-1"), false, "PL-1").unwrap();
+        let ids: Vec<i64> = (0..3)
+            .map(|i| db.insert_imported_track(&ghost(&format!("sub-{}", i)), None, None).unwrap())
+            .collect();
+        for id in &ids {
+            db.add_track_to_playlist_db(child.id, *id).unwrap();
+        }
+
+        let snap = db.snapshot_playlist_subtree(folder.id).unwrap();
+        assert_eq!(snap.playlists[0].id, folder.id, "target is first");
+        assert_eq!(snap.playlists.len(), 2, "folder + child captured");
+        assert_eq!(snap.memberships.len(), 3);
+
+        db.delete_playlist(folder.id).unwrap();
+        assert!(db.get_playlists().unwrap().iter().all(|p| p.id != folder.id && p.id != child.id));
+
+        db.restore_playlist_subtree(&snap).unwrap();
+        let pls = db.get_playlists().unwrap();
+        assert!(pls.iter().any(|p| p.id == folder.id && p.is_folder && p.name == "Folder"));
+        let restored_child = pls.iter().find(|p| p.id == child.id).expect("child restored at original id");
+        assert_eq!(restored_child.parent_persistent_id.as_deref(), Some("FOLDER-1"));
+        assert_eq!(db.get_playlist_track_ids(child.id).unwrap(), ids, "membership + order restored");
+    }
+
+    /// Tag / tag-group delete-undo relies on capturing the row and re-inserting it
+    /// at the original id. Round-trip the getters/inserters.
+    #[test]
+    fn tag_and_group_row_roundtrip_preserves_id_and_fields() {
+        let db = Database::new(":memory:").unwrap();
+        let group = crate::models::TagGroup { id: 5, name: "Mood".into(), position: 2 };
+        db.insert_tag_group_row(&group).unwrap();
+        let got_group = db.get_tag_group_row(5).unwrap();
+        assert_eq!((got_group.name.as_str(), got_group.position), ("Mood", 2));
+
+        let tag = crate::models::Tag {
+            id: 7, name: "deep".into(), usage_count: 3, group_id: Some(5),
+            description: Some("prompt".into()),
+        };
+        db.insert_tag_row(&tag).unwrap();
+        let got = db.get_tag_row(7).unwrap();
+        assert_eq!(got.name, "deep");
+        assert_eq!(got.usage_count, 3);
+        assert_eq!(got.group_id, Some(5));
+        assert_eq!(got.description.as_deref(), Some("prompt"));
+    }
+
+    /// Sibling-reorder undo captures the pre-reorder order via sort_position.
+    #[test]
+    fn get_sibling_order_sorts_by_sort_position() {
+        let db = Database::new(":memory:").unwrap();
+        let a = db.create_playlist("A", None, false, "S-A").unwrap(); // sort_position 0
+        let b = db.create_playlist("B", None, false, "S-B").unwrap(); // 1
+        let c = db.create_playlist("C", None, false, "S-C").unwrap(); // 2
+        // Regardless of the id order passed in, result is by current sort_position.
+        let order = db.get_sibling_order(&[c.id, a.id, b.id]).unwrap();
+        assert_eq!(order, vec![a.id, b.id, c.id]);
     }
 
     #[test]
