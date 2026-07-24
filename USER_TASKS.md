@@ -23,6 +23,7 @@ _Depends-on-Jordan items that should halt related work until done._
 ## To Do
 _Non-blocking — do when convenient._
 
+- [ ] (2026-07-23) Manually smoke-test the Show/Hide Missing Tracks toggle: count matches dimmed rows, toggling hides/shows missing rows, disabled+dimmed at "0 missing", composes with search, and persists across an app restart.
 - [ ] (2026-07-11) **Data-loss risk review — decisions needed.** From the file/data-loss audit. Decide:
   (a) should `DeletionBehavior::Remove` stay selectable at all, or become opt-in-behind-a-warning with **Ask** as the hard default? (b) the mass-deletion safety threshold value — what fraction/count of linked tracks vanishing in one sync should trip the abort-and-review guard (e.g. >10% or >50 tracks)? ~~(c) for "Move" import, prefer deleting originals vs. moving them to Trash (recoverable)?~~ **Resolved 2026-07-12 → move to Trash (#3 fix shipped).**
 - [ ] (2026-07-11) **Manual test once #1 lands:** with a large linked library, quit Music.app mid-sync / open an empty or still-loading library and run a sync — confirm TagDeck **aborts the removal phase** and logs a warning instead of purging tracks. Then confirm a *genuine* small deletion in Music.app still reconciles normally.
