@@ -690,9 +690,18 @@ function App() {
       const armed = armedRef.current;
       resetDwell();
       const { active, over } = event;
-      if (!over) return;
-
       const activeId = String(active.id);
+
+      // Track dragged but dropped nowhere: if this is a sorted playlist, reordering
+      // is disabled — surface a subtle notice instead of silently doing nothing.
+      if (!over) {
+          if (isTrackId(activeId)) {
+              const notice = trackListRef.current?.reorderBlockedNotice();
+              if (notice) showToast(notice, 'info');
+          }
+          return;
+      }
+
       const overId = String(over.id);
 
       // Track -> Playlist (add) — only commits if the target was held long enough.

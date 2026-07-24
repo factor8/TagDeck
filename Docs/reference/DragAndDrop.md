@@ -15,8 +15,22 @@ keep it in sync with the code.
 | **⌥ (Option) + drag** a track row | Drag the actual audio file(s) out to Finder / Mail / Rekordbox (see `src/utils/dragOut.ts`) |
 | Drag OS files onto a row or sidebar playlist | Import those files (native HTML5 file-drop, separate path) |
 
-Reordering is only available when the current view is reorderable —
-a playlist with an empty or ascending-`position` sort (`TrackList.tsx` `isReorderable`).
+### Reordering requires manual order
+
+Reordering is only available when the view is in **manual order** — a playlist
+with an empty sort or an ascending-`position` sort (`TrackList.tsx` `isReorderable`).
+Sorting a playlist by any content column (or `position` **descending**) disables
+reordering, exactly like Music.app: a drag in a sorted view has no meaningful
+manual position to drop into.
+
+- The **#** (position) column sorts **ascending-first** (`sortDescFirst: false` —
+  TanStack defaults numeric columns to desc-first). Ascending `position` *is*
+  manual order, so clicking **#** is the "back to manual order" action and keeps
+  the list reorderable, rather than a desc sort that would disable it.
+- If you try to drag-reorder while sorted, the drag resolves to no row (`over` is
+  `null`) and App shows a **subtle info toast** — `TrackListHandle.reorderBlockedNotice()`
+  returns the message when the current view is a sorted playlist, and
+  `handleDragEnd` surfaces it. This replaces the old silent no-op.
 
 ## Reorder vs. add: pointer decides
 

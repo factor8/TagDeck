@@ -291,6 +291,8 @@ export interface TrackListHandle {
     getSelectedTracks: () => Track[];
     /** The next `limit` visible tracks after `fromId` (top of list when null). Feeds the Queue pane's "Next up" section. */
     getUpcomingTracks: (fromId: number | null, limit: number) => Track[];
+    /** Why a drag-reorder can't happen right now (sorted view), or null if reordering is available. */
+    reorderBlockedNotice: () => string | null;
 }
 
 interface TrackRowProps {
@@ -1351,6 +1353,10 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             {
             id: 'position',
             header: '#',
+            // Ascending-first (TanStack defaults numeric columns to desc-first): position
+            // ascending IS manual order, which keeps the list reorderable — so clicking #
+            // is the "back to manual order" action, not a reorder-disabling desc sort.
+            sortDescFirst: false,
             cell: info => {
                 const isCurrentTrack = playingTrackId === info.row.original.id;
                 const speaker = isCurrentTrack ? (
@@ -1858,6 +1864,10 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
             const currentIndex = rows.findIndex(r => r.original.id === fromId);
             if (currentIndex === -1) return [];
             return rows.slice(currentIndex + 1, currentIndex + 1 + limit).map(r => r.original);
+        },
+        reorderBlockedNotice: () => {
+            if (playlistId === null || isReorderable) return null;
+            return 'Reordering is only available in manual order — click the # column or clear the sort to rearrange tracks.';
         },
     }));
 
