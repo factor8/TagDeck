@@ -1070,6 +1070,65 @@ pub fn create_playlist_in_music(name: &str) -> Result<String> {
     Err(anyhow::anyhow!("Music.app playlists are only supported on macOS"))
 }
 
+/// Builds the AppleScript that creates a user playlist named `name` inside the
+/// folder whose persistent ID is `folder_pid` (or at the root when `None`).
+/// Pure (no osascript) so escaping and folder targeting are unit-testable.
+fn build_create_in_folder_script(name: &str, folder_pid: Option<&str>) -> String {
+    let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
+    match folder_pid {
+        None => format!(
+            r#"
+            tell application "Music"
+                set thePlaylist to (make new user playlist with properties {{name:"{}"}})
+                return persistent ID of thePlaylist
+            end tell
+            "#,
+            escaped_name
+        ),
+        Some(pid) => {
+            let escaped_pid = pid.replace('\\', "\\\\").replace('"', "\\\"");
+            format!(
+                r#"
+                tell application "Music"
+                    set theFolder to (first user playlist whose persistent ID is "{}")
+                    set thePlaylist to (make new user playlist at theFolder with properties {{name:"{}"}})
+                    return persistent ID of thePlaylist
+                end tell
+                "#,
+                escaped_pid, escaped_name
+            )
+        }
+    }
+}
+
+/// Creates a playlist in Music.app inside `folder_pid` (root when `None`) and
+/// returns the new playlist's persistent ID.
+pub fn create_playlist_in_folder(name: &str, folder_pid: Option<&str>) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let script = build_create_in_folder_script(name, folder_pid);
+        let output = Command::new("osascript").arg("-e").arg(&script).output()?;
+        if !output.status.success() {
+            return Err(anyhow::anyhow!(
+                "AppleScript error (create_playlist_in_folder): {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if pid.is_empty() {
+            return Err(anyhow::anyhow!(
+                "Music.app did not return a persistent ID for the new playlist"
+            ));
+        }
+        return Ok(pid);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (name, folder_pid);
+        Err(anyhow::anyhow!("Music.app playlists are only supported on macOS"))
+    }
+}
+
 /// Searches Music.app library for a track whose file location matches the given path.
 /// Returns the persistent ID if found, or None if no match.
 /// Used to prevent duplicate imports when re-adding a file already in the library.
@@ -1199,5 +1258,19 @@ mod tests {
         // An empty desired set must never run the destructive delete-then-re-add
         // (which would wipe the Music.app playlist) — it returns Ok without touching anything.
         assert!(reorder_playlist("SOMEPID", &[]).is_ok());
+    }
+
+    #[test]
+    fn create_in_folder_script_targets_folder_and_escapes() {
+        // Root form: no folder lookup, name escaped.
+        let root = build_create_in_folder_script(r#"My "Best" Set"#, None);
+        assert!(!root.contains("whose persistent ID"));
+        assert!(root.contains(r#"name:"My \"Best\" Set""#));
+
+        // Folder form: resolves the folder by persistent ID, creates inside it.
+        let nested = build_create_in_folder_script("Summer", Some("ABC123"));
+        assert!(nested.contains(r#"first user playlist whose persistent ID is "ABC123""#));
+        assert!(nested.contains("make new user playlist at theFolder"));
+        assert!(nested.contains(r#"name:"Summer""#));
     }
 }
