@@ -8,6 +8,7 @@ import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
 import { SpotifyImportModal } from './SpotifyImportModal';
 import { SpotifyMatchReview } from './SpotifyMatchReview';
+import { SyncToItunesDialog } from './SyncToItunesDialog';
 
 interface SidebarProps {
   onSelectPlaylist: (id: number | null) => void;
@@ -336,6 +337,9 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<PlaylistNode | null>(null);
+
+  // Sync-to-iTunes folder picker target (null = closed)
+  const [syncDialogTarget, setSyncDialogTarget] = useState<PlaylistNode | null>(null);
 
   // Tracks the playlist id currently mid-flight for a sync toggle, to prevent double-triggering
   const [syncTogglingId, setSyncTogglingId] = useState<number | null>(null);
@@ -1297,11 +1301,11 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                                   ) : (
                                       <button
                                           className="ctx-item"
-                                          disabled={syncTogglingId === contextMenu.node.id || appleMusicAvailable === false}
+                                          disabled={appleMusicAvailable === false}
                                           title={appleMusicAvailable === false ? 'Music.app not detected' : undefined}
-                                          onClick={() => { const n = contextMenu.node!; setContextMenu(null); handleToggleSync(n, true); }}
+                                          onClick={() => { const n = contextMenu.node!; setContextMenu(null); setSyncDialogTarget(n); }}
                                       >
-                                          <Music size={14} /> Sync to iTunes
+                                          <Music size={14} /> Sync to iTunes…
                                       </button>
                                   )
                               )}
@@ -1404,6 +1408,14 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   </div>
               </div>
           </div>
+      )}
+      {syncDialogTarget && (
+          <SyncToItunesDialog
+              playlist={syncDialogTarget}
+              playlists={playlists}
+              onClose={() => setSyncDialogTarget(null)}
+              onSynced={refreshPlaylists}
+          />
       )}
     </div>
   );
