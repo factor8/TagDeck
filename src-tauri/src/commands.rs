@@ -1707,6 +1707,12 @@ pub async fn sync_playlist_to_itunes(
     {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         db.relink_playlist_persistent_id(playlist_id, &new_pid).map_err(|e| e.to_string())?;
+        // relink resets the parent to root; if the user picked a folder, mirror
+        // Music.app's placement so the playlist nests under it in TagDeck's
+        // sidebar right away (matches what the next full import would reconcile).
+        if let Some(folder_pid) = target_folder_persistent_id.as_deref() {
+            db.move_playlist(playlist_id, Some(folder_pid)).map_err(|e| e.to_string())?;
+        }
         db.set_playlist_sync_enabled(playlist_id, true).map_err(|e| e.to_string())?;
     }
 
