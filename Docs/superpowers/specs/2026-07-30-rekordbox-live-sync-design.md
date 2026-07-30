@@ -45,7 +45,7 @@ The exporter (`build_rekordbox_xml`, `rekordbox.rs`) currently writes: `TrackID,
 
 Notes for implementers / UI copy:
 - **BPM is integer-only** in TagDeck's model (`bpm: i64`) and only present where TagDeck actually captured it (from iTunes or from Mixed In Key). Tracks with no BPM in TagDeck export blank. Rekordbox re-derives the authoritative grid on analysis, so exported BPM is a hint, not ground truth. Emit `AverageBpm` only when `bpm > 0` (unchanged guard).
-- `BitRate`: emit only when `> 0`. Rekordbox's `BitRate` attribute is in kbps; confirm `track.bit_rate`'s unit during implementation and convert if it is bps.
+- `BitRate`: emit only when `> 0`, in **kbps**. `track.bit_rate` is already stored in kbps (from lofty `AudioProperties::audio_bitrate()`, `metadata.rs:288`), so it is emitted directly — no conversion. This matches Rekordbox's `BitRate` attribute (kbps) and the user's preferred display.
 - `Grouping`: emit `track.grouping_raw` verbatim when non-empty. This is independent of the tag comment contract (grouping is not used for tags).
 
 ## User flow
