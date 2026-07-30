@@ -2040,6 +2040,29 @@ impl Database {
         Ok(rows)
     }
 
+    /// Ordered (track_id, file_path, itunes_pid, missing) for every track in a
+    /// playlist — including tracks with no Music.app link, so the caller can
+    /// auto-import them. Contrast with `get_playlist_linked_track_pids`, which
+    /// drops unlinked tracks.
+    pub fn get_playlist_tracks_for_itunes_sync(
+        &self,
+        playlist_id: i64,
+    ) -> Result<Vec<(i64, String, Option<String>, bool)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.file_path, t.itunes_pid, COALESCE(t.missing, 0)
+             FROM playlist_tracks pt
+             JOIN tracks t ON t.id = pt.track_id
+             WHERE pt.playlist_id = ?1
+             ORDER BY pt.position ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![playlist_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(rows)
+    }
+
     /// Returns the DB row id for a track by its persistent_id.
     pub fn get_track_id_by_persistent_id(&self, persistent_id: &str) -> Result<Option<i64>> {
         use rusqlite::OptionalExtension;
@@ -2935,5 +2958,36 @@ mod tests {
         assert!(db.get_tag_id_by_name("afternoon").unwrap().is_some());
         assert!(db.get_tag_id_by_name("AFTERNOON").unwrap().is_some());
         assert!(db.get_tag_id_by_name("nope").unwrap().is_none());
+    }
+
+    #[test]
+    fn playlist_tracks_for_itunes_sync_includes_unlinked_in_order() {
+        let db = Database::new(":memory:").unwrap();
+        let pl = db.create_playlist("Crate", None, false, "PL-1").unwrap();
+
+        // Three local tracks, inserted in order.
+        let mut ids = Vec::new();
+        for i in 0..3 {
+            let mut t = ghost(&format!("sync-{}", i));
+            t.source = "local".into();
+            t.spotify_id = None;
+            t.file_path = format!("/Music/{}.mp3", i);
+            ids.push(db.insert_imported_track(&t, None, None).unwrap());
+        }
+        for id in &ids {
+            db.add_track_to_playlist_db(pl.id, *id).unwrap();
+        }
+
+        // Middle track is linked to Music.app; last track is missing on disk.
+        db.link_track_itunes_pid(ids[1], "MUSICPID2").unwrap();
+        db.set_track_missing(ids[2], true).unwrap();
+
+        let rows = db.get_playlist_tracks_for_itunes_sync(pl.id).unwrap();
+        assert_eq!(rows.iter().map(|r| r.0).collect::<Vec<_>>(), ids, "order preserved");
+        assert_eq!(rows[0].2, None);
+        assert_eq!(rows[1].2, Some("MUSICPID2".to_string()));
+        assert_eq!(rows[2].2, None);
+        assert!(!rows[0].3, "track 0 present");
+        assert!(rows[2].3, "track 2 flagged missing");
     }
 }
