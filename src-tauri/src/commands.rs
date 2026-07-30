@@ -1566,7 +1566,8 @@ pub struct SyncToItunesReport {
     pub added: usize,
     /// Of `added`, how many were imported into the Music library first.
     pub auto_imported: usize,
-    /// Tracks skipped because they aren't in iTunes and have no file on disk.
+    /// Tracks not placed in the playlist: no file on disk, an import/lookup
+    /// failure, or Music.app rejecting the playlist add.
     pub skipped_missing: usize,
 }
 
@@ -1647,21 +1648,30 @@ pub async fn sync_playlist_to_itunes(
     let mut report = SyncToItunesReport::default();
     for (track_id, file_path, itunes_pid, _missing) in &tracks {
         let file_exists = !file_path.is_empty() && std::path::Path::new(file_path).is_file();
-        let track_pid = match classify_track(itunes_pid.as_deref(), file_exists) {
-            TrackSyncAction::UseExisting(existing) => existing,
+        // Resolve the Music.app track to add, plus whether we imported it just
+        // now. Counters are touched only at a terminal outcome so every track
+        // lands in exactly one bucket and `auto_imported` stays a subset of
+        // `added`.
+        let (track_pid, newly_imported) = match classify_track(itunes_pid.as_deref(), file_exists) {
+            TrackSyncAction::UseExisting(existing) => (existing, false),
             TrackSyncAction::SkipMissing => {
                 report.skipped_missing += 1;
                 continue;
             }
             TrackSyncAction::FindOrImport => {
                 match crate::apple_music::find_track_in_music_by_path(file_path) {
-                    Ok(Some(existing)) => existing,
+                    Ok(Some(existing)) => {
+                        // Already in the Music library but unlinked in TagDeck —
+                        // persist the link so future syncs reuse it.
+                        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                        let _ = db.link_track_itunes_pid(*track_id, &existing);
+                        (existing, false)
+                    }
                     Ok(None) => match crate::apple_music::add_file_to_music_library(file_path) {
                         Ok(added_pid) => {
                             let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
                             let _ = db.link_track_itunes_pid(*track_id, &added_pid);
-                            report.auto_imported += 1;
-                            added_pid
+                            (added_pid, true)
                         }
                         Err(e) => {
                             let msg = format!("Couldn't add {} to Music.app: {}", file_path, e);
@@ -1680,11 +1690,17 @@ pub async fn sync_playlist_to_itunes(
             }
         };
         if let Err(e) = add_track_to_playlist(&track_pid, &new_pid) {
+            // Found/imported but Music.app refused the playlist add — count it as
+            // not-synced so `added + skipped_missing` still totals every track.
             let msg = format!("Failed to add track {} to new iTunes playlist: {}", track_pid, e);
             app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            report.skipped_missing += 1;
             continue;
         }
         report.added += 1;
+        if newly_imported {
+            report.auto_imported += 1;
+        }
     }
 
     // Adopt Music's persistent ID and flag ongoing sync.
