@@ -1560,6 +1560,148 @@ pub async fn set_playlist_sync(
     Ok(final_pid)
 }
 
+#[derive(serde::Serialize, Default)]
+pub struct SyncToItunesReport {
+    /// Tracks placed in the new iTunes playlist.
+    pub added: usize,
+    /// Of `added`, how many were imported into the Music library first.
+    pub auto_imported: usize,
+    /// Tracks skipped because they aren't in iTunes and have no file on disk.
+    pub skipped_missing: usize,
+}
+
+/// What to do with one playlist track when syncing to Music.app.
+#[derive(Debug, PartialEq)]
+enum TrackSyncAction {
+    /// Already linked to a Music.app track; add it by that persistent ID.
+    UseExisting(String),
+    /// Not linked but the file is on disk; find-or-import, then add.
+    FindOrImport,
+    /// Not linked and no usable file; skip and count as missing.
+    SkipMissing,
+}
+
+fn classify_track(itunes_pid: Option<&str>, file_exists: bool) -> TrackSyncAction {
+    match itunes_pid {
+        Some(pid) if !pid.is_empty() => TrackSyncAction::UseExisting(pid.to_string()),
+        _ if file_exists => TrackSyncAction::FindOrImport,
+        _ => TrackSyncAction::SkipMissing,
+    }
+}
+
+/// Creates a TagDeck playlist in Music.app inside a chosen folder (root when
+/// `target_folder_persistent_id` is None), populating it with all of the
+/// playlist's tracks — importing any not yet in the Music library — then links
+/// the playlist for ongoing sync. Enable-only; disabling still goes through
+/// `set_playlist_sync(id, false)`.
+#[tauri::command]
+pub async fn sync_playlist_to_itunes(
+    app: tauri::AppHandle,
+    playlist_id: i64,
+    target_folder_persistent_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<SyncToItunesReport, String> {
+    // Basic facts.
+    let (pid, name, is_folder) = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.get_playlist_basic(playlist_id).map_err(|e| e.to_string())?
+    };
+    if is_folder {
+        return Err("Folders can't be synced to iTunes yet — sync the playlists inside them individually.".to_string());
+    }
+
+    // Availability + already-synced guards.
+    if !crate::apple_music::is_apple_music_available() {
+        return Err("Music.app is not available on this system.".to_string());
+    }
+    if crate::apple_music::playlist_exists_in_music(&pid)
+        .map_err(|e| format!("Couldn't check Music.app for this playlist: {}", e))?
+    {
+        return Err("This playlist is already in iTunes.".to_string());
+    }
+
+    // Creating a playlist in Music.app is a push — require Two-way sync,
+    // matching set_playlist_sync.
+    let push_ok = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        LibraryConfig::sync_mode(&db).push_enabled()
+    };
+    if !push_ok {
+        return Err("Turn on Two-way sync to create playlists in iTunes.".to_string());
+    }
+
+    // All tracks, in order, with their link + missing state.
+    let tracks = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.get_playlist_tracks_for_itunes_sync(playlist_id).map_err(|e| e.to_string())?
+    };
+
+    // Create the playlist in the chosen folder (root when None).
+    let new_pid = crate::apple_music::create_playlist_in_folder(
+        &name,
+        target_folder_persistent_id.as_deref(),
+    )
+    .map_err(|e| format!("Failed to create playlist in Music.app: {}", e))?;
+
+    // Populate — importing files not yet in the Music library.
+    let mut report = SyncToItunesReport::default();
+    for (track_id, file_path, itunes_pid, _missing) in &tracks {
+        let file_exists = !file_path.is_empty() && std::path::Path::new(file_path).is_file();
+        let track_pid = match classify_track(itunes_pid.as_deref(), file_exists) {
+            TrackSyncAction::UseExisting(existing) => existing,
+            TrackSyncAction::SkipMissing => {
+                report.skipped_missing += 1;
+                continue;
+            }
+            TrackSyncAction::FindOrImport => {
+                match crate::apple_music::find_track_in_music_by_path(file_path) {
+                    Ok(Some(existing)) => existing,
+                    Ok(None) => match crate::apple_music::add_file_to_music_library(file_path) {
+                        Ok(added_pid) => {
+                            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                            let _ = db.link_track_itunes_pid(*track_id, &added_pid);
+                            report.auto_imported += 1;
+                            added_pid
+                        }
+                        Err(e) => {
+                            let msg = format!("Couldn't add {} to Music.app: {}", file_path, e);
+                            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                            report.skipped_missing += 1;
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        let msg = format!("Music.app lookup failed for {}: {}", file_path, e);
+                        app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                        report.skipped_missing += 1;
+                        continue;
+                    }
+                }
+            }
+        };
+        if let Err(e) = add_track_to_playlist(&track_pid, &new_pid) {
+            let msg = format!("Failed to add track {} to new iTunes playlist: {}", track_pid, e);
+            app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+            continue;
+        }
+        report.added += 1;
+    }
+
+    // Adopt Music's persistent ID and flag ongoing sync.
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.relink_playlist_persistent_id(playlist_id, &new_pid).map_err(|e| e.to_string())?;
+        db.set_playlist_sync_enabled(playlist_id, true).map_err(|e| e.to_string())?;
+    }
+
+    let msg = format!(
+        "Synced playlist \"{}\" to iTunes: {} added ({} imported), {} skipped",
+        name, report.added, report.auto_imported, report.skipped_missing
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+    Ok(report)
+}
+
 #[tauri::command]
 pub async fn move_playlist(
     id: i64,
@@ -3238,6 +3380,19 @@ pub async fn restore_playlist_backup(
 mod tests {
     use super::*;
     use crate::db::Database;
+
+    #[test]
+    fn classify_track_prioritizes_existing_link() {
+        use super::{classify_track, TrackSyncAction};
+        assert_eq!(
+            classify_track(Some("PID"), false),
+            TrackSyncAction::UseExisting("PID".into())
+        );
+        assert_eq!(classify_track(None, true), TrackSyncAction::FindOrImport);
+        // An empty pid is treated as "no link".
+        assert_eq!(classify_track(Some(""), true), TrackSyncAction::FindOrImport);
+        assert_eq!(classify_track(None, false), TrackSyncAction::SkipMissing);
+    }
 
     #[test]
     fn suspicious_when_snapshot_empty_but_linked() {

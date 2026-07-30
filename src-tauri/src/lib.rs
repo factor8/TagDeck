@@ -170,6 +170,7 @@ pub fn run() {
             commands::reorder_sibling_playlists,
             commands::update_playlist_metadata,
             commands::set_playlist_sync,
+            commands::sync_playlist_to_itunes,
             commands::add_to_playlist,
             commands::get_playlist_track_ids,
             commands::mark_track_missing,
