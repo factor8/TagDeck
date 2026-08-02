@@ -1,9 +1,12 @@
 //! Background "Rekordbox Live Sync": keeps a fixed rekordbox.xml current.
 
+use crate::commands::AppState;
+use crate::db::Database;
 use crate::models::{Playlist, Track};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use tauri::State;
 
 #[derive(Clone)]
 pub struct RekordboxDirtySignal {
@@ -46,6 +49,75 @@ pub enum FlushOutcome {
     Written { tracks: usize, playlists: usize },
     Unchanged,
     Error(String),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RekordboxLiveConfig {
+    pub enabled: bool,
+    pub path: Option<String>,
+    pub debounce_secs: u64,
+}
+
+pub fn clamp_debounce(secs: u64) -> u64 {
+    secs.clamp(1, 15)
+}
+
+pub fn read_live_config(db: &Database) -> RekordboxLiveConfig {
+    let enabled = db.get_config("rekordbox_live_enabled").ok().flatten().as_deref() == Some("true");
+    let path = db.get_config("rekordbox_xml_path").ok().flatten();
+    let debounce_secs = db
+        .get_config("rekordbox_debounce_secs")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(clamp_debounce)
+        .unwrap_or(3);
+    RekordboxLiveConfig { enabled, path, debounce_secs }
+}
+
+#[tauri::command]
+pub fn get_rekordbox_live_config(state: State<AppState>) -> Result<RekordboxLiveConfig, String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    Ok(read_live_config(&db))
+}
+
+#[tauri::command]
+pub fn set_rekordbox_live_enabled(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.set_config("rekordbox_live_enabled", if enabled { "true" } else { "false" })
+            .map_err(|e| e.to_string())?;
+    }
+    if enabled {
+        state.rekordbox_dirty.mark();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_rekordbox_live_path(state: State<AppState>, path: String) -> Result<(), String> {
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        db.set_config("rekordbox_xml_path", &path).map_err(|e| e.to_string())?;
+    }
+    state.rekordbox_dirty.mark();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_rekordbox_debounce_secs(state: State<AppState>, secs: u64) -> Result<(), String> {
+    let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+    db.set_config("rekordbox_debounce_secs", &clamp_debounce(secs).to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_rekordbox_sync_status(state: State<AppState>) -> RekordboxSyncStatus {
+    state
+        .rekordbox_status
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or_default()
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -96,6 +168,13 @@ mod tests {
     #[test]
     fn status_defaults_to_disabled() {
         assert_eq!(RekordboxSyncStatus::default().state, "disabled");
+    }
+
+    #[test]
+    fn debounce_clamps_to_range() {
+        assert_eq!(clamp_debounce(0), 1);
+        assert_eq!(clamp_debounce(3), 3);
+        assert_eq!(clamp_debounce(999), 15);
     }
 
     fn mk_track(id: i64, path: &str) -> Track {

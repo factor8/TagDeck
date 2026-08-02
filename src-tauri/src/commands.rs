@@ -21,6 +21,8 @@ pub struct AppState {
     pub db: Mutex<Database>,
     pub undo_stack: Mutex<UndoStack>,
     pub is_syncing: AtomicBool,
+    pub rekordbox_dirty: crate::rekordbox_sync::RekordboxDirtySignal,
+    pub rekordbox_status: Mutex<crate::rekordbox_sync::RekordboxSyncStatus>,
 }
 
 #[tauri::command]

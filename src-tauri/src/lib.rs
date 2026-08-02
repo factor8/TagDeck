@@ -123,10 +123,13 @@ pub fn run() {
                 }
             }
 
+            let (rekordbox_dirty, _rekordbox_rx) = rekordbox_sync::RekordboxDirtySignal::new();
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()),
                 is_syncing: AtomicBool::new(false),
+                rekordbox_dirty,
+                rekordbox_status: Mutex::new(rekordbox_sync::RekordboxSyncStatus::default()),
             });
 
             app.manage(spotify::SpotifyState::new());
@@ -203,6 +206,11 @@ pub fn run() {
             commands::export_playlist_m3u8,
             commands::export_rekordbox_xml,
             commands::get_rekordbox_export_path,
+            rekordbox_sync::get_rekordbox_live_config,
+            rekordbox_sync::set_rekordbox_live_enabled,
+            rekordbox_sync::set_rekordbox_live_path,
+            rekordbox_sync::set_rekordbox_debounce_secs,
+            rekordbox_sync::get_rekordbox_sync_status,
             commands::export_playlist_backup,
             commands::read_playlist_backup,
             commands::restore_playlist_backup,
