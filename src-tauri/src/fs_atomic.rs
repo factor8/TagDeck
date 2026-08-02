@@ -4,6 +4,9 @@
 
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
@@ -11,7 +14,8 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let tmp = path.with_extension("tagdeck-writing");
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("tagdeck-writing-{}-{}", std::process::id(), seq));
     match std::fs::write(&tmp, contents).and_then(|_| std::fs::rename(&tmp, path)) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -37,7 +41,12 @@ mod tests {
         atomic_write(&f, b"two").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"two");
 
-        assert!(!f.with_extension("tagdeck-writing").exists());
+        let leftover = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("tagdeck-writing"));
+        assert!(!leftover, "no tagdeck-writing* temp file should remain in the dir");
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

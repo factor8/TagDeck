@@ -140,6 +140,7 @@ pub fn run() {
             library_watcher::start_library_watcher(app.handle().clone());
 
             rekordbox_sync::start_rekordbox_sync(app.handle().clone(), rekordbox_rx);
+            app.state::<AppState>().rekordbox_dirty.mark();
 
             Ok(())
         })

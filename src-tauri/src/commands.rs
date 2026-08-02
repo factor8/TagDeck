@@ -1738,6 +1738,7 @@ pub async fn sync_playlist_to_itunes(
         name, report.added, report.auto_imported, report.skipped_missing
     );
     app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+    state.rekordbox_dirty.mark();
     Ok(report)
 }
 

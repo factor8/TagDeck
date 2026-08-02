@@ -178,6 +178,7 @@ export function RekordboxLiveSync() {
                             type="number"
                             min={1}
                             max={15}
+                            aria-label="Update Rekordbox after N seconds of inactivity"
                             value={config.debounce_secs}
                             onChange={e => handleDebounceChange(Number(e.target.value))}
                             style={{
