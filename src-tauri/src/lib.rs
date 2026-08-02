@@ -123,7 +123,7 @@ pub fn run() {
                 }
             }
 
-            let (rekordbox_dirty, _rekordbox_rx) = rekordbox_sync::RekordboxDirtySignal::new();
+            let (rekordbox_dirty, rekordbox_rx) = rekordbox_sync::RekordboxDirtySignal::new();
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()),
@@ -138,6 +138,8 @@ pub fn run() {
 
             // Start Library Watcher
             library_watcher::start_library_watcher(app.handle().clone());
+
+            rekordbox_sync::start_rekordbox_sync(app.handle().clone(), rekordbox_rx);
 
             Ok(())
         })
@@ -255,6 +257,12 @@ pub fn run() {
             analysis::commands::set_vocab_settings,
             analysis::commands::finalize_accepted_candidate
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let mut last: Option<u64> = None;
+                rekordbox_sync::settle(app_handle, &mut last);
+            }
+        });
 }

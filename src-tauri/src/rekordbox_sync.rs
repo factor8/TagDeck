@@ -5,8 +5,9 @@ use crate::db::Database;
 use crate::models::{Playlist, Track};
 use serde::Serialize;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use tauri::State;
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Clone)]
 pub struct RekordboxDirtySignal {
@@ -152,6 +153,124 @@ pub fn flush_once(
         }
         Err(e) => FlushOutcome::Error(format!("Failed to write {}: {}", dest.display(), e)),
     }
+}
+
+/// Idle ceiling for the flush thread: even with no dirty pings, re-settle
+/// periodically as a backstop against a missed/coalesced signal.
+const BACKSTOP: Duration = Duration::from_secs(300);
+
+fn set_status(app: &AppHandle, status: RekordboxSyncStatus) {
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut s) = state.rekordbox_status.lock() {
+            *s = status.clone();
+        }
+    }
+    let _ = app.emit("rekordbox-sync-status", status);
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// One settle: read config; if enabled+path, snapshot the DB (lock → copy →
+/// drop), build+write via flush_once, and publish status. Never holds the DB
+/// lock across the file write.
+pub(crate) fn settle(app: &AppHandle, last_hash: &mut Option<u64>) {
+    let state = match app.try_state::<AppState>() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let (path, tracks, playlists) = {
+        let db = match state.db.lock() {
+            Ok(db) => db,
+            Err(_) => return,
+        };
+        let cfg = read_live_config(&db);
+        if !cfg.enabled || cfg.path.is_none() {
+            drop(db);
+            set_status(app, RekordboxSyncStatus::default()); // "disabled"
+            return;
+        }
+        let tracks: Vec<Track> = db
+            .get_all_tracks()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| !t.is_ghost())
+            .collect();
+        let playlists: Vec<(Playlist, Vec<i64>)> = db
+            .get_playlists()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                let ids = db.get_playlist_track_ids(p.id).unwrap_or_default();
+                (p, ids)
+            })
+            .collect();
+        (cfg.path.unwrap(), tracks, playlists)
+    }; // DB lock dropped here
+
+    let n_tracks = tracks.len();
+    let n_playlists = playlists.len();
+
+    set_status(app, RekordboxSyncStatus {
+        state: "writing".to_string(), last_written_at: None, last_error: None,
+        tracks: n_tracks, playlists: 0,
+    });
+
+    let status = match flush_once(
+        env!("CARGO_PKG_VERSION"), &tracks, &playlists, std::path::Path::new(&path), last_hash,
+    ) {
+        FlushOutcome::Written { tracks, playlists } => RekordboxSyncStatus {
+            state: "up_to_date".to_string(), last_written_at: Some(now_secs()),
+            last_error: None, tracks, playlists,
+        },
+        FlushOutcome::Unchanged => RekordboxSyncStatus {
+            state: "up_to_date".to_string(), last_written_at: Some(now_secs()),
+            last_error: None, tracks: n_tracks, playlists: n_playlists,
+        },
+        FlushOutcome::Error(e) => RekordboxSyncStatus {
+            state: "error".to_string(), last_written_at: None, last_error: Some(e),
+            tracks: 0, playlists: 0,
+        },
+    };
+    set_status(app, status);
+}
+
+/// Public entry: run the debounced flush loop on a background thread. Idles
+/// on `recv_timeout(BACKSTOP)`; a ping debounce-drains (coalescing a burst
+/// into one settle) using the live `debounce_secs` config before settling.
+pub fn start_rekordbox_sync(app: AppHandle, rx: Receiver<()>) {
+    std::thread::spawn(move || {
+        let mut last_hash: Option<u64> = None;
+        loop {
+            match rx.recv_timeout(BACKSTOP) {
+                Ok(()) => {
+                    let debounce = match app.try_state::<AppState>() {
+                        Some(state) => state
+                            .db
+                            .lock()
+                            .map(|db| Duration::from_secs(read_live_config(&db).debounce_secs))
+                            .unwrap_or(Duration::from_secs(3)),
+                        None => Duration::from_secs(3),
+                    };
+                    loop {
+                        match rx.recv_timeout(debounce) {
+                            Ok(()) => continue,
+                            Err(RecvTimeoutError::Timeout) => break,
+                            Err(RecvTimeoutError::Disconnected) => return,
+                        }
+                    }
+                    settle(&app, &mut last_hash);
+                }
+                Err(RecvTimeoutError::Timeout) => settle(&app, &mut last_hash), // backstop
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    });
 }
 
 #[cfg(test)]
