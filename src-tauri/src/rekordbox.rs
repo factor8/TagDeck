@@ -60,6 +60,14 @@ pub fn build_rekordbox_xml(
         if t.bpm > 0 {
             push_attr(&mut xml, "AverageBpm", &format!("{:.2}", t.bpm as f64));
         }
+        if t.bit_rate > 0 {
+            push_attr(&mut xml, "BitRate", &t.bit_rate.to_string());
+        }
+        if let Some(g) = t.grouping_raw.as_deref() {
+            if !g.is_empty() {
+                push_attr(&mut xml, "Grouping", g);
+            }
+        }
         if t.date_added > 0 {
             if let Some(dt) = chrono::DateTime::from_timestamp(t.date_added, 0) {
                 push_attr(&mut xml, "DateAdded", &dt.format("%Y-%m-%d").to_string());
@@ -303,5 +311,27 @@ mod tests {
         assert!(xml.contains("Comments=\"#house #&quot;peak&quot;\""));
         assert!(xml.contains("Location=\"file://localhost/x/one.mp3\""));
         assert!(xml.contains("DateAdded=\"2023-11-14\""));
+    }
+
+    #[test]
+    fn emits_bitrate_and_grouping() {
+        let mut t = track(1, "One", "/x/one.mp3");
+        t.bit_rate = 320;
+        t.grouping_raw = Some("Warmup".to_string());
+        let playlists = vec![(playlist(11, "P1", "Set", false, None), vec![1])];
+        let (xml, _) = build_rekordbox_xml(&[t], &playlists, "0.0.0");
+        assert!(xml.contains("BitRate=\"320\""));
+        assert!(xml.contains("Grouping=\"Warmup\""));
+        assert!(xml.contains("AverageBpm=\"128.00\"")); // bpm kept
+    }
+
+    #[test]
+    fn omits_bitrate_and_grouping_when_absent() {
+        let mut t = track(1, "One", "/x/one.mp3");
+        t.bit_rate = 0;
+        t.grouping_raw = None;
+        let (xml, _) = build_rekordbox_xml(&[t], &[], "0.0.0");
+        assert!(!xml.contains("BitRate="));
+        assert!(!xml.contains("Grouping="));
     }
 }
