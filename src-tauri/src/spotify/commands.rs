@@ -114,6 +114,7 @@ pub async fn spotify_import_playlists(
         &format!("Spotify import: {} playlists, {} new tracks", report.playlists, report.tracks_added),
         &app,
     );
+    state.rekordbox_dirty.mark();
     Ok(report)
 }
 
@@ -154,6 +155,7 @@ pub async fn spotify_sync_now(
                 report.updated, report.checked, report.ghosts_removed)
     };
     app.state::<crate::logging::LogState>().add_log("INFO", &summary, &app);
+    state.rekordbox_dirty.mark();
     Ok(report)
 }
 
@@ -277,6 +279,7 @@ pub async fn spotify_confirm_match(match_id: i64, state: State<'_, AppState>) ->
         super::merge::merge_ghost_into_local(&db, ghost_id, local_id)?
     };
     run_music_push(push);
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -298,6 +301,7 @@ pub async fn spotify_manual_link(
         super::merge::merge_ghost_into_local(&db, ghost_track_id, local_track_id)?
     };
     run_music_push(push);
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -308,6 +312,7 @@ pub async fn spotify_unlink_track(track_id: i64, state: State<'_, AppState>) -> 
         super::merge::unlink_local_track(&db, track_id)?
     };
     run_music_push(push);
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 

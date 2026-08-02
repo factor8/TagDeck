@@ -11,8 +11,10 @@ pub mod toggle_logs;
 pub mod undo;
 pub mod library_watcher;
 pub mod file_manager;
+pub mod fs_atomic;
 pub mod sync_review;
 pub mod rekordbox;
+pub mod rekordbox_sync;
 pub mod spotify;
 
 use commands::AppState;
@@ -121,10 +123,13 @@ pub fn run() {
                 }
             }
 
+            let (rekordbox_dirty, rekordbox_rx) = rekordbox_sync::RekordboxDirtySignal::new();
             app.manage(AppState {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()),
                 is_syncing: AtomicBool::new(false),
+                rekordbox_dirty,
+                rekordbox_status: Mutex::new(rekordbox_sync::RekordboxSyncStatus::default()),
             });
 
             app.manage(spotify::SpotifyState::new());
@@ -133,6 +138,9 @@ pub fn run() {
 
             // Start Library Watcher
             library_watcher::start_library_watcher(app.handle().clone());
+
+            rekordbox_sync::start_rekordbox_sync(app.handle().clone(), rekordbox_rx);
+            app.state::<AppState>().rekordbox_dirty.mark();
 
             Ok(())
         })
@@ -201,6 +209,11 @@ pub fn run() {
             commands::export_playlist_m3u8,
             commands::export_rekordbox_xml,
             commands::get_rekordbox_export_path,
+            rekordbox_sync::get_rekordbox_live_config,
+            rekordbox_sync::set_rekordbox_live_enabled,
+            rekordbox_sync::set_rekordbox_live_path,
+            rekordbox_sync::set_rekordbox_debounce_secs,
+            rekordbox_sync::get_rekordbox_sync_status,
             commands::export_playlist_backup,
             commands::read_playlist_backup,
             commands::restore_playlist_backup,
@@ -245,6 +258,12 @@ pub fn run() {
             analysis::commands::set_vocab_settings,
             analysis::commands::finalize_accepted_candidate
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let mut last: Option<u64> = None;
+                rekordbox_sync::settle(app_handle, &mut last);
+            }
+        });
 }

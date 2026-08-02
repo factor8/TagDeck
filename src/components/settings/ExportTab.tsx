@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Loader2, Disc3 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useToast } from '../Toast';
+import { RekordboxLiveSync } from './RekordboxLiveSync';
 
 export function ExportTab() {
     const [exportingRekordbox, setExportingRekordbox] = useState(false);
@@ -40,7 +41,9 @@ export function ExportTab() {
     };
 
     return (
-        <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
+        <div>
+            <RekordboxLiveSync />
+            <div style={{ padding: '16px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
             <h4 style={{ fontSize: '13px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '12px', marginTop: 0, color: 'var(--text-secondary)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Disc3 size={14} /> Rekordbox
             </h4>
@@ -62,6 +65,7 @@ export function ExportTab() {
             </button>
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '6px', fontStyle: 'italic' }}>
                 Writes your collection and playlists to a rekordbox.xml file. In Rekordbox, choose Preferences → Advanced → Database → "rekordbox xml" and select this file — your playlists appear under "rekordbox xml" in the browser. Re-export to the same file to refresh. One-way: changes made in Rekordbox don't come back.
+            </div>
             </div>
         </div>
     );

@@ -17,10 +17,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{State, Manager};
 
+// Any new library-mutating command MUST call state.rekordbox_dirty.mark() on success (feeds Rekordbox Live Sync).
 pub struct AppState {
     pub db: Mutex<Database>,
     pub undo_stack: Mutex<UndoStack>,
     pub is_syncing: AtomicBool,
+    pub rekordbox_dirty: crate::rekordbox_sync::RekordboxDirtySignal,
+    pub rekordbox_status: Mutex<crate::rekordbox_sync::RekordboxSyncStatus>,
 }
 
 #[tauri::command]
@@ -70,6 +73,8 @@ pub async fn import_library(app: tauri::AppHandle, xml_path: String, state: Stat
         app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
     }
 
+    drop(db);
+    state.rekordbox_dirty.mark();
     Ok(count)
 }
 
@@ -371,6 +376,8 @@ pub async fn write_tags(
         track.comment_raw = Some(new_tags);
         db.update_track(&track).map_err(|e| e.to_string())?;
         let _ = db.sync_tags();
+        drop(db);
+        state.rekordbox_dirty.mark();
         return Ok(());
     }
 
@@ -424,6 +431,7 @@ pub async fn write_tags(
         stack.push(undo_action);
     }
 
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -581,6 +589,7 @@ pub async fn batch_add_tag(ids: Vec<i64>, tag: String, app: tauri::AppHandle, st
         }
     }
 
+    state.rekordbox_dirty.mark();
     Ok(result)
 }
 
@@ -721,6 +730,7 @@ pub async fn batch_remove_tag(ids: Vec<i64>, tag: String, app: tauri::AppHandle,
         }
     }
 
+    state.rekordbox_dirty.mark();
     Ok(result)
 }
 
@@ -792,6 +802,8 @@ pub async fn import_from_music_app(app: tauri::AppHandle, state: State<'_, AppSt
         }
     }
 
+    drop(db);
+    state.rekordbox_dirty.mark();
     Ok(count)
 }
 
@@ -1378,6 +1390,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     }
 
     // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
+    state.rekordbox_dirty.mark();
     Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_unlinked, playlists_updated: playlist_changes, pending_removals, conflicts_skipped })
 }
 
@@ -1406,12 +1419,17 @@ pub async fn create_playlist(
     // Generate a unique persistent_id for TagDeck-native playlists
     let persistent_id = format!("TD-{}", uuid_v4_simple());
 
-    db.create_playlist(
+    let result = db.create_playlist(
         &name,
         parent_persistent_id.as_deref(),
         is_folder,
         &persistent_id,
-    ).map_err(|e| e.to_string())
+    ).map_err(|e| e.to_string());
+    drop(db);
+    if result.is_ok() {
+        state.rekordbox_dirty.mark();
+    }
+    result
 }
 
 #[tauri::command]
@@ -1450,6 +1468,7 @@ pub async fn rename_playlist(
             });
         }
     }
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -1470,6 +1489,7 @@ pub async fn delete_playlist(
             stack.push(Action::DeletePlaylist { snapshot });
         }
     }
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -1494,8 +1514,10 @@ pub async fn set_playlist_sync(
     if !enabled {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
         db.set_playlist_sync_enabled(playlist_id, false).map_err(|e| e.to_string())?;
+        drop(db);
         let msg = format!("Stopped syncing playlist \"{}\" with iTunes", name);
         app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+        state.rekordbox_dirty.mark();
         return Ok(pid);
     }
 
@@ -1557,6 +1579,7 @@ pub async fn set_playlist_sync(
     let msg = format!("Playlist \"{}\" is now syncing with iTunes", name);
     app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
 
+    state.rekordbox_dirty.mark();
     Ok(final_pid)
 }
 
@@ -1721,6 +1744,7 @@ pub async fn sync_playlist_to_itunes(
         name, report.added, report.auto_imported, report.skipped_missing
     );
     app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+    state.rekordbox_dirty.mark();
     Ok(report)
 }
 
@@ -1757,6 +1781,7 @@ pub async fn move_playlist(
             });
         }
     }
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -1768,8 +1793,13 @@ pub async fn duplicate_playlist(
 ) -> Result<crate::models::Playlist, String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
     let persistent_id = format!("TD-{}", uuid_v4_simple());
-    db.duplicate_playlist(id, &new_name, &persistent_id)
-        .map_err(|e| e.to_string())
+    let result = db.duplicate_playlist(id, &new_name, &persistent_id)
+        .map_err(|e| e.to_string());
+    drop(db);
+    if result.is_ok() {
+        state.rekordbox_dirty.mark();
+    }
+    result
 }
 
 #[tauri::command]
@@ -1794,6 +1824,7 @@ pub async fn reorder_sibling_playlists(
             });
         }
     }
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -1805,8 +1836,13 @@ pub async fn update_playlist_metadata(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    db.update_playlist_metadata(id, description.as_deref(), color.as_deref())
-        .map_err(|e| e.to_string())
+    let result = db.update_playlist_metadata(id, description.as_deref(), color.as_deref())
+        .map_err(|e| e.to_string());
+    drop(db);
+    if result.is_ok() {
+        state.rekordbox_dirty.mark();
+    }
+    result
 }
 
 #[tauri::command]
@@ -1893,6 +1929,7 @@ pub async fn add_to_playlist(
         }
     }
 
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -1962,6 +1999,7 @@ pub async fn remove_from_playlist(
         }
     }
 
+    state.rekordbox_dirty.mark();
     Ok(removed)
 }
 
@@ -2022,6 +2060,7 @@ pub async fn reorder_playlist_tracks(
         });
     }
 
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -2078,8 +2117,11 @@ pub async fn update_rating(
                 new_rating: rating,
             });
         }
+    } else {
+        drop(db);
     }
 
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -2130,6 +2172,8 @@ pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppStat
                                      println!("  - Failed to update DB: {}", e);
                                  } else {
                                      println!("  - DB Updated. Next playback should work.");
+                                     drop(db);
+                                     state.rekordbox_dirty.mark();
                                      return Ok(()); // Do NOT mark missing
                                  }
                              }
@@ -2140,7 +2184,12 @@ pub async fn mark_track_missing(id: i64, missing: bool, state: State<'_, AppStat
          }
     }
 
-    db.set_track_missing(id, missing).map_err(|e| e.to_string())
+    let result = db.set_track_missing(id, missing).map_err(|e| e.to_string());
+    drop(db);
+    if result.is_ok() {
+        state.rekordbox_dirty.mark();
+    }
+    result
 }
 
 #[tauri::command]
@@ -2192,13 +2241,18 @@ pub async fn delete_tag_group(id: i64, state: State<'_, AppState>) -> Result<(),
     if let Ok(mut stack) = state.undo_stack.lock() {
         stack.push(Action::DeleteTagGroup { group });
     }
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
 #[tauri::command]
 pub async fn set_tag_group(tag_id: i64, group_id: Option<i64>, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
-        .set_tag_group(tag_id, group_id).map_err(|e| e.to_string())
+    let result = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?
+        .set_tag_group(tag_id, group_id).map_err(|e| e.to_string());
+    if result.is_ok() {
+        state.rekordbox_dirty.mark();
+    }
+    result
 }
 
 #[tauri::command]
@@ -2225,6 +2279,7 @@ pub async fn delete_tag(tag_id: i64, state: State<'_, AppState>) -> Result<(), S
     if let Ok(mut stack) = state.undo_stack.lock() {
         stack.push(Action::DeleteTag { tag });
     }
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -2374,6 +2429,7 @@ pub async fn update_track_info(
         stack.push(crate::undo::Action::UpdateTrackInfo { track: undo_state });
     }
 
+    state.rekordbox_dirty.mark();
     Ok(())
 }
 
@@ -2529,6 +2585,7 @@ pub async fn copy_playlist_memberships(
         }
     }
 
+    state.rekordbox_dirty.mark();
     Ok(format!("Added to {} playlist{}", added_count, if added_count != 1 { "s" } else { "" }))
 }
 
@@ -2850,6 +2907,7 @@ pub async fn import_files(
         let _ = crate::spotify::merge::process_new_local_tracks(&state.db, &app, &imported_track_ids);
     }
 
+    state.rekordbox_dirty.mark();
     Ok(ImportSummary {
         total,
         imported,
@@ -2966,6 +3024,7 @@ pub async fn verify_library_files(
         app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
     }
 
+    state.rekordbox_dirty.mark();
     Ok(report)
 }
 
@@ -3083,6 +3142,7 @@ pub async fn consolidate_library(
     );
     app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
 
+    state.rekordbox_dirty.mark();
     Ok(report)
 }
 
@@ -3278,7 +3338,7 @@ pub async fn export_rekordbox_xml(
     let (xml, stats) =
         crate::rekordbox::build_rekordbox_xml(&tracks, &playlists, env!("CARGO_PKG_VERSION"));
 
-    std::fs::write(&dest_path, xml)
+    crate::fs_atomic::atomic_write(std::path::Path::new(&dest_path), xml.as_bytes())
         .map_err(|e| format!("Failed to write {}: {}", dest_path, e))?;
 
     {
@@ -3374,7 +3434,12 @@ pub async fn restore_playlist_backup(
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
     let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-    db.restore_playlists_from_backup(&entries).map_err(|e| e.to_string())
+    let result = db.restore_playlists_from_backup(&entries).map_err(|e| e.to_string());
+    drop(db);
+    if result.is_ok() {
+        state.rekordbox_dirty.mark();
+    }
+    result
 }
 
 // ─── Ghost-aware guard tests ────────────────────────────────────────────────
