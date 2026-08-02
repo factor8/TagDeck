@@ -579,6 +579,7 @@ pub async fn apply_sync_changes(
         ),
     );
 
+    state.rekordbox_dirty.mark();
     Ok(summary)
 }
 
