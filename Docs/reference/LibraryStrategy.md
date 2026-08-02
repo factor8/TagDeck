@@ -80,9 +80,15 @@ The existing sync engine already computes every diff we need (Phase 0 adds/remov
 
 **Resolved decision — shipped as the XML-bridge export in `rekordbox.rs`.** The considered alternatives (UI automation, direct `master.db` writes) were rejected as fragile / dangerous; the XML bridge is the one supported path.
 
-- Writes a `rekordbox.xml` (`DJ_PLAYLISTS` format): `COLLECTION` of tracks (location, title/artist/album, BPM, comment — tags ride along in the comment) plus the `PLAYLISTS` tree. Missing tracks are excluded from the collection and from playlist entries.
+- Writes a `rekordbox.xml` (`DJ_PLAYLISTS` format): `COLLECTION` of tracks (location, title/artist/album, `AverageBpm` when `bpm > 0`, `BitRate` in kbps when `> 0`, `Grouping` when non-empty, comment — tags ride along in the comment) plus the `PLAYLISTS` tree. Missing tracks are excluded from the collection and from playlist entries. `BitRate`/`Grouping` were added alongside Live Sync below; Genre/Key/Year/Track#/Composer remain unsupported (not stored in TagDeck — Genre is a tracked fast-follow).
 - User points Rekordbox → Preferences → Advanced → Database → "rekordbox xml" at the file; playlists appear under *rekordbox xml* in the browser and can be dragged into the collection.
-- Shipped: manual "Export to Rekordbox…" (Settings), destination remembered for re-export. Deferred: auto-export-on-change toggle, optional per-playlist include flag (would reuse the `itunes_sync_enabled` pattern).
+- Shipped: manual "Export to Rekordbox…" (Settings), destination remembered for re-export.
+- **Shipped: Rekordbox Live Sync** (Settings → Export → "Rekordbox Live Sync" panel, `rekordbox_sync.rs`). Enable the toggle once and pick the XML destination once (reuses the `rekordbox_xml_path` config key, default `~/Music/TagDeck/rekordbox.xml`); thereafter TagDeck keeps that file current in the background — the user's only ongoing action is the reload button in Rekordbox, same habit as iTunes.
+  - **Dirty signal + debounce:** every library-mutating command (playlists, membership/order, tags/comments, ratings, imports, missing/reconcile, taxonomy) pings an `mpsc` channel (`mark_rekordbox_dirty`); a background thread (started from `lib.rs`, modeled on `library_watcher.rs`) coalesces a burst into one trailing-edge settle after `rekordbox_debounce_secs` of inactivity (config-backed, default **3s**, clamped **1–15s** via the Settings control).
+  - **Atomic, skip-if-unchanged writes:** each settle snapshots tracks/playlists under the DB lock, drops the lock, rebuilds the XML in memory, hashes it, and only writes (via the shared `atomic_write` temp-file+rename helper, also used by the manual export command) if the hash changed — no disk write and no Rekordbox reload noise when nothing actually changed.
+  - **Backstop:** if no dirty ping arrives, the loop re-settles every 5 minutes anyway (self-heal for any missed dirty-mark), and a best-effort flush also runs on app quit.
+  - **Status line:** Settings → Export shows live state driven by a `rekordbox-sync-status` event (`get_rekordbox_sync_status` for the initial fetch) — "Up to date · updated Ns ago", "Saving…", "Pending — updating shortly", or "Error: …".
+  - **Independent of iTunes sync mode.** To fully drop iTunes: set iTunes sync mode → Off and leave Live Sync on. Files are never moved by TagDeck, so file paths stay stable and Rekordbox's own Collection (which keys memory cues/beat grids by path) stays matched regardless of which tree — iTunes or rekordbox xml — supplied the track. On import from the XML tree, Rekordbox's *"already exists in collection"* prompt is expected and safe: choosing **Yes** updates only text metadata (name/artist/album/comment/rating/bpm), never cues or beat grids, and creates no duplicate Collection entries.
 - One-way by design. **Never** touches Rekordbox's own `master.db` (unsupported/dangerous). The existing `touch_file` behavior is kept so re-analyzed files refresh in Rekordbox.
 
 ### Exit path (back to iTunes)
@@ -128,7 +134,7 @@ All of the following has landed — this is the built system, not a plan. The or
 - **Per-playlist sync** — `playlists.itunes_sync_enabled` wired; context-menu link/unlink; Phase 3 + write-back gates key on `itunes_sync_enabled && mode == TwoWay`.
 - **File management hardening** — always-visible settings, SHA-256 `file_hash` dedup (`hash_file` in `file_manager.rs`), TagDeck-root watcher (`library_watcher.rs` also watches the library root and emits `tagdeck-library-changed` → `verify_library_files`), and **Consolidate Library** (`consolidate_library`).
 - **Exit path** — "Add TagDeck-only tracks to Music.app" in Settings → iTunes Sync; per-playlist "Export as M3U8…". (Playlist recreation in Music.app is covered by the per-playlist "Sync to iTunes" action.)
-- **Rekordbox export** — `rekordbox.xml` writer (`rekordbox.rs`, unit-tested) + "Export to Rekordbox…" in Settings; destination remembered for re-export.
+- **Rekordbox export** — `rekordbox.xml` writer (`rekordbox.rs`, unit-tested) + "Export to Rekordbox…" in Settings; destination remembered for re-export. **Rekordbox Live Sync** (`rekordbox_sync.rs`) layers a debounced, atomic, skip-if-unchanged background writer with a status line on top of the same exporter.
 
 ## Risks / notes
 
