@@ -11,6 +11,7 @@ pub mod toggle_logs;
 pub mod undo;
 pub mod library_watcher;
 pub mod file_manager;
+pub mod fs_atomic;
 pub mod sync_review;
 pub mod rekordbox;
 pub mod spotify;

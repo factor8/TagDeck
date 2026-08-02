@@ -3272,7 +3272,7 @@ pub async fn export_rekordbox_xml(
     let (xml, stats) =
         crate::rekordbox::build_rekordbox_xml(&tracks, &playlists, env!("CARGO_PKG_VERSION"));
 
-    std::fs::write(&dest_path, xml)
+    crate::fs_atomic::atomic_write(std::path::Path::new(&dest_path), xml.as_bytes())
         .map_err(|e| format!("Failed to write {}: {}", dest_path, e))?;
 
     {
