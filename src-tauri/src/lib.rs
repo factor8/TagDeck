@@ -14,6 +14,7 @@ pub mod file_manager;
 pub mod fs_atomic;
 pub mod sync_review;
 pub mod rekordbox;
+pub mod rekordbox_sync;
 pub mod spotify;
 
 use commands::AppState;
