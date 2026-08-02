@@ -22,8 +22,15 @@ const DEFAULT_STATUS: RekordboxSyncStatus = {
 
 async function pickRekordboxXmlPath(): Promise<string | null> {
     const { save } = await import('@tauri-apps/plugin-dialog');
+    const { audioDir, join } = await import('@tauri-apps/api/path');
+    let defaultPath = 'rekordbox.xml';
+    try {
+        defaultPath = await join(await audioDir(), 'TagDeck', 'rekordbox.xml');
+    } catch {
+        // Fall back to a bare filename if the Music folder can't be resolved.
+    }
     const dest = await save({
-        defaultPath: 'rekordbox.xml',
+        defaultPath,
         filters: [{ name: 'Rekordbox XML', extensions: ['xml'] }],
     });
     return dest ?? null;
