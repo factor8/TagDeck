@@ -204,6 +204,7 @@ pub fn run() {
             commands::set_library_config,
             commands::import_files,
             commands::verify_library_files,
+            commands::recheck_missing_files,
             commands::consolidate_library,
             commands::export_tracks_to_music,
             commands::export_playlist_m3u8,

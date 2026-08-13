@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- **Recheck missing files.** Recovered files that TagDeck still lists as missing can now be picked back up in bulk: **Settings → Library → Recheck Missing Files** goes through every missing track, and right-clicking a selection offers **Recheck Missing File(s)** for just those. Each track is first looked for at its old location; if it isn't there and the track is linked to iTunes, TagDeck asks Music.app where the file lives now and follows it. Double-clicking a missing row rechecks that one track and plays it if it turns up (previously double-clicking a missing row did nothing). Rechecking only ever clears the missing flag — it never marks anything missing — and reports what it found in a toast.
 - **Sync to iTunes → choose a folder.** Right-clicking a playlist and choosing "Sync to iTunes…" now opens a picker for the target folder in your iTunes playlist tree (or the root). Tracks not yet in your Music library are imported automatically; tracks whose file is missing on disk are skipped and reported.
 - Rekordbox Live Sync: keep a fixed rekordbox.xml current automatically (debounced, atomic); exports now include bitrate and grouping. Set up once, then just reload in Rekordbox.
 - **Show/Hide Missing Tracks** — a toolbar toggle next to search that hides tracks whose file is missing on disk. Global, persists across restarts, and shows how many missing tracks are in view. Purely a view filter — nothing is deleted.

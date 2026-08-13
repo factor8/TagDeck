@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo, useRef, forwardRef, useImperativeHandle, 
 import { StarRating } from './StarRating';
 import { parseSearchQuery, matchesAllTokens } from '../utils/searchParser';
 import { countMissing, filterMissing } from '../utils/missingFilter';
+import { recheckableIds } from '../utils/recheckMissing';
 import { invoke } from '@tauri-apps/api/core';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { 
@@ -37,7 +38,7 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles, Plus, Check } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles, Plus, Check, FileSearch } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
@@ -79,6 +80,8 @@ interface Props {
     onAddToBuilder?: (trackIds: number[]) => void;
     /** Remove a track from the builder target. */
     onRemoveFromBuilder?: (trackId: number) => void;
+    /** Recheck whether the given missing tracks' files are back on disk. */
+    onRecheckMissing?: (trackIds: number[]) => void;
 }
 
 // Per-row +/added toggle shown in the "#" column while the Build tab has a target.
@@ -562,6 +565,8 @@ const TrackRowContent = ({
         onFileDrop(paths, afterTrackId);
     };
 
+    // Missing rows fire onDoubleClick too — the handler rechecks the file
+    // instead of playing, and only plays it if it turns up.
     return (
         <tr
             key={row.id}
@@ -572,7 +577,7 @@ const TrackRowContent = ({
             }}
             onClick={(e) => handleRowClick(row.original, e)}
             onContextMenu={onContextMenu}
-            onDoubleClick={() => !isMissing && onTrackDoubleClick?.(row.original)}
+            onDoubleClick={() => onTrackDoubleClick?.(row.original)}
             style={style}
             onMouseEnter={(e) => {
                 if (!isSelected) e.currentTarget.style.background = 'var(--bg-secondary)';
@@ -777,7 +782,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, hideMissing, onMissingCountChange, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, hideMissing, onMissingCountChange, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder, onRecheckMissing }, ref) => {
     const { debugMode } = useDebug();
     const { showSuccess, showError } = useToast();
     const [tracks, setTracks] = useState<Track[]>([]);
@@ -2274,6 +2279,28 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                             <span>Show in Finder</span>
                         </div>
                         )}
+                        {/* Only offered when the action set actually contains missing
+                            tracks — a recheck is a no-op for anything else. */}
+                        {(() => {
+                            const targets = recheckableIds(getActionTracks(contextMenu.track));
+                            if (targets.length === 0) return null;
+                            return (
+                                <div
+                                    className="context-menu-item"
+                                    onClick={() => {
+                                        setContextMenu(null);
+                                        onRecheckMissing?.(targets);
+                                    }}
+                                >
+                                    <FileSearch size={14} className="context-menu-icon" />
+                                    <span>
+                                        {targets.length > 1
+                                            ? `Recheck Missing Files (${targets.length})`
+                                            : 'Recheck Missing File'}
+                                    </span>
+                                </div>
+                            );
+                        })()}
                         <div className="context-menu-separator" />
                         {contextMenu.track.source !== 'spotify' && (
                         <div

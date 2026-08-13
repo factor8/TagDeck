@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Loader2, FolderSync, HardDrive } from 'lucide-react';
+import { Loader2, FolderSync, HardDrive, FileSearch } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { open, confirm } from '@tauri-apps/plugin-dialog';
 import { useToast } from '../Toast';
 import { ToggleSwitch } from './ToggleSwitch';
 import { PlaylistBackupSection } from './PlaylistBackupSection';
+import { summarizeRecheck, recheckFoundSomething, type RecheckReport } from '../../utils/recheckMissing';
 
 interface LibraryConfig {
     root_path: string;
@@ -24,7 +25,28 @@ interface LibraryTabProps {
 export function LibraryTab({ libraryConfig, updateLibraryConfig, appleMusicAvailable, onRefresh }: LibraryTabProps) {
     const [consolidating, setConsolidating] = useState(false);
     const [showConsolidateConfirm, setShowConsolidateConfirm] = useState(false);
-    const { showSuccess, showError } = useToast();
+    const [rechecking, setRechecking] = useState(false);
+    const { showSuccess, showError, showToast } = useToast();
+
+    // Library-wide recheck: no ids, so the command looks at every missing track.
+    const handleRecheckMissing = async () => {
+        setRechecking(true);
+        try {
+            const report = await invoke<RecheckReport>('recheck_missing_files');
+            const msg = summarizeRecheck(report);
+            if (recheckFoundSomething(report)) {
+                showSuccess(msg);
+                onRefresh();
+            } else {
+                showToast(msg, 'info');
+            }
+        } catch (err: any) {
+            console.error(err);
+            showError(`Recheck failed: ${err}`);
+        } finally {
+            setRechecking(false);
+        }
+    };
 
     const handleConsolidate = async () => {
         setShowConsolidateConfirm(false);
@@ -177,6 +199,29 @@ export function LibraryTab({ libraryConfig, updateLibraryConfig, appleMusicAvail
 
             <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', fontStyle: 'italic' }}>
                 Drag audio files onto the window to import them into your library.
+            </div>
+
+            {/* Recheck missing files */}
+            <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid var(--border-color)' }}>
+                <button
+                    onClick={handleRecheckMissing}
+                    disabled={rechecking}
+                    className="btn"
+                    style={{
+                        fontSize: '13px', padding: '6px 12px',
+                        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+                        color: 'var(--text-primary)', borderRadius: '6px',
+                        cursor: rechecking ? 'not-allowed' : 'pointer',
+                        display: 'flex', alignItems: 'center', gap: '6px'
+                    }}
+                    title="Look for every missing file again — at its old location, then wherever Music.app says it lives now"
+                >
+                    {rechecking ? <Loader2 size={14} className="spin" /> : <FileSearch size={14} />}
+                    {rechecking ? 'Rechecking…' : 'Recheck Missing Files'}
+                </button>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '8px', fontStyle: 'italic' }}>
+                    Clears the missing flag on tracks whose files are back, and follows any that Music.app has moved. Never marks anything missing.
+                </div>
             </div>
 
             {/* Consolidate Library */}

@@ -1383,6 +1383,20 @@ impl Database {
         Ok(())
     }
 
+    /// Every track currently flagged `missing`, as `(id, file_path, itunes_pid)`.
+    /// Ghosts (Spotify, no file) are excluded at the query level — they carry no
+    /// path to recheck and must never be relocated. Feeds `recheck_missing_files`.
+    pub fn get_missing_track_index(&self) -> Result<Vec<(i64, String, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_path, itunes_pid FROM tracks
+             WHERE COALESCE(missing, 0) = 1 AND source != 'spotify' AND file_path != ''",
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2).unwrap_or(None))))?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+        Ok(rows)
+    }
+
     pub fn set_track_missing(&self, id: i64, missing: bool) -> Result<()> {
         self.conn.execute(
             "UPDATE tracks SET missing = ?1 WHERE id = ?2",

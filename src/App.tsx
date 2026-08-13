@@ -27,6 +27,7 @@ import { QueuePane } from './components/QueuePane';
 import { PlaylistBuilderPane } from './components/PlaylistBuilderPane';
 import { DragArmContext } from './components/DragArmContext';
 import { isTrackId, pickTrackCollision, shouldCommitAdd, nextDwellAction } from './utils/dragCollision';
+import { summarizeRecheck, recheckFoundSomething, type RecheckReport } from './utils/recheckMissing';
 
 // How long a track must hover an add target (sidebar playlist / Build pane)
 // before the add "arms" and a drop commits. Short enough to feel responsive,
@@ -1086,16 +1087,63 @@ function App() {
     setCurrentTags(commonTags);
   }, []);
   
-  const handleTrackDoubleClick = useCallback((track: Track) => {
-      // Ensure it is selected (it should be from the click, but to be sure)
-      if (selectedTrack?.id !== track.id) {
-          const newSet = new Set([track.id]);
-          handleSelectionChange(newSet, track.id, track, track.comment_raw ? track.comment_raw.split(" && ")[1]?.split(';') || [] : []);
+  /**
+   * Look for the given missing tracks again — at their old location first, then
+   * wherever Music.app says they live now. Only ever clears the missing flag;
+   * nothing here can mark a track missing.
+   */
+  const handleRecheckMissing = useCallback(async (trackIds: number[]): Promise<RecheckReport | null> => {
+      if (trackIds.length === 0) return null;
+      try {
+          const report = await invoke<RecheckReport>('recheck_missing_files', { ids: trackIds });
+          const msg = summarizeRecheck(report);
+          if (recheckFoundSomething(report)) {
+              showSuccess(msg);
+              handleRefresh();
+          } else {
+              showToast(msg, 'info');
+          }
+          if (report.itunes_lookup_error) {
+              log('WARN', `Recheck: Music app lookup failed — ${report.itunes_lookup_error}`);
+          }
+          return report;
+      } catch (e) {
+          console.error('Recheck missing files failed:', e);
+          showError(`Recheck failed: ${e}`);
+          log('ERROR', `Recheck missing files failed: ${e}`);
+          return null;
       }
-      setPlayingTrack(track);
+  }, [showSuccess, showError, showToast, log]);
+
+  const handleTrackDoubleClick = useCallback(async (track: Track) => {
+      let target = track;
+
+      // A missing row has nothing to play, so double-click means "look again"
+      // instead of failing into the player's error path. This is the *only*
+      // recheck playback triggers — auto-advance never does one (the queue
+      // filters missing tracks out before they ever come up).
+      if (track.missing) {
+          const report = await handleRecheckMissing([track.id]);
+          if (!report || !recheckFoundSomething(report)) return;
+          // The file may have come back at a new path — play the fresh row.
+          try {
+              const fresh = await invoke<Track | null>('get_track', { id: track.id });
+              if (fresh) target = fresh;
+          } catch (e) {
+              console.error('Failed to reload rechecked track:', e);
+          }
+          if (target === track) target = { ...track, missing: false };
+      }
+
+      // Ensure it is selected (it should be from the click, but to be sure)
+      if (selectedTrack?.id !== target.id) {
+          const newSet = new Set([target.id]);
+          handleSelectionChange(newSet, target.id, target, target.comment_raw ? target.comment_raw.split(" && ")[1]?.split(';') || [] : []);
+      }
+      setPlayingTrack(target);
       setPlayingPlaylistId(selectedPlaylistId);
       setShouldAutoPlay(true);
-  }, [selectedTrack, selectedPlaylistId, handleSelectionChange]);
+  }, [selectedTrack, selectedPlaylistId, handleSelectionChange, handleRecheckMissing]);
 
   const handleDeckTagClick = (tag: string) => {
       if (selectedTrackIds.size === 0) {
@@ -1433,6 +1481,7 @@ function App() {
               searchTerm={searchTerm}
               hideMissing={hideMissing}
               onMissingCountChange={setMissingCount}
+              onRecheckMissing={handleRecheckMissing}
               onRefresh={handleRefresh}
               onCopyPlaylistMemberships={setCopyPlaylistsTarget}
               onNavigateToPlaylist={(playlistId, track) => {

@@ -3029,6 +3029,134 @@ pub async fn verify_library_files(
 }
 
 #[derive(serde::Serialize, Default)]
+pub struct RecheckReport {
+    pub checked: usize,
+    pub restored: usize,
+    pub relocated: usize,
+    pub still_missing: usize,
+    /// Set when the Music.app read failed; the affected tracks stay missing
+    /// rather than the whole recheck failing.
+    pub itunes_lookup_error: Option<String>,
+}
+
+/// Picks the still-missing tracks that their linked Music.app entry now reports
+/// at a *different* location, as `(id, new_path)`. Pure: the caller confirms the
+/// new path exists on disk before writing it.
+///
+/// A track is skipped when it has no usable `itunes_pid`, when Music.app doesn't
+/// know it, when Music.app reports no location, or when the reported location is
+/// the path we already tried (pass 1 just stat'd that one and it was gone).
+pub fn resolve_itunes_relocations(
+    candidates: &[(i64, String, Option<String>)],
+    itunes_paths: &std::collections::HashMap<String, String>,
+) -> Vec<(i64, String)> {
+    let mut out = Vec::new();
+    for (id, old_path, pid) in candidates {
+        let Some(pid) = pid.as_deref().filter(|p| !p.is_empty()) else { continue };
+        let Some(new_path) = itunes_paths.get(pid) else { continue };
+        if new_path.is_empty() || new_path == old_path {
+            continue;
+        }
+        out.push((*id, new_path.clone()));
+    }
+    out
+}
+
+/// Re-checks tracks currently flagged `missing` and heals the ones that came
+/// back: first by re-stat'ing the stored path, then — for iTunes-linked tracks
+/// still unaccounted for — by asking Music.app where the file lives now and
+/// adopting that location. Pass `ids` to recheck a selection; omit it for every
+/// missing track in the library.
+///
+/// Unlike `verify_library_files`, this NEVER marks anything missing; it only
+/// clears the flag. That makes it safe to run on a selection at any time.
+#[tauri::command]
+pub async fn recheck_missing_files(
+    app: tauri::AppHandle,
+    ids: Option<Vec<i64>>,
+    state: State<'_, AppState>,
+) -> Result<RecheckReport, String> {
+    // Ghosts and empty paths are already excluded by the query.
+    let candidates = {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        let mut rows = db.get_missing_track_index().map_err(|e| e.to_string())?;
+        if let Some(ids) = &ids {
+            let wanted: std::collections::HashSet<i64> = ids.iter().copied().collect();
+            rows.retain(|(id, _, _)| wanted.contains(id));
+        }
+        rows
+    };
+
+    let mut report = RecheckReport { checked: candidates.len(), ..Default::default() };
+    if candidates.is_empty() {
+        return Ok(report);
+    }
+
+    // Pass 1: the file may simply be back where it always was.
+    let mut restored: Vec<i64> = Vec::new();
+    let mut leftover: Vec<(i64, String, Option<String>)> = Vec::new();
+    for c in candidates {
+        if std::path::Path::new(&c.1).is_file() {
+            restored.push(c.0);
+        } else {
+            leftover.push(c);
+        }
+    }
+
+    // Pass 2: only worth the sidecar round-trip when something is still missing
+    // *and* linked to iTunes.
+    let mut relocations: Vec<(i64, String)> = Vec::new();
+    let any_linked = leftover
+        .iter()
+        .any(|(_, _, pid)| pid.as_deref().is_some_and(|p| !p.is_empty()));
+    if any_linked {
+        match fetch_system_library(&app).await {
+            Ok((tracks, _)) => {
+                let itunes_paths: std::collections::HashMap<String, String> = tracks
+                    .into_iter()
+                    .filter_map(|t| t.itunes_pid.map(|pid| (pid, t.file_path)))
+                    .collect();
+                relocations = resolve_itunes_relocations(&leftover, &itunes_paths)
+                    .into_iter()
+                    .filter(|(_, p)| std::path::Path::new(p).is_file())
+                    .collect();
+            }
+            Err(e) => {
+                let msg = format!("Recheck: could not read the Music app library: {}", e);
+                app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                report.itunes_lookup_error = Some(e.to_string());
+            }
+        }
+    }
+
+    {
+        let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        for id in &restored {
+            if db.set_track_missing(*id, false).is_ok() {
+                report.restored += 1;
+            }
+        }
+        for (id, new_path) in &relocations {
+            if db.update_track_path(*id, new_path).is_ok() && db.set_track_missing(*id, false).is_ok() {
+                report.relocated += 1;
+            }
+        }
+    }
+    report.still_missing = report.checked.saturating_sub(report.restored + report.relocated);
+
+    let msg = format!(
+        "Recheck missing files: {} restored, {} relocated, {} still missing (of {} checked)",
+        report.restored, report.relocated, report.still_missing, report.checked
+    );
+    app.state::<crate::logging::LogState>().add_log("INFO", &msg, &app);
+
+    if report.restored + report.relocated > 0 {
+        state.rekordbox_dirty.mark();
+    }
+    Ok(report)
+}
+
+#[derive(serde::Serialize, Default)]
 pub struct ConsolidationReport {
     pub total_candidates: usize,
     pub consolidated: usize,
@@ -3685,5 +3813,100 @@ mod tests {
 
         let native_pl = db.create_playlist("My Crate", None, false, "TD-guard").unwrap();
         assert_eq!(db.get_playlist_origin(native_pl.id).unwrap(), "tagdeck");
+    }
+
+    // ─── recheck_missing_files ──────────────────────────────────────────────
+
+    /// Pass 2's matching, isolated from the Music.app sidecar: only linked
+    /// tracks Music.app knows about, and only when it reports a *new* location.
+    #[test]
+    fn resolve_itunes_relocations_only_takes_new_known_locations() {
+        use std::collections::HashMap;
+
+        let itunes: HashMap<String, String> = [
+            ("PID-MOVED", "/Users/me/Music/Media/moved.mp3"),
+            ("PID-SAME", "/Users/me/Music/same.mp3"),
+            ("PID-NOWHERE", ""),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let candidates = vec![
+            // Relocatable: Music.app reports a different path.
+            (1, "/old/moved.mp3".to_string(), Some("PID-MOVED".to_string())),
+            // Music.app still points at the path pass 1 just failed to stat.
+            (2, "/Users/me/Music/same.mp3".to_string(), Some("PID-SAME".to_string())),
+            // Linked, but Music.app has no location for it.
+            (3, "/old/nowhere.mp3".to_string(), Some("PID-NOWHERE".to_string())),
+            // Linked to a pid Music.app doesn't know (deleted there).
+            (4, "/old/unknown.mp3".to_string(), Some("PID-GONE".to_string())),
+            // Never linked to iTunes at all.
+            (5, "/old/unlinked.mp3".to_string(), None),
+            // Empty pid counts as "no link" (same convention as classify_track).
+            (6, "/old/empty-pid.mp3".to_string(), Some(String::new())),
+        ];
+
+        let out = resolve_itunes_relocations(&candidates, &itunes);
+        assert_eq!(out, vec![(1, "/Users/me/Music/Media/moved.mp3".to_string())]);
+    }
+
+    /// The candidate query is the command's only ghost guard, so it has to hold
+    /// on its own: missing-only, ghosts and empty paths excluded, `itunes_pid`
+    /// carried through for pass 2.
+    #[test]
+    fn missing_track_index_selects_only_recheckable_rows() {
+        let db = Database::new(":memory:").unwrap();
+
+        let present = db.insert_track_preserving_comment(&local_track("P1", "/Music/present.mp3")).unwrap();
+        let gone = db.insert_track_preserving_comment(&local_track("P2", "/Music/gone.mp3")).unwrap();
+        let mut linked = local_track("P3", "/Music/linked.mp3");
+        linked.itunes_pid = Some("ITU-3".into());
+        let linked = db.insert_track_preserving_comment(&linked).unwrap();
+        let ghost_id = db.insert_imported_track(&ghost("g-recheck"), None, None).unwrap();
+
+        // A ghost can carry a stale `missing` flag (set before the guard existed,
+        // or straight through the DB as the test above shows) — it must still
+        // never surface as a recheck candidate.
+        for id in [gone, linked, ghost_id] {
+            db.set_track_missing(id, true).unwrap();
+        }
+
+        let index = db.get_missing_track_index().unwrap();
+        let ids: Vec<i64> = index.iter().map(|(id, _, _)| *id).collect();
+        assert_eq!(ids, vec![gone, linked]);
+        assert!(!ids.contains(&present), "tracks that aren't missing are not candidates");
+
+        let pids: Vec<Option<String>> = index.iter().map(|(_, _, pid)| pid.clone()).collect();
+        assert_eq!(pids, vec![None, Some("ITU-3".to_string())]);
+    }
+
+    /// Recheck only ever *clears* the flag — the opposite of
+    /// verify_library_files, which also marks tracks missing. This pins the DB
+    /// calls the command makes on a hit (restore, and relocate + restore).
+    #[test]
+    fn recheck_restore_and_relocate_clear_the_missing_flag() {
+        let db = Database::new(":memory:").unwrap();
+        let restored = db.insert_track_preserving_comment(&local_track("R1", "/Music/back.mp3")).unwrap();
+        let relocated = db.insert_track_preserving_comment(&local_track("R2", "/old/moved.mp3")).unwrap();
+        for id in [restored, relocated] {
+            db.set_track_missing(id, true).unwrap();
+        }
+
+        // Pass 1 outcome.
+        db.set_track_missing(restored, false).unwrap();
+        // Pass 2 outcome.
+        db.update_track_path(relocated, "/Music/Media/moved.mp3").unwrap();
+        db.set_track_missing(relocated, false).unwrap();
+
+        let a = db.get_track(restored).unwrap().unwrap();
+        assert!(!a.missing);
+        assert_eq!(a.file_path, "/Music/back.mp3", "a restore never rewrites the path");
+
+        let b = db.get_track(relocated).unwrap().unwrap();
+        assert!(!b.missing);
+        assert_eq!(b.file_path, "/Music/Media/moved.mp3");
+
+        assert!(db.get_missing_track_index().unwrap().is_empty());
     }
 }
