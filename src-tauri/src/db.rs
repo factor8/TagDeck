@@ -179,6 +179,9 @@ impl Database {
             )",
             [],
         );
+        // Spotify merge journal: the local track's rating before the merge, so
+        // "Unlink from Spotify" can restore it. NULL on rows from before this column.
+        let _ = conn.execute("ALTER TABLE spotify_merge_log ADD COLUMN local_rating_before INTEGER", []);
 
         // Play queue: the user's manual "play next" overlay. `position` is a
         // plain ordering column; the whole table is rewritten on every queue
@@ -2462,19 +2465,21 @@ impl Database {
         local_track_id: i64,
         ghost: &crate::models::Track,
         local_comment_before: Option<&str>,
+        local_rating_before: i64,
     ) -> Result<()> {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
         self.conn.execute(
             "INSERT OR REPLACE INTO spotify_merge_log
                 (local_track_id, spotify_id, ghost_artist, ghost_title, ghost_album,
-                 ghost_duration_secs, ghost_comment, ghost_rating, local_comment_before, merged_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 ghost_duration_secs, ghost_comment, ghost_rating, local_comment_before,
+                 local_rating_before, merged_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 local_track_id,
                 ghost.spotify_id.as_deref().unwrap_or_default(),
                 ghost.artist, ghost.title, ghost.album,
                 ghost.duration_secs, ghost.comment_raw, ghost.rating,
-                local_comment_before, now
+                local_comment_before, local_rating_before, now
             ],
         )?;
         Ok(())
@@ -2485,7 +2490,8 @@ impl Database {
         use rusqlite::OptionalExtension;
         let entry: Option<MergeLogEntry> = self.conn.query_row(
             "SELECT spotify_id, ghost_artist, ghost_title, ghost_album,
-                    ghost_duration_secs, ghost_comment, ghost_rating, local_comment_before
+                    ghost_duration_secs, ghost_comment, ghost_rating, local_comment_before,
+                    local_rating_before
              FROM spotify_merge_log WHERE local_track_id = ?1",
             params![local_track_id],
             |r| Ok(MergeLogEntry {
@@ -2497,6 +2503,7 @@ impl Database {
                 ghost_comment: r.get(5)?,
                 ghost_rating: r.get(6)?,
                 local_comment_before: r.get(7)?,
+                local_rating_before: r.get(8)?,
             }),
         ).optional()?;
         self.conn.execute(
@@ -2504,6 +2511,25 @@ impl Database {
             params![local_track_id],
         )?;
         Ok(entry)
+    }
+
+    /// Journaled merges where the ghost had stars but the linked local track is
+    /// still unrated — i.e. the rating was dropped by the merge. Ghost rows
+    /// (unlinked again since) are excluded.
+    pub fn get_lost_merge_ratings(&self) -> Result<Vec<LostMergeRating>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT m.local_track_id, t.itunes_pid, m.ghost_rating
+             FROM spotify_merge_log m JOIN tracks t ON t.id = m.local_track_id
+             WHERE m.ghost_rating > 0 AND COALESCE(t.rating, 0) = 0
+               AND COALESCE(t.source, 'local') != 'spotify' AND t.file_path != ''
+             ORDER BY m.local_track_id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok(LostMergeRating {
+            local_track_id: r.get(0)?,
+            itunes_pid: r.get(1)?,
+            ghost_rating: r.get(2)?,
+        }))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Clears a track's spotify_id (freeing the unique index so a ghost can
@@ -2545,6 +2571,18 @@ pub struct MergeLogEntry {
     pub ghost_comment: Option<String>,
     pub ghost_rating: i64,
     pub local_comment_before: Option<String>,
+    /// `None` for journal rows written before the column existed.
+    pub local_rating_before: Option<i64>,
+}
+
+/// A journaled Spotify link whose ghost rating never reached the local track
+/// (merges from before ratings were carried over). Used by the one-time
+/// startup backfill in `spotify::merge::backfill_lost_merge_ratings`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LostMergeRating {
+    pub local_track_id: i64,
+    pub itunes_pid: Option<String>,
+    pub ghost_rating: i64,
 }
 
 /// A single playlist in a backup, with its track references.

@@ -144,6 +144,10 @@ pub fn run() {
             rekordbox_sync::start_rekordbox_sync(app.handle().clone(), rekordbox_rx);
             app.state::<AppState>().rekordbox_dirty.mark();
 
+            // One-time repair: Spotify links made before merges carried the
+            // ghost's rating over (see spotify::merge::apply_lost_merge_ratings).
+            spotify::merge::backfill_lost_merge_ratings(app.handle().clone());
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())

@@ -257,16 +257,9 @@ pub async fn spotify_get_pending_matches(state: State<'_, AppState>) -> Result<V
     Ok(out)
 }
 
-/// Mirror a merged/restored comment to Music.app, lock-free (AppleScript can
-/// take seconds). Failure is logged, not fatal — the track is dirty-flagged
-/// only when the mode forbids pushing, so a transient push failure here can
-/// still be reconciled manually via Sync Review's drift audit.
+/// Mirror merged/restored fields to Music.app, lock-free (see merge::run_music_pushes).
 fn run_music_push(push: Option<super::merge::MusicPush>) {
-    if let Some(job) = push {
-        if let Err(e) = crate::apple_music::batch_update_track_comments(vec![job]) {
-            eprintln!("Spotify merge/unlink: Music.app comment push failed: {}", e);
-        }
-    }
+    super::merge::run_music_pushes(push.into_iter().collect());
 }
 
 #[tauri::command]

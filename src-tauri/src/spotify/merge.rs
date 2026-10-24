@@ -52,14 +52,57 @@ pub fn union_tags(ghost_comment: &str, local_comment: &str) -> String {
     seen.join("; ")
 }
 
-/// A comment update that must be mirrored to Music.app: (itunes_pid, comment).
-/// Callers execute it via `apple_music::batch_update_track_comments` AFTER
-/// releasing the DB lock — the AppleScript round-trip can take seconds.
-pub type MusicPush = (String, String);
+/// Field updates that must be mirrored to Music.app for one linked track.
+/// Callers execute them via `run_music_pushes` AFTER releasing the DB lock —
+/// each AppleScript round-trip can take seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MusicPush {
+    pub itunes_pid: String,
+    /// Full comment string (user text + tag block), when it changed.
+    pub comment: Option<String>,
+    /// 0–100 star rating, when it changed.
+    pub rating: Option<u32>,
+}
+
+/// Mirror merged/restored fields to Music.app, lock-free. Comments go in one
+/// batched JXA call; ratings are one AppleScript each. Failure is logged, not
+/// fatal — the track is dirty-flagged only when the mode forbids pushing, so
+/// a transient push failure here can still be reconciled via Sync Review.
+pub fn run_music_pushes(pushes: Vec<MusicPush>) {
+    let comments: Vec<(String, String)> = pushes
+        .iter()
+        .filter_map(|p| p.comment.clone().map(|c| (p.itunes_pid.clone(), c)))
+        .collect();
+    if !comments.is_empty() {
+        if let Err(e) = crate::apple_music::batch_update_track_comments(comments) {
+            eprintln!("Spotify merge/unlink: Music.app comment push failed: {}", e);
+        }
+    }
+    for p in &pushes {
+        if let Some(r) = p.rating {
+            if let Err(e) = crate::apple_music::update_track_rating(&p.itunes_pid, r) {
+                eprintln!("Spotify merge/unlink: Music.app rating push failed ({}): {}", p.itunes_pid, e);
+            }
+        }
+    }
+}
+
+/// Which rating the merged local track ends up with. The local file is the
+/// real library entry, so an existing local rating wins; a ghost rating only
+/// fills in when the local track is unrated. Returns the new rating when it
+/// should change, `None` to leave it alone.
+pub fn merged_rating(ghost_rating: i64, local_rating: i64) -> Option<u32> {
+    if local_rating == 0 && ghost_rating > 0 {
+        Some(ghost_rating as u32)
+    } else {
+        None
+    }
+}
 
 /// Merge a ghost into a local track: union tags into the local file's comment
-/// (file write is best-effort; DB is authoritative), repoint playlist rows,
-/// transfer spotify_id, delete the ghost and its pending matches.
+/// (file write is best-effort; DB is authoritative), carry the ghost's rating
+/// over when the local track is unrated (`merged_rating`), repoint playlist
+/// rows, transfer spotify_id, delete the ghost and its pending matches.
 ///
 /// The merged comment must also reach Music.app, or the next iTunes sync
 /// pulls Music's stale copy back over it and the merged tags vanish (the
@@ -82,7 +125,7 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
 
     // Journal what this merge destroys (ghost row + pre-merge local comment)
     // so "Unlink from Spotify" can restore it exactly.
-    db.add_merge_log(local_id, &ghost, local.comment_raw.as_deref())
+    db.add_merge_log(local_id, &ghost, local.comment_raw.as_deref(), local.rating)
         .map_err(|e| e.to_string())?;
 
     let ghost_comment = ghost.comment_raw.clone().unwrap_or_default();
@@ -116,14 +159,31 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
     updated.comment_raw = if new_comment.is_empty() { None } else { Some(new_comment.clone()) };
     db.update_track(&updated).map_err(|e| e.to_string())?;
 
+    // 2a. Rating: the ghost's stars were given while listening on Spotify
+    // and are the only rating the song has if the local file is unrated.
+    let new_rating = merged_rating(ghost.rating, local.rating);
+    if let Some(r) = new_rating {
+        db.update_track_rating(local_id, r).map_err(|e| e.to_string())?;
+    } else if ghost.rating > 0 && ghost.rating != local.rating {
+        eprintln!(
+            "Spotify merge: keeping local rating {} over ghost rating {} for track {}",
+            local.rating, ghost.rating, local_id
+        );
+    }
+
     // 2b. Keep Music.app in agreement (see doc comment): push when allowed,
-    // dirty-flag when not, nothing when the comment didn't actually change
+    // dirty-flag when not, nothing when neither field actually changed
     // or the track has no Music.app counterpart.
     let mut push_job = None;
-    if new_comment != local_comment {
+    let comment_changed = new_comment != local_comment;
+    if comment_changed || new_rating.is_some() {
         match &local.itunes_pid {
             Some(pid) if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() => {
-                push_job = Some((pid.clone(), new_comment));
+                push_job = Some(MusicPush {
+                    itunes_pid: pid.clone(),
+                    comment: comment_changed.then(|| new_comment.clone()),
+                    rating: new_rating,
+                });
             }
             Some(_) => {
                 if let Err(e) = db.mark_tracks_dirty(&[local_id]) {
@@ -147,8 +207,8 @@ pub fn merge_ghost_into_local(db: &Database, ghost_id: i64, local_id: i64) -> Re
 
 /// Reverse a ghost→local merge: recreate the ghost, hand its spotify_id and
 /// Spotify-playlist memberships back, and — when the merge was journaled —
-/// restore the local track's exact pre-merge comment and the ghost's own
-/// tags/rating. Unjournaled links (merges from before the journal existed)
+/// restore the local track's exact pre-merge comment and rating and the
+/// ghost's own tags/rating. Unjournaled links (merges from before the journal existed)
 /// still unlink cleanly, but the local comment keeps the merged tags since
 /// there's no record of which ones the ghost brought in.
 pub fn unlink_local_track(db: &Database, local_id: i64) -> Result<Option<MusicPush>, String> {
@@ -196,10 +256,12 @@ pub fn unlink_local_track(db: &Database, local_id: i64) -> Result<Option<MusicPu
     // point them back at it. The local track's other playlists are its own.
     db.repoint_spotify_playlist_tracks(local_id, ghost_id).map_err(|e| e.to_string())?;
 
-    // 3. Restore the pre-merge comment (journaled merges only), following the
-    // same file + DB + Music.app protocol as the merge itself.
+    // 3. Restore the pre-merge comment and rating (journaled merges only),
+    // following the same file + DB + Music.app protocol as the merge itself.
+    // Journal rows from before `local_rating_before` existed leave the rating alone.
     let mut push_job = None;
     if let Some(j) = &journal {
+        let mut restored_comment: Option<String> = None;
         if j.local_comment_before != local.comment_raw {
             let restored = j.local_comment_before.clone().unwrap_or_default();
             if let Err(e) = crate::metadata::write_metadata(&local.file_path, &restored) {
@@ -209,9 +271,23 @@ pub fn unlink_local_track(db: &Database, local_id: i64) -> Result<Option<MusicPu
             updated.spotify_id = None;
             updated.comment_raw = j.local_comment_before.clone();
             db.update_track(&updated).map_err(|e| e.to_string())?;
+            restored_comment = Some(restored);
+        }
+        let restored_rating: Option<u32> = match j.local_rating_before {
+            Some(before) if before != local.rating => Some(before.max(0) as u32),
+            _ => None,
+        };
+        if let Some(r) = restored_rating {
+            db.update_track_rating(local_id, r).map_err(|e| e.to_string())?;
+        }
+        if restored_comment.is_some() || restored_rating.is_some() {
             match &local.itunes_pid {
                 Some(pid) if crate::file_manager::LibraryConfig::sync_mode(db).push_enabled() => {
-                    push_job = Some((pid.clone(), restored));
+                    push_job = Some(MusicPush {
+                        itunes_pid: pid.clone(),
+                        comment: restored_comment,
+                        rating: restored_rating,
+                    });
                 }
                 Some(_) => {
                     if let Err(e) = db.mark_tracks_dirty(&[local_id]) {
@@ -286,14 +362,10 @@ pub fn process_new_local_tracks(
             _ => {}
         }
     }
-    // Music.app pushes run lock-free: batch_update_track_comments is an
-    // AppleScript round-trip that can take seconds.
+    // Music.app pushes run lock-free: each is an AppleScript round-trip
+    // that can take seconds.
     drop(db);
-    if !pushes.is_empty() {
-        if let Err(e) = crate::apple_music::batch_update_track_comments(pushes) {
-            eprintln!("Spotify merge: Music.app comment push failed: {}", e);
-        }
-    }
+    run_music_pushes(pushes);
     if outcome.auto_merged > 0 || outcome.pending_review > 0 {
         let _ = app.emit("spotify-merge-completed", serde_json::json!({
             "merged": outcome.auto_merged,
@@ -309,6 +381,80 @@ pub fn process_new_local_tracks(
         );
     }
     outcome
+}
+
+const RATING_BACKFILL_KEY: &str = "spotify_merge_rating_backfill_done";
+
+/// Apply the one-time rating repair for links made before merges carried the
+/// ghost's rating over: every journaled merge whose ghost had stars and whose
+/// local track is still unrated gets the ghost rating (same policy as
+/// `merged_rating`). Returns the Music.app pushes to run lock-free and the
+/// number of tracks repaired. Idempotent: the config flag makes later calls
+/// no-ops, and the query itself only matches tracks still at 0.
+pub fn apply_lost_merge_ratings(db: &Database) -> Result<(Vec<MusicPush>, usize), String> {
+    if db.get_config(RATING_BACKFILL_KEY).map_err(|e| e.to_string())?.is_some() {
+        return Ok((Vec::new(), 0));
+    }
+    let lost = db.get_lost_merge_ratings().map_err(|e| e.to_string())?;
+    let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
+    let mut pushes = Vec::new();
+    let mut dirty = Vec::new();
+    let mut repaired = 0usize;
+    for l in &lost {
+        let Some(rating) = merged_rating(l.ghost_rating, 0) else { continue };
+        if let Err(e) = db.update_track_rating(l.local_track_id, rating) {
+            eprintln!("Spotify rating backfill: track {} failed: {}", l.local_track_id, e);
+            continue;
+        }
+        repaired += 1;
+        match &l.itunes_pid {
+            Some(pid) if push_enabled => pushes.push(MusicPush {
+                itunes_pid: pid.clone(),
+                comment: None,
+                rating: Some(rating),
+            }),
+            Some(_) => dirty.push(l.local_track_id),
+            None => {}
+        }
+    }
+    if !dirty.is_empty() {
+        db.mark_tracks_dirty(&dirty).map_err(|e| e.to_string())?;
+    }
+    db.set_config(RATING_BACKFILL_KEY, "1").map_err(|e| e.to_string())?;
+    Ok((pushes, repaired))
+}
+
+/// Startup wrapper for `apply_lost_merge_ratings`: runs once per library on a
+/// background thread (the Music.app pushes take ~0.4 s each), logs the result
+/// and emits "spotify-ratings-repaired" so the UI refreshes and tells the user.
+pub fn backfill_lost_merge_ratings(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let state = app.state::<crate::commands::AppState>();
+        let (pushes, repaired) = {
+            let Ok(db) = state.db.lock() else { return };
+            match apply_lost_merge_ratings(&db) {
+                Ok(r) => r,
+                Err(e) => {
+                    app.state::<crate::logging::LogState>().add_log(
+                        "ERROR", &format!("Spotify rating backfill failed: {}", e), &app);
+                    return;
+                }
+            }
+        };
+        if repaired == 0 {
+            return;
+        }
+        let pushed = pushes.len();
+        run_music_pushes(pushes);
+        state.rekordbox_dirty.mark();
+        app.state::<crate::logging::LogState>().add_log(
+            "INFO",
+            &format!("Spotify rating backfill: restored ratings on {} linked track(s), {} pushed to Music.app",
+                     repaired, pushed),
+            &app,
+        );
+        let _ = app.emit("spotify-ratings-repaired", serde_json::json!({ "repaired": repaired }));
+    });
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -473,9 +619,10 @@ mod tests {
 
         let push = merge_ghost_into_local(&dbm, ghost, local).unwrap();
 
-        let (pid, comment) = push.expect("two-way mode + linked track must produce a Music.app push");
-        assert_eq!(pid, "ITUNES-PID-1");
-        assert_eq!(comment, "note && house; energetic");
+        let push = push.expect("two-way mode + linked track must produce a Music.app push");
+        assert_eq!(push.itunes_pid, "ITUNES-PID-1");
+        assert_eq!(push.comment.as_deref(), Some("note && house; energetic"));
+        assert_eq!(push.rating, None, "unrated ghost leaves the rating alone");
         let dirty: i64 = dbm.conn.query_row(
             "SELECT dirty_since_sync FROM tracks WHERE id = ?1",
             rusqlite::params![local], |r| r.get(0)).unwrap();
@@ -531,11 +678,104 @@ mod tests {
         assert_eq!(new_ghost.comment_raw.as_deref(), Some(" && energetic; house"),
             "ghost tags restored");
         assert_eq!(new_ghost.rating, 80, "ghost rating restored");
+        assert_eq!(restored.rating, 0, "local track's pre-merge (unrated) state restored");
         let member: i64 = dbm.conn.query_row(
             "SELECT track_id FROM playlist_tracks LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(member, new_ghost_id, "spotify playlist membership repointed back to the ghost");
         // Journal consumed — a second unlink must fail (no longer linked).
         assert!(unlink_local_track(&dbm, local).is_err());
+    }
+
+    /// The IGT R&B bug: stars given to a Spotify ghost vanished on link because
+    /// the merge only carried tags and playlist rows. An unrated local track
+    /// must take the ghost's rating, push it to Music.app, and give it back
+    /// on unlink.
+    #[test]
+    fn merge_transfers_ghost_rating_to_unrated_local_and_unlink_restores_it() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-rating", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        dbm.update_track_rating(ghost, 80).unwrap();
+        let local = make_local(&dbm, "TD-rating", None, "tagdeck_merge_rating.mp3");
+        dbm.conn.execute("UPDATE tracks SET itunes_pid = 'ITUNES-PID-R' WHERE id = ?1",
+            rusqlite::params![local]).unwrap();
+
+        let push = merge_ghost_into_local(&dbm, ghost, local).unwrap()
+            .expect("rating change on a linked track must push to Music.app");
+        assert_eq!(push, MusicPush { itunes_pid: "ITUNES-PID-R".into(), comment: None, rating: Some(80) });
+        assert_eq!(dbm.get_track(local).unwrap().unwrap().rating, 80, "ghost rating carried over");
+
+        let push = unlink_local_track(&dbm, local).unwrap()
+            .expect("restoring the pre-merge rating must push to Music.app");
+        assert_eq!(push.rating, Some(0));
+        assert_eq!(push.comment, None);
+        assert_eq!(dbm.get_track(local).unwrap().unwrap().rating, 0, "pre-merge rating restored");
+        let ghost_id = dbm.find_track_by_spotify_id("g-rating").unwrap().expect("ghost recreated");
+        assert_eq!(dbm.get_track(ghost_id).unwrap().unwrap().rating, 80, "ghost keeps its stars");
+    }
+
+    /// A rated local file is the real library entry: its stars win over the
+    /// ghost's, and nothing is pushed for the rating.
+    #[test]
+    fn merge_keeps_existing_local_rating_over_ghost_rating() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        let ghost = dbm.upsert_ghost_track("g-keep", "u", "Artist", "Title", "Al", 200.0).unwrap();
+        dbm.update_track_rating(ghost, 40).unwrap();
+        let local = make_local(&dbm, "TD-keep", None, "tagdeck_merge_keep_rating.mp3");
+        dbm.update_track_rating(local, 100).unwrap();
+        dbm.conn.execute("UPDATE tracks SET itunes_pid = 'ITUNES-PID-K' WHERE id = ?1",
+            rusqlite::params![local]).unwrap();
+
+        let push = merge_ghost_into_local(&dbm, ghost, local).unwrap();
+
+        assert!(push.is_none(), "nothing changed that Music.app needs to hear about");
+        assert_eq!(dbm.get_track(local).unwrap().unwrap().rating, 100);
+        assert_eq!(merged_rating(0, 0), None);
+        assert_eq!(merged_rating(60, 0), Some(60));
+        assert_eq!(merged_rating(60, 20), None);
+    }
+
+    /// Startup repair for merges made before ratings were carried over: only
+    /// journaled, still-unrated local tracks are touched, Music.app pushes are
+    /// returned for linked ones, and the flag makes a second run a no-op.
+    #[test]
+    fn backfill_restores_lost_ratings_once() {
+        let dbm = crate::db::Database::new(":memory:").unwrap();
+        // Lost: ghost rated 80, local still 0, linked to iTunes → repaired + pushed.
+        let lost_linked = make_local(&dbm, "TD-bf1", None, "tagdeck_bf1.mp3");
+        dbm.conn.execute("UPDATE tracks SET itunes_pid = 'PID-BF1' WHERE id = ?1", rusqlite::params![lost_linked]).unwrap();
+        // Lost, not linked to iTunes → repaired, nothing to push.
+        let lost_local = make_local(&dbm, "TD-bf2", None, "tagdeck_bf2.mp3");
+        // Not lost: user already rated the local track → untouched.
+        let rated = make_local(&dbm, "TD-bf3", None, "tagdeck_bf3.mp3");
+        dbm.update_track_rating(rated, 100).unwrap();
+        // Not lost: ghost had no rating → untouched.
+        let unrated_ghost = make_local(&dbm, "TD-bf4", None, "tagdeck_bf4.mp3");
+        let journal = |local: i64, ghost_rating: i64| {
+            let ghost = crate::models::Track {
+                id: 0, persistent_id: String::new(), file_path: String::new(),
+                artist: None, title: None, album: None, comment_raw: None, grouping_raw: None,
+                duration_secs: 0.0, format: String::new(), size_bytes: 0, bit_rate: 0,
+                modified_date: 0, rating: ghost_rating, date_added: 0, bpm: 0, missing: false,
+                itunes_pid: None, unlinked_at: None, source: "spotify".into(),
+                spotify_id: Some(format!("sid-{}", local)),
+            };
+            dbm.add_merge_log(local, &ghost, None, 0).unwrap();
+        };
+        journal(lost_linked, 80);
+        journal(lost_local, 60);
+        journal(rated, 40);
+        journal(unrated_ghost, 0);
+
+        let (pushes, repaired) = apply_lost_merge_ratings(&dbm).unwrap();
+
+        assert_eq!(repaired, 2);
+        assert_eq!(pushes, vec![MusicPush { itunes_pid: "PID-BF1".into(), comment: None, rating: Some(80) }]);
+        assert_eq!(dbm.get_track(lost_linked).unwrap().unwrap().rating, 80);
+        assert_eq!(dbm.get_track(lost_local).unwrap().unwrap().rating, 60);
+        assert_eq!(dbm.get_track(rated).unwrap().unwrap().rating, 100, "existing rating wins");
+        assert_eq!(dbm.get_track(unrated_ghost).unwrap().unwrap().rating, 0);
+        // Journal rows stay, so a later unlink still works; the flag stops reruns.
+        assert_eq!(apply_lost_merge_ratings(&dbm).unwrap(), (Vec::new(), 0));
     }
 
     /// Links made before the journal existed can still be unlinked: the ghost

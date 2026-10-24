@@ -69,6 +69,34 @@ The existing sync engine already computes every diff we need (Phase 0 adds/remov
 - **Reorder safety** (`reorder_playlist` in `apple_music.rs`): pushing a new track order to Music.app has no transactional API, so it deletes the playlist's tracks and re-adds them in order. To keep a mid-operation failure from dropping membership, it only targets a *user playlist*, resolves every track **before** deleting (a missing track aborts untouched — no silent shrink), snapshots the original membership and **restores** it if the rebuild fails or the resulting count is wrong, and surfaces real errors to the caller (logged WARN) instead of swallowing them. TagDeck's DB copy is updated first and is the source of truth regardless.
 - Turning the global mode Off simply stops all sync; nothing is converted or deleted. Links are kept so re-enabling reconnects cleanly.
 
+### Spotify links (ghost → local merge)
+
+A Spotify "ghost" (`source = 'spotify'`, no file) is folded into a real local
+track by `spotify::merge::merge_ghost_into_local` — automatically on import at
+high confidence, or via the review queue / **Link to local track** (⌘L). The
+merge carries over:
+
+- **Tags** — union of both tag blocks, written to the file, the DB and (when
+  the mode allows pushing) Music.app, exactly like `write_tags`.
+- **Rating** — the ghost's stars fill in when the local track is **unrated**
+  (`merged_rating`); an existing local rating always wins and the mismatch is
+  logged. A changed rating follows the same push-or-dirty-flag protocol as
+  the comment (`MusicPush`, run lock-free after the DB lock is released).
+- **Playlist rows** and the `spotify_id`; the ghost row is then deleted.
+
+Every merge is journaled in `spotify_merge_log` (ghost metadata, ghost
+tags/rating, the local track's pre-merge comment **and rating**), so **Unlink
+from Spotify** recreates the ghost and restores the local track exactly,
+pushing the restored comment/rating to Music.app. Journal rows from before
+`local_rating_before` existed leave the rating alone on unlink.
+
+One-time repair: links made before ratings were carried over left the local
+track at 0 stars. On startup `backfill_lost_merge_ratings` runs once per
+library (`library_config` key `spotify_merge_rating_backfill_done`), applies
+the journaled ghost rating to every still-unrated linked track, pushes to
+Music.app in Two-way mode (dirty-flags in Import-only), and toasts
+"Restored Spotify ratings on N linked tracks".
+
 ### File management (always-on, not a fallback)
 
 - Library root / Copy-Move-InPlace / organize settings become always visible. In Two-way mode with "add to Music.app" enabled, Music still organizes files (current behavior); otherwise `file_manager` handles every import.

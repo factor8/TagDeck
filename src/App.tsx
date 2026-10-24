@@ -570,7 +570,13 @@ function App() {
         if (pending > 0) showToast(`${pending} possible Spotify match${pending === 1 ? '' : 'es'} to review`, 'info');
         handleRefresh();
     });
-    return () => { un.then(f => f()); };
+    // One-time startup repair: ratings that earlier Spotify links dropped.
+    const unRepair = listen<{ repaired: number }>('spotify-ratings-repaired', (e) => {
+        const n = e.payload.repaired;
+        showSuccess(`Restored Spotify ratings on ${n} linked track${n === 1 ? '' : 's'}`);
+        handleRefresh();
+    });
+    return () => { un.then(f => f()); unRepair.then(f => f()); };
   }, []);
 
   useEffect(() => {
