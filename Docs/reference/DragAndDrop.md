@@ -86,10 +86,14 @@ scrolling the nearest scrollable ancestor on **both** axes — so dragging a tra
 toward the right edge scrolled the table sideways. dnd-kit has **no per-axis
 auto-scroll toggle** (`threshold.x: 0` doesn't disable the x-axis; it divides by
 zero in `getScrollDirectionAndSpeed` and scrolls right at infinite speed). So the
-App `DndContext` passes `autoScroll={false}` **while a track is being dragged**,
-disabling auto-scroll entirely for track drags. Column-reorder drags keep the
-default (`autoScroll={true}`) so a wide table can still scroll sideways while
-moving a column.
+App `DndContext` passes `autoScroll={{ canScroll: () => activeDragTypeRef.current !== 'Track' }}`,
+disabling auto-scroll entirely **while a track is being dragged**. Column-reorder
+drags still scroll, so a wide table can scroll sideways while moving a column.
+
+`canScroll` reads a ref set synchronously in `onDragStart`, not React state: a
+boolean `autoScroll` prop derived from `activeDragItem` lost the race — dnd-kit's
+scroller settles enablement before the `setActiveDragItem` re-render commits, so
+the first drag could still scroll sideways.
 
 Trade-off: there is no vertical auto-scroll while dragging a track (the list is
 virtualized, so cross-screen reorder is already limited). If that becomes a

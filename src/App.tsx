@@ -72,6 +72,11 @@ function App() {
   // Mirror of armedDroppableId read at drop time, so the add gate never depends
   // on React having re-rendered before the drop fires. State drives the visual.
   const armedRef = useRef<string | null>(null);
+  // Type of the item currently being dragged, set synchronously at drag start.
+  // Auto-scroll gating (canScroll) reads this live per RAF tick — a boolean
+  // autoScroll prop derived from React state loses the race with the scroller,
+  // which settles enablement before setActiveDragItem commits.
+  const activeDragTypeRef = useRef<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [hideMissing, setHideMissing] = useState(() => {
     return localStorage.getItem('app_hide_missing_tracks') === 'true';
@@ -679,16 +684,19 @@ function App() {
   };
 
   const handleDragStart = (event: DragStartEvent) => {
+      activeDragTypeRef.current = (event.active.data.current as any)?.type ?? null;
       setActiveDragItem(event.active.data.current);
       resetDwell();
   };
 
   const handleDragCancel = () => {
+      activeDragTypeRef.current = null;
       setActiveDragItem(null);
       resetDwell();
   };
 
   const handleDragEnd = (event: DragEndEvent) => {
+      activeDragTypeRef.current = null;
       setActiveDragItem(null);
       const armed = armedRef.current;
       resetDwell();
@@ -1187,7 +1195,7 @@ function App() {
           onDragStart={handleDragStart}
           onDragOver={handleDragOver}
           onDragCancel={handleDragCancel}
-          autoScroll={activeDragItem?.type !== 'Track'}
+          autoScroll={{ canScroll: () => activeDragTypeRef.current !== 'Track' }}
           sensors={sensors}
       >
         <DragArmContext.Provider value={armedDroppableId}>
