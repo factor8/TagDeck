@@ -19,7 +19,6 @@ The `Docs/` folder is organized by trust level (`Docs/README.md` is the index �
 - **`Docs/roadmap/`** — maintained plans and unbuilt/backlog features.
 - **`Docs/CHANGELOG.md`** — authoritative, chronological feature history; the source of truth for what shipped. Keep `[Unreleased]` grouped as Added / Changed / Fixed.
 - **`Docs/archive/`** — superseded plans and point-in-time snapshots. Historical only; each opens with an archive banner. Do not update these to match code — archive a doc (add a banner, move it here) when it no longer describes the shipped app.
-- **`Docs/superpowers/`** — spec-driven-development artifacts (design specs + task plans) per feature. Provenance for shipped work.
 
 Keep-docs-current rule: whenever you change behavior a doc describes, update the matching `Docs/reference/` doc **and** `Docs/CHANGELOG.md` in the same change — do not let a reference doc drift from the code. When a feature ships, move its plan out of `roadmap/` (or mark it shipped) and, if it becomes stale rather than current, archive it rather than deleting it. Verify doc claims (commands, shortcuts, fields, file paths) against the actual source before writing them.
 
