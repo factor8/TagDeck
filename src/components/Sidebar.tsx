@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { useArmedDroppableId } from './DragArmContext';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, SearchCheck, X, AudioLines, CloudOff, RefreshCw } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, SearchCheck, X, AudioLines, CloudOff, RefreshCw, Loader2 } from 'lucide-react';
 import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
 import { SpotifyImportModal } from './SpotifyImportModal';
@@ -21,6 +21,8 @@ interface SidebarProps {
   appleMusicAvailable?: boolean;
   /** Promote a playlist to the Build tab as the target being filled. */
   onBuildPlaylist?: (playlistId: number) => void;
+  /** Live file-import counters (done/total) keyed by target playlist id. */
+  importingPlaylists?: Map<number, { done: number; total: number }>;
 }
 
 interface ContextMenuState {
@@ -53,6 +55,7 @@ interface PlaylistRowProps {
     folders: PlaylistNode[];
     /** Omitted for Spotify rows — ghost playlists aren't a local file-drop target. */
     onFileDrop?: (playlistId: number, playlistName: string, paths: string[]) => Promise<void>;
+    importingPlaylists?: Map<number, { done: number; total: number }>;
 }
 
 const PlaylistRow = ({
@@ -73,7 +76,9 @@ const PlaylistRow = ({
     onStartRename,
     onContextMenu,
     onFileDrop,
+    importingPlaylists,
 }: PlaylistRowProps) => {
+    const importProgress = importingPlaylists?.get(node.id);
     const renameInputRef = useRef<HTMLInputElement>(null);
     const fileDragCounter = useRef(0);
     const [isFileDragOver, setIsFileDragOver] = useState(false);
@@ -264,6 +269,16 @@ const PlaylistRow = ({
                       </span>
                   )}
 
+                  {importProgress && !isRenaming && (
+                      <span
+                          title={`Importing ${importProgress.done} of ${importProgress.total}`}
+                          aria-live="polite"
+                          style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, fontSize: 11, fontVariantNumeric: 'tabular-nums', color: isSelected ? '#fff' : 'var(--text-secondary)' }}
+                      >
+                          <Loader2 size={11} className="spin" />
+                          {importProgress.done}/{importProgress.total}
+                      </span>
+                  )}
                   {node.itunes_sync_enabled && !isRenaming && (
                       <span title="Synced with iTunes" style={{ display: 'flex', minWidth: 12, flexShrink: 0 }}>
                           <Music size={12} style={{
@@ -302,6 +317,7 @@ const PlaylistRow = ({
                             onContextMenu={onContextMenu}
                             folders={[]}
                             onFileDrop={onFileDrop}
+                            importingPlaylists={importingPlaylists}
                         />
                       ))}
                   </div>
@@ -310,7 +326,7 @@ const PlaylistRow = ({
     );
 };
 
-export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged, appleMusicAvailable, onBuildPlaylist }: SidebarProps) {
+export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshTrigger, selectedTrack, showArtwork, highlightedPlaylistId, onPlaylistsChanged, appleMusicAvailable, onBuildPlaylist, importingPlaylists }: SidebarProps) {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => {
     try {
@@ -1063,6 +1079,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   onContextMenu={onContextMenu}
                   folders={allFolders}
                   onFileDrop={handleFileDrop}
+                  importingPlaylists={importingPlaylists}
               />
             ))}
           </>
@@ -1127,6 +1144,7 @@ export default function Sidebar({ onSelectPlaylist, selectedPlaylistId, refreshT
                   onContextMenu={onContextMenu}
                   folders={allFolders}
                   onFileDrop={handleFileDrop}
+                  importingPlaylists={importingPlaylists}
               />
             ))}
           </>

@@ -13,7 +13,7 @@ keep it in sync with the code.
 | Drag into empty space below the last row | Reorder to the end |
 | Drag in a non-reorderable view (library, or non-position sort) not over a target | No-op |
 | **⌥ (Option) + drag** a track row | Drag the actual audio file(s) out to Finder / Mail / Rekordbox (see `src/utils/dragOut.ts`) |
-| Drag OS files onto a row or sidebar playlist | Import those files (native HTML5 file-drop, separate path) |
+| Drag OS files onto a row or sidebar playlist | Import those files (native HTML5 file-drop, separate path — see [File import feedback](#file-import-feedback)) |
 
 ### Reordering requires manual order
 
@@ -110,3 +110,34 @@ problem, add a custom vertical-only scroller rather than re-enabling dnd-kit's.
 Independent, out-of-scope drag systems with their own `DndContext`: play-queue
 reorder (`QueuePane.tsx`), tag/group editor (`TagDeck.tsx`), and the Build pane's
 internal reorder.
+
+## File import feedback
+
+Dropping files from the OS calls the `import_files` command, which processes
+files one at a time (hash → DB dedupe → add to Music.app or the standalone
+file pipeline → add to the target playlist). While it runs the backend emits an
+`import-progress` event (`ImportProgress` in `src-tauri/src/commands.rs`, serde
+tag `phase`):
+
+| Phase | Payload | UI effect |
+|---|---|---|
+| `start` | `batch_id`, `playlist_id`, `total`, `items[{index, path, name}]` | Progress card appears; placeholder rows appear in the target playlist (gray, "Waiting…") |
+| `item_start` | `index` | That row shows a spinner + "Importing…"; card shows the file name |
+| `item` | `index`, `status` (`imported` / `skipped` / `failed`), `track_id`, `error` | Row flips to "Added" (or disappears if failed); a debounced refresh loads the real row, which replaces the placeholder |
+| `done` | `imported`, `skipped`, `failed` | Card shows the tally and lingers ~1.5 s, then the usual summary toast |
+
+Frontend pieces: `src/hooks/useImportProgress.ts` (event → batch state,
+debounced refresh, `pendingImportsFor` / `importingByPlaylist` selectors),
+`src/components/ImportProgressCard.tsx` (floating card, top-right),
+`Sidebar.tsx` `PlaylistRow` (spinner + `done/total` beside the playlist name),
+and `TrackList.tsx` `renderPendingRows` (placeholder rows after the real rows;
+a placeholder is kept until its `track_id` is present in the loaded tracks so
+nothing blinks out before its replacement appears). Placeholders are shown in
+the target playlist view and in the Library view; `skipped` files that weren't
+added to a playlist have nothing to wait for and are dropped immediately.
+
+With Two-way sync on, each file is one AppleScript round-trip
+(`add_file_to_music_library_full` in `apple_music.rs`: add + duplicate into the
+synced playlist + read fields back). Duplicate detection is TagDeck's DB
+path/original-path/content-hash check; there is no per-file Music.app library
+scan.

@@ -1170,6 +1170,118 @@ pub fn find_track_in_music_by_path(file_path: &str) -> Result<Option<String>> {
     }
 }
 
+/// Adds a file to the Music.app library and returns the resulting track in ONE
+/// AppleScript round-trip: `add` (Music applies its own copy/organize setting),
+/// optionally `duplicate` into the target playlist, then read every field back
+/// from the returned reference. Replaces the old add → `whose persistent ID`
+/// fetch → playlist-add trio (three osascript spawns + two indexed lookups).
+///
+/// Note: `add` returns the existing track when Music already has that exact
+/// file (copy-to-library off); with copying on, re-adding a source file would
+/// create a duplicate — the caller's DB path/hash dedupe is what prevents that.
+pub fn add_file_to_music_library_full(file_path: &str, playlist_pid: Option<&str>) -> Result<Track> {
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = file_path.replace('\\', "\\\\").replace('"', "\\\"");
+        let playlist_block = match playlist_pid {
+            Some(ppid) if !ppid.is_empty() => format!(
+                r#"try
+                        duplicate t to (first playlist whose persistent ID is "{}")
+                    end try"#,
+                ppid
+            ),
+            _ => String::new(),
+        };
+        let script = format!(
+            r#"
+            use framework "Foundation"
+            use scripting additions
+
+            tell application "Music"
+                set t to add POSIX file "{}"
+                {}
+                set tId to persistent ID of t
+                set tName to name of t
+                set tArtist to artist of t
+                set tAlbum to album of t
+                set tComment to comment of t
+                set tGrouping to grouping of t
+                set tDuration to duration of t
+                set tKind to kind of t
+                set tSize to size of t
+                set tBitRate to bit rate of t
+                set tRating to rating of t
+                set tBpm to bpm of t
+                set tLoc to ""
+                try
+                    set tLoc to POSIX path of (location of t as alias)
+                on error
+                    try
+                        set fileRef to location of t
+                        set fileURL to current application's NSURL's fileURLWithPath:(POSIX path of (fileRef as text))
+                        set tLoc to (fileURL's |path|()) as text
+                    on error
+                        set tLoc to ""
+                    end try
+                end try
+                set entry to {{|id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc}}
+            end tell
+
+            set ca to current application
+            set jsonData to ca's NSJSONSerialization's dataWithJSONObject:entry options:0 |error|:missing value
+            set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+            return jsonString
+            "#,
+            escaped, playlist_block
+        );
+
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()?;
+
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow::anyhow!("AppleScript error (add_file_to_music_library_full): {}", err.trim()));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let jt: JxaTrack = serde_json::from_str(stdout.trim())
+            .map_err(|e| anyhow::anyhow!("Music.app returned unparseable track data for {}: {}", file_path, e))?;
+        if jt.id.is_empty() {
+            return Err(anyhow::anyhow!("Music.app returned empty persistent ID for file: {}", file_path));
+        }
+        Ok(Track {
+            id: 0,
+            itunes_pid: Some(jt.id.clone()),
+            persistent_id: jt.id,
+            file_path: jt.location.unwrap_or_default(),
+            artist: Some(jt.artist),
+            title: Some(jt.name),
+            album: Some(jt.album),
+            comment_raw: Some(jt.comment),
+            grouping_raw: Some(jt.grouping),
+            duration_secs: jt.duration,
+            format: jt.kind,
+            size_bytes: jt.size,
+            bit_rate: jt.bit_rate,
+            modified_date: 0,
+            rating: jt.rating,
+            date_added: 0,
+            bpm: jt.bpm,
+            missing: false,
+            unlinked_at: None,
+            source: "local".to_string(),
+            spotify_id: None,
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (file_path, playlist_pid);
+        Err(anyhow::anyhow!("Apple Music is only available on macOS"))
+    }
+}
+
 /// Returns true if Music.app is installed on this machine.
 pub fn is_apple_music_available() -> bool {
     #[cfg(target_os = "macos")]

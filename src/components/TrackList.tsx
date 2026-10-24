@@ -38,12 +38,13 @@ import {
 } from '@dnd-kit/sortable';
 import type { AnimateLayoutChanges } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles, Plus, Check, FileSearch } from 'lucide-react';
+import { Folder, ArrowUp, ArrowDown, Settings, Volume2, Volume, ListMusic, ChevronRight, Trash2, Activity, AudioLines, Link2, Unlink, FileAudio, X, ExternalLink, ListStart, ListEnd, Sparkles, Plus, Check, FileSearch, Loader2 } from 'lucide-react';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { Track } from '../types';
 import { useDebug } from './DebugContext';
 import { useToast } from './Toast';
 import { startTrackDragOut, isNativeDragOutActive } from '../utils/dragOut';
+import type { ImportItem } from '../hooks/useImportProgress';
 
 interface Props {
     refreshTrigger: number;
@@ -66,6 +67,8 @@ interface Props {
     onScrollToTrackComplete?: () => void;
     /** Called when files from the OS are dropped onto a specific row position. */
     onFileDrop?: (paths: string[], afterTrackId: number | null) => void;
+    /** Files currently being imported into this view — rendered as grayed placeholder rows until they land. */
+    pendingImports?: ImportItem[];
     /** Insert tracks at the front of the manual play queue (plays right after the current song). */
     onPlayNext?: (tracks: Track[]) => void;
     /** Append tracks to the end of the manual play queue. */
@@ -782,7 +785,7 @@ const SortableMenuItem = ({ column, label }: { column: any, label: string }) => 
     );
 };
 
-export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, hideMissing, onMissingCountChange, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder, onRecheckMissing }, ref) => {
+export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, onSelectionChange, onTrackDoubleClick, selectedTrackIds, lastSelectedTrackId, playingTrackId, isPlaying, searchTerm, hideMissing, onMissingCountChange, playlistId, onRefresh, onCopyPlaylistMemberships, onNavigateToPlaylist, scrollToTrackId, onScrollToTrackComplete, onFileDrop, onPlayNext, onPlayLater, builderPlaylistId, builderPlaylistName, builderTrackIdSet, onAddToBuilder, onRemoveFromBuilder, onRecheckMissing, pendingImports }, ref) => {
     const { debugMode } = useDebug();
     const { showSuccess, showError } = useToast();
     const [tracks, setTracks] = useState<Track[]>([]);
@@ -1777,6 +1780,30 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         overscan: 20,
     });
 
+    // Import placeholders: queued/in-flight files, plus landed ones whose real
+    // row hasn't been loaded yet (so a row never disappears before its
+    // replacement appears).
+    const loadedIds = useMemo(() => new Set(tracks.map(t => t.id)), [tracks]);
+    const visiblePending = useMemo(
+        () => (pendingImports ?? []).filter(p => p.trackId == null || !loadedIds.has(p.trackId)),
+        [pendingImports, loadedIds]
+    );
+    const renderPendingRows = () => visiblePending.map(p => (
+        <tr key={`pending-${p.path}`} aria-busy="true" style={{ height: 35, color: 'var(--text-secondary)', opacity: 0.55 }}>
+            <td colSpan={table.getVisibleLeafColumns().length} style={{ padding: '0 12px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+                    {p.status === 'importing'
+                        ? <Loader2 size={13} className="spin" style={{ flexShrink: 0 }} />
+                        : <FileAudio size={13} style={{ flexShrink: 0, opacity: 0.7 }} />}
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+                    <span style={{ fontSize: 11, fontStyle: 'italic', flexShrink: 0 }}>
+                        {p.status === 'importing' ? 'Importing…' : p.status === 'queued' ? 'Waiting…' : 'Added'}
+                    </span>
+                </span>
+            </td>
+        </tr>
+    ));
+
     // Scroll to a specific track after playlist navigation
     useEffect(() => {
         if (scrollToTrackId && rows.length > 0) {
@@ -2083,7 +2110,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                      <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
                                 </tr>
                             )}
-                            {filteredTracks.length === 0 && !loading && (
+                            {renderPendingRows()}
+                            {filteredTracks.length === 0 && !loading && visiblePending.length === 0 && (
                                 <tr>
                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         <div style={{ fontSize: '16px', marginBottom: '8px' }}>
@@ -2150,7 +2178,8 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                                      <td colSpan={table.getVisibleLeafColumns().length} style={{ border: 0, padding: 0 }} />
                                 </tr>
                             )}
-                            {filteredTracks.length === 0 && !loading && (
+                            {renderPendingRows()}
+                            {filteredTracks.length === 0 && !loading && visiblePending.length === 0 && (
                                 <tr>
                                     <td colSpan={table.getVisibleLeafColumns().length} style={{ padding: '60px', textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         <div style={{ fontSize: '16px', marginBottom: '8px' }}>

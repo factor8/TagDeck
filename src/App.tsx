@@ -18,6 +18,8 @@ import { TagDeck } from './components/TagDeck';
 import { BpmCounter } from './components/BpmCounter';
 import { CopyPlaylistsModal } from './components/CopyPlaylistsModal';
 import { ImportDropZone } from './components/ImportDropZone';
+import { ImportProgressCard } from './components/ImportProgressCard';
+import { useImportProgress, importingByPlaylist, pendingImportsFor } from './hooks/useImportProgress';
 import { SyncReviewModal, SyncPreview, RemovedTrack, AppliedSummary } from './components/SyncReviewModal';
 import { Track, Playlist } from './types';
 import { useToast } from './components/Toast';
@@ -978,6 +980,13 @@ function App() {
     setRefreshTrigger(prev => prev + 1);
   };
 
+  // Live file-import feedback: progress card, per-playlist counters in the
+  // sidebar, and grayed placeholder rows in the track list. Each landed file
+  // bumps refreshTrigger (debounced) so rows fill in as the import runs.
+  const importBatches = useImportProgress(handleRefresh);
+  const importingPlaylists = useMemo(() => importingByPlaylist(importBatches), [importBatches]);
+  const pendingImports = useMemo(() => pendingImportsFor(importBatches, selectedPlaylistId), [importBatches, selectedPlaylistId]);
+
   const handlePaletteJump = useCallback((p: Playlist) => {
     if (!p.is_folder) setSelectedPlaylistId(p.id);
     setHighlightedPlaylistId(p.id);
@@ -1455,6 +1464,7 @@ function App() {
             onPlaylistsChanged={() => setRefreshTrigger(p => p + 1)}
             appleMusicAvailable={appleMusicAvailable}
             onBuildPlaylist={handleBuildPlaylist}
+            importingPlaylists={importingPlaylists}
             />
         </Panel>
         
@@ -1505,6 +1515,7 @@ function App() {
               builderTrackIdSet={builderTrackIdSet}
               onAddToBuilder={handleAddToBuilder}
               onRemoveFromBuilder={handleRemoveFromBuilder}
+              pendingImports={pendingImports}
             />
             </div>
         </Panel>
@@ -1723,6 +1734,8 @@ function App() {
           onApplied={handleSyncReviewApplied}
         />
       )}
+
+      <ImportProgressCard batches={importBatches} playlistNames={playlistNames} />
 
       {/* File import handler — no blocking overlay, per-component drop zones handle targeting */}
       <ImportDropZone
