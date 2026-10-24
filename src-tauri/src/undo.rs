@@ -202,6 +202,7 @@ impl UndoStack {
                                 "#,
                                 playlist_persistent_id, track.persistent_id
                              );
+                             crate::apple_music::note_music_write();
                              let _ = Command::new("osascript").arg("-e").arg(&script).output();
                          }
                      }

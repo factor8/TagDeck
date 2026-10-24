@@ -7,9 +7,10 @@ use crate::file_manager::{
     import_file, is_supported_audio_file, collect_audio_files,
 };
 use crate::apple_music::{
-    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields, get_playlist_snapshot,
+    update_track_comment, batch_update_track_comments, update_track_rating, touch_file, add_track_to_playlist, get_changes_since, get_snapshot_fields,
     remove_track_from_playlist as apple_remove_from_playlist, get_play_count, set_play_count, update_track_info as apple_update_track_info,
-    get_all_music_app_pids, get_tracks_by_persistent_ids
+    get_all_music_app_pids, get_tracks_by_persistent_ids,
+    get_playlist_headers, get_playlist_members, PlaylistHeader, PlaylistSnapshotEntry
 };
 use crate::models::{Track, Playlist};
 use crate::undo::{UndoStack, Action, TrackState, TrackRef, RemovedTrackRef};
@@ -22,6 +23,14 @@ pub struct AppState {
     pub db: Mutex<Database>,
     pub undo_stack: Mutex<UndoStack>,
     pub is_syncing: AtomicBool,
+    /// A Music.app change burst arrived while a sync was running; rerun once
+    /// the current sync finishes instead of dropping it.
+    pub sync_rerun_requested: AtomicBool,
+    /// Phase 3 cache: playlist persistent id → `PlaylistHeader::fingerprint()`
+    /// at the last successful reconcile. Membership is only re-fetched for
+    /// playlists whose fingerprint changed. Persisted in library_config under
+    /// `PLAYLIST_FINGERPRINTS_KEY` so a relaunch doesn't pay the cold cost.
+    pub playlist_fingerprints: Mutex<std::collections::HashMap<String, u64>>,
     pub rekordbox_dirty: crate::rekordbox_sync::RekordboxDirtySignal,
     pub rekordbox_status: Mutex<crate::rekordbox_sync::RekordboxSyncStatus>,
 }
@@ -820,7 +829,14 @@ pub struct SyncResult {
     /// Incoming iTunes changes NOT applied because the track was edited in
     /// TagDeck while pushes were off (conflict — resolve in Sync Review).
     pub conflicts_skipped: usize,
+    /// True when no sync ran because one was already in progress (a rerun has
+    /// been queued). The frontend must not report "no changes" or advance its
+    /// last-sync time for a skipped run.
+    #[serde(default)]
+    pub skipped: bool,
 }
+
+const PLAYLIST_FINGERPRINTS_KEY: &str = "playlist_fingerprints_v1";
 
 /// Never trip the proportional guard on batches this small — normal small
 /// deletions in any library size should auto-reconcile.
@@ -854,8 +870,11 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     
     // Check if full sync is running, but don't error out hard—just skip
     if state.is_syncing.load(Ordering::SeqCst) {
-        println!("Sync skipped: Full sync in progress");
-        return Ok(SyncResult::default());
+        state.sync_rerun_requested.store(true, Ordering::SeqCst);
+        let msg = "Sync already running — change burst queued; will rerun when it finishes";
+        println!("{}", msg);
+        app.state::<crate::logging::LogState>().add_log("INFO", msg, &app);
+        return Ok(SyncResult { skipped: true, ..SyncResult::default() });
     }
 
     // Sync mode may disallow pulling from Music.app entirely (Off). Check before
@@ -876,8 +895,9 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     // It's safer if they are mutually exclusive.
     
     if state.is_syncing.swap(true, Ordering::SeqCst) {
-        // Race condition caught
-        return Ok(SyncResult::default());
+        // Race condition caught — same treatment as above.
+        state.sync_rerun_requested.store(true, Ordering::SeqCst);
+        return Ok(SyncResult { skipped: true, ..SyncResult::default() });
     }
 
     struct SyncGuard<'a>(&'a AtomicBool);
@@ -1213,18 +1233,39 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
     println!("{}", playlist_msg);
     app.state::<crate::logging::LogState>().add_log("INFO", playlist_msg, &app);
 
-    match get_playlist_snapshot() {
-        Ok(music_playlists) => {
-            let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
-            let db_snapshot = db.get_playlist_snapshot().map_err(|e| e.to_string())?;
-            
-            // Fetch all known track PIDs to filter the music_playlist tracks
-            // This prevents false positive diffs when a playlist contains tracks not in TagDeck's DB.
-            let all_track_pids = db.get_all_itunes_pids().map_err(|e| e.to_string())?;
+    match get_playlist_headers() {
+        Ok(all_headers) => {
+            // Mirrored playlists only (user + smart + folders; no "Music"/Genius/… system lists).
+            let headers: Vec<PlaylistHeader> = all_headers.into_iter().filter(|h| h.is_mirrored()).collect();
+            let (db_snapshot, all_track_pids, persisted_cache) = {
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                let snap = db.get_playlist_snapshot().map_err(|e| e.to_string())?;
+                // Fetch all known track PIDs to filter the music_playlist tracks
+                // This prevents false positive diffs when a playlist contains tracks not in TagDeck's DB.
+                let pids = db.get_all_itunes_pids().map_err(|e| e.to_string())?;
+                let cache: Option<std::collections::HashMap<String, u64>> = db
+                    .get_config(PLAYLIST_FINGERPRINTS_KEY)
+                    .ok()
+                    .flatten()
+                    .and_then(|json| serde_json::from_str(&json).ok());
+                (snap, pids, cache)
+            };
+            // Warm the in-memory cache from the persisted copy on first use.
+            {
+                let mut cache = state.playlist_fingerprints.lock().map_err(|_| "Failed to lock fingerprint cache".to_string())?;
+                if cache.is_empty() {
+                    if let Some(p) = persisted_cache { *cache = p; }
+                }
+            }
+            let cached: std::collections::HashMap<String, u64> = state
+                .playlist_fingerprints
+                .lock()
+                .map(|c| c.clone())
+                .unwrap_or_default();
 
             // Build a set of persistent IDs from Music.app for deletion detection
-            let music_pids: std::collections::HashSet<String> = music_playlists.iter()
-                .map(|p| p.persistent_id.clone())
+            let music_pids: std::collections::HashSet<String> = headers.iter()
+                .map(|h| h.persistent_id.clone())
                 .collect();
 
             // Detect deleted playlists (in DB but not in Music.app)
@@ -1235,7 +1276,6 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 })
                 .map(|(pid, _)| pid.clone())
                 .collect();
-
             // Same empty/partial-snapshot vector as Phase 0: an empty Music.app
             // playlist snapshot would otherwise remove every synced playlist from
             // the DB. Guard it. Playlists don't flow through Sync Review, so here
@@ -1246,9 +1286,9 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 .filter(|(_name, _is_folder, _parent, _tracks, sync_enabled)| *sync_enabled)
                 .count();
             if !deleted_pids.is_empty()
-                && removal_is_suspicious(deleted_pids.len(), music_playlists.len(), synced_playlist_count)
+                && removal_is_suspicious(deleted_pids.len(), headers.len(), synced_playlist_count)
             {
-                let reason = if music_playlists.is_empty() {
+                let reason = if headers.is_empty() {
                     "Music.app reported 0 playlists (library empty or still loading)".to_string()
                 } else {
                     format!(
@@ -1265,6 +1305,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 println!("{}", warn);
                 app.state::<crate::logging::LogState>().add_log("WARN", &warn, &app);
             } else if !deleted_pids.is_empty() {
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
                 match db.remove_playlists_by_persistent_ids(&deleted_pids) {
                     Ok(names) => {
                         let count = names.len();
@@ -1284,30 +1325,65 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                 }
             }
 
-            // Detect added or changed playlists
-            for mp in &music_playlists {
-                // Filter the track IDs from Music.app to only represent tracks we know about locally.
-                // Otherwise, a single missing track causes infinite sync loops.
-                // Also deduplicate: Music.app can have the same track multiple times in a playlist,
-                // but our DB schema uses PRIMARY KEY (playlist_id, track_id) which prevents duplicates.
-                // Without dedup, the diff sees more tracks from Music.app than the DB can store,
-                // causing infinite phantom syncs.
-                let mut seen = std::collections::HashSet::new();
-                let filtered_track_ids: Vec<String> = mp.track_ids.iter()
-                    .filter(|tid| all_track_pids.contains(*tid))
-                    .filter(|tid| seen.insert((*tid).clone()))
-                    .cloned()
-                    .collect();
-
-                let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
-                    None => true, // New playlist from Music.app
-                    Some((_db_name, _db_is_folder, _db_parent_pid, _db_track_ids, sync_enabled)) => {
-                        // Skip playlists whose per-playlist sync is off
-                        if !sync_enabled {
-                            false
-                        } else {
-                            let (db_name, db_is_folder, db_parent_pid, db_track_ids, _) =
-                                db_snapshot.get(&mp.persistent_id).unwrap();
+            // Which playlists need their membership fetched: new to the DB, or
+            // header fingerprint changed since the last reconcile. Everything
+            // else is known-unchanged and costs nothing.
+            let to_fetch: Vec<&PlaylistHeader> = headers.iter()
+                .filter(|h| match db_snapshot.get(&h.persistent_id) {
+                    None => true,
+                    Some((_, _, _, _, sync_enabled)) => {
+                        *sync_enabled && cached.get(&h.persistent_id) != Some(&h.fingerprint())
+                    }
+                })
+                .collect();
+            let fetch_pids: Vec<String> = to_fetch.iter()
+                .filter(|h| !h.is_folder)
+                .map(|h| h.persistent_id.clone())
+                .collect();
+            let members = match get_playlist_members(&fetch_pids) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    let msg = format!("Playlist membership fetch failed (non-fatal): {}", e);
+                    eprintln!("{}", msg);
+                    app.state::<crate::logging::LogState>().add_log("WARN", &msg, &app);
+                    None
+                }
+            };
+            let mut reconciled: Vec<(String, u64)> = Vec::new();
+            if let Some(members) = members {
+                let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+                for h in &to_fetch {
+                    // A playlist Music.app silently failed to answer for stays
+                    // un-reconciled (never treat "no answer" as "empty").
+                    let track_ids = if h.is_folder {
+                        Vec::new()
+                    } else {
+                        match members.get(&h.persistent_id) {
+                            Some(t) => t.clone(),
+                            None => continue,
+                        }
+                    };
+                    let mp = PlaylistSnapshotEntry {
+                        persistent_id: h.persistent_id.clone(),
+                        parent_persistent_id: h.parent_persistent_id.clone(),
+                        name: h.name.clone(),
+                        is_folder: h.is_folder,
+                        is_smart: h.is_smart,
+                        track_ids,
+                    };
+                    // Filter the track IDs from Music.app to only represent tracks we know about locally.
+                    // Otherwise, a single missing track causes infinite sync loops.
+                    // Also deduplicate: Music.app can have the same track multiple times in a playlist,
+                    // but our DB schema uses PRIMARY KEY (playlist_id, track_id) which prevents duplicates.
+                    let mut seen = std::collections::HashSet::new();
+                    let filtered_track_ids: Vec<String> = mp.track_ids.iter()
+                        .filter(|tid| all_track_pids.contains(*tid))
+                        .filter(|tid| seen.insert((*tid).clone()))
+                        .cloned()
+                        .collect();
+                    let needs_upsert = match db_snapshot.get(&mp.persistent_id) {
+                        None => true, // New playlist from Music.app
+                        Some((db_name, db_is_folder, db_parent_pid, db_track_ids, _)) => {
                             // Compare track membership using sorted lists to avoid false
                             // positives caused by Music.app returning tracks in a
                             // non-deterministic order (current UI sort, etc.).
@@ -1315,41 +1391,36 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                             sorted_filtered.sort();
                             let mut sorted_db = db_track_ids.clone();
                             sorted_db.sort();
-
-                            // Check if any field changed
                             db_name != &mp.name
                                 || db_is_folder != &mp.is_folder
                                 || db_parent_pid != &mp.parent_persistent_id
                                 || sorted_db != sorted_filtered
                         }
-                    }
-                };
-                
-                if needs_upsert {
-                    // Use the filtered track IDs for the DB update too, 
-                    // although DB insert logic does this via JOIN anyway.
-                    // Doing it here ensures the diff logic matches the insert output.
-                    let playlist = Playlist {
-                        id: 0,
-                        persistent_id: mp.persistent_id.clone(),
-                        parent_persistent_id: mp.parent_persistent_id.clone(),
-                        name: mp.name.clone(),
-                        is_folder: mp.is_folder,
-                        track_ids: Some(filtered_track_ids),
-                        origin: "itunes".to_string(),
-                        itunes_sync_enabled: false,
-                        description: None,
-                        color: None,
-                        sort_position: 0,
-                        created_at: 0,
-                        updated_at: 0,
-                        spotify_playlist_id: None,
-                        spotify_snapshot_id: None,
                     };
-                    if let Err(e) = db.insert_playlist(&playlist) {
-                        let msg = format!("DB Error upserting playlist {}: {}", mp.name, e);
-                        app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
-                    } else {
+                    if needs_upsert {
+                        let playlist = Playlist {
+                            id: 0,
+                            persistent_id: mp.persistent_id.clone(),
+                            parent_persistent_id: mp.parent_persistent_id.clone(),
+                            name: mp.name.clone(),
+                            is_folder: mp.is_folder,
+                            track_ids: Some(filtered_track_ids),
+                            origin: "itunes".to_string(),
+                            itunes_sync_enabled: false,
+                            description: None,
+                            color: None,
+                            sort_position: 0,
+                            created_at: 0,
+                            updated_at: 0,
+                            spotify_playlist_id: None,
+                            spotify_snapshot_id: None,
+                            is_smart: mp.is_smart,
+                        };
+                        if let Err(e) = db.insert_playlist(&playlist) {
+                            let msg = format!("DB Error upserting playlist {}: {}", mp.name, e);
+                            app.state::<crate::logging::LogState>().add_log("ERROR", &msg, &app);
+                            continue; // leave it un-cached so the next pass retries
+                        }
                         playlist_changes += 1;
                         if playlist_changes <= 10 {
                             let detail = format!("Playlist synced: \"{}\"", mp.name);
@@ -1357,10 +1428,23 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
                             app.state::<crate::logging::LogState>().add_log("INFO", &detail, &app);
                         }
                     }
+                    reconciled.push((h.persistent_id.clone(), h.fingerprint()));
+                }
+                // Remember fingerprints for everything now known to match.
+                if !reconciled.is_empty() || cached.len() != music_pids.len() {
+                    if let Ok(mut cache) = state.playlist_fingerprints.lock() {
+                        cache.retain(|pid, _| music_pids.contains(pid));
+                        for (pid, fp) in &reconciled { cache.insert(pid.clone(), *fp); }
+                        if let Ok(json) = serde_json::to_string(&*cache) {
+                            let _ = db.set_config(PLAYLIST_FINGERPRINTS_KEY, &json);
+                        }
+                    }
                 }
             }
-
-            let pl_msg = format!("Playlist diff found {} changes", playlist_changes);
+            let pl_msg = format!(
+                "Playlist diff found {} changes ({} of {} playlists re-read)",
+                playlist_changes, to_fetch.len(), headers.len()
+            );
             println!("{}", pl_msg);
             app.state::<crate::logging::LogState>().add_log("INFO", &pl_msg, &app);
         }
@@ -1389,9 +1473,18 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         }
     }
 
-    // Sum all changes so frontend triggers refresh if ANY change occurred (metadata, rating, or playlist)
-    state.rekordbox_dirty.mark();
-    Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_unlinked, playlists_updated: playlist_changes, pending_removals, conflicts_skipped })
+    // Only wake Rekordbox Live Sync when this pass actually changed something.
+    if total_updated > 0 || playlist_changes > 0 {
+        state.rekordbox_dirty.mark();
+    }
+    // Release the lock, then honour any burst that arrived mid-sync by asking
+    // the frontend to run us again (it owns the since-timestamp).
+    drop(_guard);
+    if state.sync_rerun_requested.swap(false, Ordering::SeqCst) {
+        app.state::<crate::logging::LogState>().add_log("INFO", "Rerunning sync for changes that arrived during the last pass", &app);
+        let _ = app.emit("music-library-changed", ());
+    }
+    Ok(SyncResult { tracks_updated: total_updated, tracks_added, tracks_unlinked, playlists_updated: playlist_changes, pending_removals, conflicts_skipped, skipped: false })
 }
 
 #[tauri::command]
@@ -1866,6 +1959,11 @@ pub async fn add_to_playlist(
         if origin == "spotify" {
             return Err("Spotify playlists are managed by sync — tracks can't be added manually".to_string());
         }
+        // Smart playlists: Music.app computes membership; a manual add would be
+        // reverted by the next sync (and `duplicate` into one fails in Music).
+        if db.get_playlist_is_smart(playlist_id).unwrap_or(false) {
+            return Err("This is an iTunes smart playlist — Music.app decides its contents, so tracks can't be added here".to_string());
+        }
 
         let sync_enabled = db.get_playlist_sync_enabled(playlist_id).unwrap_or(false);
 
@@ -1883,6 +1981,12 @@ pub async fn add_to_playlist(
             }
         }
         let mode = LibraryConfig::sync_mode(&db);
+        // A synced playlist mirrors Music.app's membership for linked tracks.
+        // Without push (Import-only) the add can't reach Music.app and the next
+        // sync would silently undo it — refuse up front instead.
+        if sync_enabled && !mode.push_enabled() && data.iter().any(|(_, ipid)| ipid.is_some()) {
+            return Err("This playlist mirrors iTunes and sync is Import-only — switch to Two-way sync, or right-click it and choose “Stop Syncing with iTunes” to edit it in TagDeck".to_string());
+        }
         (pid, data, sync_enabled, mode)
     };
 
@@ -1956,6 +2060,12 @@ pub async fn remove_from_playlist(
             }
         }
         let mode = LibraryConfig::sync_mode(&db);
+        // A synced playlist mirrors Music.app's membership for linked tracks.
+        // Without push (Import-only) the removal can't reach Music.app and the
+        // next sync would silently undo it — refuse up front instead.
+        if sync_enabled && !mode.push_enabled() && data.iter().any(|(_, ipid, _)| ipid.is_some()) {
+            return Err("This playlist mirrors iTunes and sync is Import-only — switch to Two-way sync, or right-click it and choose “Stop Syncing with iTunes” to edit it in TagDeck".to_string());
+        }
         (pid, data, sync_enabled, mode)
     };
 
@@ -2660,6 +2770,9 @@ pub async fn import_files(
     // Resolve target playlist info once (sync flag + persistent ID) so we can sync to Apple Music after each import
     let target_playlist_info: Option<(bool, String)> = if let Some(pid) = target_playlist_id {
         let db = state.db.lock().map_err(|_| "Failed to lock DB".to_string())?;
+        if db.get_playlist_is_smart(pid).unwrap_or(false) {
+            return Err("This is an iTunes smart playlist — Music.app decides its contents. Drop the files on the Library or another playlist instead".to_string());
+        }
         let sync_enabled = db.get_playlist_sync_enabled(pid).unwrap_or(false);
         let ppid = db.get_playlist_persistent_id(pid).unwrap_or_default();
         Some((sync_enabled, ppid))

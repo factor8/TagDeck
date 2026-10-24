@@ -5,6 +5,23 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
+/// A Music.app database burst that starts within this many seconds of a
+/// TagDeck write to Music.app is treated as Music saving *our* change, not a
+/// user edit, and does not trigger a sync. Observed save lag after a push is
+/// 2–20 s. Trade-off: a genuine Music.app edit inside this window waits for
+/// Music's next save (the snapshot phases catch it up then).
+pub const SELF_ECHO_WINDOW_SECS: u64 = 45;
+
+/// Pure decision helper (unit-tested): should a Music burst that began
+/// `burst_age_secs` ago be ignored given the last TagDeck→Music write?
+pub fn is_self_echo(secs_since_write: Option<u64>, burst_age_secs: u64) -> bool {
+    match secs_since_write {
+        // The write happened before the burst started, and recently enough.
+        Some(since) => since >= burst_age_secs && since - burst_age_secs <= SELF_ECHO_WINDOW_SECS,
+        None => false,
+    }
+}
+
 pub fn start_library_watcher(app: AppHandle) {
     let app_handle = app.clone();
     
@@ -106,6 +123,7 @@ pub fn start_library_watcher(app: AppHandle) {
         // We wait for an event. Once received, we wait for silence for 'debounce_duration'.
         let debounce_duration = Duration::from_secs(2);
         let mut last_activity: Option<Instant> = None;
+        let mut burst_start: Option<Instant> = None;
         let mut coalesced_count: u32 = 0;
         // Which watched source(s) produced events in the current burst
         let mut burst_music = false;
@@ -135,6 +153,7 @@ pub fn start_library_watcher(app: AppHandle) {
                                 if last_activity.is_none() {
                                     // First event in a burst — log it
                                     println!("[WATCHER] Change detected: {:?}. Waiting for activity to settle...", event.kind);
+                                    burst_start = Some(Instant::now());
                                 }
                                 last_activity = Some(Instant::now());
                                 coalesced_count += 1;
@@ -158,9 +177,18 @@ pub fn start_library_watcher(app: AppHandle) {
                     if let Some(_) = last_activity {
                         println!("[WATCHER] Settled after {} events. Emitting sync.", coalesced_count);
                         if burst_music {
-                            let _ = app_handle.emit("music-library-changed", ());
-                            let msg = format!("Library changes stabilized ({} events coalesced). Triggering sync.", coalesced_count);
-                            app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
+                            let burst_age = burst_start.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                            if is_self_echo(crate::apple_music::secs_since_last_music_write(), burst_age) {
+                                let msg = format!(
+                                    "Library changes stabilized ({} events coalesced) within {}s of a TagDeck write to Music.app — treated as our own echo, no sync.",
+                                    coalesced_count, SELF_ECHO_WINDOW_SECS
+                                );
+                                app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
+                            } else {
+                                let _ = app_handle.emit("music-library-changed", ());
+                                let msg = format!("Library changes stabilized ({} events coalesced). Triggering sync.", coalesced_count);
+                                app_handle.state::<crate::logging::LogState>().add_log("INFO", &msg, &app_handle);
+                            }
                         }
                         if burst_root {
                             let _ = app_handle.emit("tagdeck-library-changed", ());
@@ -170,6 +198,7 @@ pub fn start_library_watcher(app: AppHandle) {
 
                         // Reset
                         last_activity = None;
+                        burst_start = None;
                         coalesced_count = 0;
                         burst_music = false;
                         burst_root = false;
@@ -182,4 +211,20 @@ pub fn start_library_watcher(app: AppHandle) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn echo_requires_a_recent_write_before_the_burst() {
+        assert!(!is_self_echo(None, 3));
+        // write 10s ago, burst began 3s ago → Music saving our change
+        assert!(is_self_echo(Some(10), 3));
+        // write long before the window
+        assert!(!is_self_echo(Some(SELF_ECHO_WINDOW_SECS + 10), 3));
+        // burst began BEFORE our write → a user change, not an echo
+        assert!(!is_self_echo(Some(2), 5));
+    }
 }

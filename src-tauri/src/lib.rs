@@ -128,6 +128,8 @@ pub fn run() {
                 db: Mutex::new(db),
                 undo_stack: Mutex::new(UndoStack::new()),
                 is_syncing: AtomicBool::new(false),
+                sync_rerun_requested: AtomicBool::new(false),
+                playlist_fingerprints: Mutex::new(std::collections::HashMap::new()),
                 rekordbox_dirty,
                 rekordbox_status: Mutex::new(rekordbox_sync::RekordboxSyncStatus::default()),
             });

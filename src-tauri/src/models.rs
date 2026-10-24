@@ -90,6 +90,10 @@ pub struct Playlist {
     pub spotify_playlist_id: Option<String>,
     #[serde(default)]
     pub spotify_snapshot_id: Option<String>,
+    /// iTunes smart playlist — Music.app computes membership; TagDeck mirrors it
+    /// read-only and refuses manual adds.
+    #[serde(default)]
+    pub is_smart: bool,
 }
 
 fn default_origin() -> String {

@@ -3,7 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useDroppable } from '@dnd-kit/core';
 import { useArmedDroppableId } from './DragArmContext';
 import { Playlist, Track } from '../types';
-import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, SearchCheck, X, AudioLines, CloudOff, RefreshCw, Loader2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, ListMusic, Plus, Music, Copy, Trash2, Pencil, FolderPlus, ListPlus, ArrowRight, Unlink, FileDown, Search, SearchCheck, X, AudioLines, CloudOff, RefreshCw, Loader2, Wand2 } from 'lucide-react';
 import { useToast } from './Toast';
 import { isNativeDragOutActive } from '../utils/dragOut';
 import { SpotifyImportModal } from './SpotifyImportModal';
@@ -88,7 +88,8 @@ const PlaylistRow = ({
             type: 'Playlist',
             playlist: node
         },
-        disabled: node.is_folder
+        // Smart playlists mirror Music.app — not a drop target for track adds.
+        disabled: node.is_folder || Boolean(node.is_smart)
     });
     const isArmed = useArmedDroppableId() === `playlist-${node.id}`;
     // "ready to add" (held past the dwell, or a native file drag) vs. the fainter
@@ -132,14 +133,14 @@ const PlaylistRow = ({
                   onContextMenu={(e) => onContextMenu(e, node)}
                   className={isHighlighted ? 'flash-highlight' : ''}
                   onDragEnter={(e) => {
-                      if (node.is_folder || !onFileDrop || !e.dataTransfer.types.includes('Files')) return;
+                      if (node.is_folder || node.is_smart || !onFileDrop || !e.dataTransfer.types.includes('Files')) return;
                       e.preventDefault();
                       e.stopPropagation();
                       fileDragCounter.current += 1;
                       if (fileDragCounter.current === 1) setIsFileDragOver(true);
                   }}
                   onDragOver={(e) => {
-                      if (node.is_folder || !onFileDrop || !e.dataTransfer.types.includes('Files')) return;
+                      if (node.is_folder || node.is_smart || !onFileDrop || !e.dataTransfer.types.includes('Files')) return;
                       e.preventDefault();
                       e.stopPropagation();
                       e.dataTransfer.dropEffect = 'copy';
@@ -155,7 +156,7 @@ const PlaylistRow = ({
                       }
                   }}
                   onDrop={(e) => {
-                      if (node.is_folder || !onFileDrop || isNativeDragOutActive()) return;
+                      if (node.is_folder || node.is_smart || !onFileDrop || isNativeDragOutActive()) return;
                       e.preventDefault();
                       e.stopPropagation();
                       // Stop the document-level drop listener in ImportDropZone from
@@ -277,6 +278,11 @@ const PlaylistRow = ({
                       >
                           <Loader2 size={11} className="spin" />
                           {importProgress.done}/{importProgress.total}
+                      </span>
+                  )}
+                  {node.is_smart && !isRenaming && (
+                      <span title="iTunes smart playlist — Music.app decides its contents (read-only here)" style={{ display: 'flex', minWidth: 12, flexShrink: 0 }}>
+                          <Wand2 size={12} style={{ opacity: 0.5, color: isSelected ? '#fff' : 'var(--text-secondary)' }} />
                       </span>
                   )}
                   {node.itunes_sync_enabled && !isRenaming && (

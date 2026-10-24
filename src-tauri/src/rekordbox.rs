@@ -261,6 +261,7 @@ mod tests {
             updated_at: 0,
             spotify_playlist_id: None,
             spotify_snapshot_id: None,
+            is_smart: false,
         }
     }
 

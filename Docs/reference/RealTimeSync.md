@@ -74,6 +74,15 @@ Music.app often writes to the database multiple times for a single user action. 
 *   **Why**: This ensures we don't trigger a sync in the middle of a large write operation (e.g., editing multiple tags).
 *   On settle, the coalesced burst emits `music-library-changed` and/or `tagdeck-library-changed` depending on which source(s) produced events.
 
+**Self-echo suppression.** Every TagDeck write to Music.app (`apple_music.rs` mutating
+helpers and the direct osascript in `undo.rs` call `note_music_write()`) stamps a
+process-wide "last write" time. When a Music.app burst settles, the watcher asks
+`is_self_echo(secs_since_last_music_write, burst_age)`: if the burst *began* within
+`SELF_ECHO_WINDOW_SECS` (45 s) after our own write, it is Music.app saving our change and
+is logged but **not** synced. Observed save lag after a push is 2–20 s. Trade-off: a
+genuine Music.app edit made inside that window waits for Music's next save; the snapshot
+phases pick it up then.
+
 ### 3. Four-Phase Delta Sync
 
 > **Key Discovery**: Apple Music's `modification date` property is only updated for metadata
@@ -110,20 +119,42 @@ batch property access (parallel list fetching). Takes ~2 seconds for 20k tracks.
 Compares against our DB and upserts only the differences.
 Good for: rating, BPM — any field that `modification date` ignores.
 
-**Phase 3 — Playlist Snapshot Diff**
-Fetches all playlists from Music.app with their names, folder status, parent relationships,
-and track membership lists. Compares against our DB snapshot to detect:
-- **Added playlists** (in Music.app but not in DB)
-- **Removed playlists** (in DB but not in Music.app — cascade-deletes playlist_tracks).
-  Guarded by the same empty/threshold check as Phase 0 (against synced-playlist count): a
-  suspicious batch is **skipped with a `WARN`** (playlists don't flow through Sync Review, so
-  they simply remain until a healthy sync confirms the removal).
-- **Renamed playlists** (name changed)
-- **Reordered/changed membership** (track list differs)
-- **Folder hierarchy changes** (parent_persistent_id changed)
+**Phase 3 — Playlist Diff (header fingerprints, membership on demand)**
 
-Uses AppleScript to iterate all non-library playlists. Folder playlists are detected via
-`class of p is folder playlist`. Track membership is fetched via `persistent ID of every track of p`.
+Reading `persistent ID of every track of p` for every playlist took 1–39 minutes on a
+~650-playlist / 20k-track library (it included the "Music" system list = the whole
+library). Phase 3 now runs in two steps:
+
+1. **Headers** (`get_playlist_headers`, ~1 s + ~15 ms per playlist for the parent lookup):
+   one batch Apple event per property over `every user playlist` plus `every folder
+   playlist` — persistent ID, name, parent, class, `smart`, `special kind`, total
+   `duration`, total `size`. Only *mirrored* playlists are kept
+   (`PlaylistHeader::is_mirrored`: ordinary and smart user playlists and folders);
+   system lists ("Music", Genius, Movies, …) are excluded, so the "Music" row that used
+   to hold 20k `playlist_tracks` is removed on the first sync after upgrade.
+2. **Members** (`get_playlist_members`) only for playlists that are **new to the DB** or
+   whose `PlaylistHeader::fingerprint()` (name, parent, folder, smart, duration, size)
+   differs from the one cached at the last successful reconcile. The cache lives in
+   `AppState.playlist_fingerprints` and is persisted in `library_config` under
+   `playlist_fingerprints_v1`, so a relaunch doesn't pay the cold cost. A playlist that
+   Music.app fails to answer for is left un-reconciled (never treated as empty).
+
+The diff itself is unchanged — added / removed / renamed / re-parented / membership
+(sorted compare of linked track ids) — and the removal path keeps the mass-removal guard.
+The log line reports `N of M playlists re-read`.
+
+**Convergence rule (`db.insert_playlist`).** For a synced playlist, Music.app's
+membership is authoritative for *linked* tracks: members Music.app no longer lists are
+dropped. Only TagDeck-only members (no `itunes_pid` — native or unlinked) are preserved
+and re-appended. The old behavior preserved every DB member, so a smart playlist that aged
+tracks out (or any playlist a track was removed from in iTunes) differed from the DB on
+every run and was "synced" forever — 474 of the 932 syncs in one log were exactly that.
+
+**Smart playlists** are mirrored read-only: `is_smart` is stored on `playlists`, shown as
+a wand badge in the sidebar, and `add_to_playlist` / `import_files` refuse them. In
+Import-only mode, adds/removals of linked tracks on any synced playlist are refused too
+(they could not reach Music.app and the next sync would undo them); the message points
+to Two-way sync or "Stop Syncing with iTunes".
 
 ### Conflict Handling (Dirty Tracks → Sync Review)
 
@@ -145,7 +176,13 @@ with `Ask`-mode removals, are surfaced in **Sync Review** (`sync_review.rs` — 
 6.  Backend runs **Phase 1**: AppleScript date-based query → upserts changed tracks (skipping dirty conflicts).
 7.  Backend runs **Phase 2**: Batch-fetches all `(id, rating, bpm)` → diffs against DB → upserts changes (skipping dirty conflicts).
 8.  Backend runs **Phase 3**: Fetches all playlists → diffs against DB → upserts/deletes playlists.
-9.  Frontend receives the counts (updated / added / unlinked / playlists / pending removals / conflicts skipped) and refreshes.
+9.  Frontend receives the counts (updated / added / unlinked / playlists / pending removals / conflicts skipped) and refreshes — only when something changed.
+
+**Bursts during a sync are queued, not dropped.** `sync_recent_changes` holds the
+`is_syncing` lock. A call that finds it taken sets `AppState.sync_rerun_requested`, logs,
+and returns `SyncResult { skipped: true }`; the frontend ignores a skipped result (no
+toast, no `last_sync_time` update). When the running sync finishes it clears the flag and
+re-emits `music-library-changed`, so the queued changes are picked up once.
 
 ### Why AppleScript?
 Initial attempts used JXA (JavaScript for Automation). However, JXA has a known bug/limitation where comparing `modificationDate` objects with external dates is flaky and often returns 0 results. Pure AppleScript handles the date coercion correctly `(date "...")`.
@@ -159,8 +196,7 @@ Fetching 3 fields × 20k tracks takes ~2 seconds. JSON serialization of parallel
 ## Frontend Interaction
 *   **Settings Panel Toggle**: A switch is available in Settings to Enable/Disable Real-Time Sync entirely. This is separate from the sync **mode** — even when the toggle is on, an `Off` mode short-circuits the backend.
 *   The `App.tsx` component sets up the listeners on mount (if enabled) for both `music-library-changed` and `tagdeck-library-changed`.
-*   Shows a "Syncing..." success toast when a change is detected.
-*   Shows a "Synced X altered tracks" toast upon completion.
+*   Quiet by default: no toast when a change is detected, and none when a sync finds nothing (logged only). A "Synced: …" toast and a list refresh happen only when something changed; conflicts still surface as an info toast.
 *   Updates `last_sync_time` in local storage only on success.
 
 ## See Also

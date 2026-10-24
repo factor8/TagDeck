@@ -1,4 +1,5 @@
 use std::process::Command;
+use std::sync::atomic::{AtomicI64, Ordering};
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
 use serde_json;
@@ -20,6 +21,32 @@ struct JxaTrack {
     rating: i64,
     bpm: i64,
     location: Option<String>,
+}
+
+/// Epoch seconds of the last time TagDeck wrote to Music.app via AppleScript.
+/// The library watcher uses this to recognise Music.app's follow-up database
+/// save as an echo of our own change rather than a user edit (see
+/// `secs_since_last_music_write`).
+static LAST_MUSIC_WRITE: AtomicI64 = AtomicI64::new(0);
+
+fn now_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Record that TagDeck just mutated Music.app. Every mutating helper in this
+/// module calls it; callers that script Music.app directly must too.
+pub fn note_music_write() {
+    LAST_MUSIC_WRITE.store(now_epoch_secs(), Ordering::Relaxed);
+}
+
+/// Seconds since TagDeck last wrote to Music.app, or `None` if it never has
+/// in this process.
+pub fn secs_since_last_music_write() -> Option<u64> {
+    let t = LAST_MUSIC_WRITE.load(Ordering::Relaxed);
+    if t == 0 { None } else { Some((now_epoch_secs() - t).max(0) as u64) }
 }
 
 pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
@@ -174,6 +201,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
 pub fn update_track_rating(persistent_id: &str, rating: u32) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let script = format!(
             r#"
             if application "Music" is running then
@@ -210,6 +238,7 @@ pub fn update_track_rating(persistent_id: &str, rating: u32) -> Result<()> {
 pub fn update_track_comment(persistent_id: &str, comment: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         // Simple escaping for AppleScript string
         let escaped_comment = comment.replace('\\', "\\\\").replace('"', "\\\"");
         
@@ -260,6 +289,7 @@ pub fn tag_block_of(full_comment: &str) -> &str {
 pub fn batch_update_track_comments(updates: Vec<(String, String)>) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         if updates.is_empty() {
             return Ok(());
         }
@@ -423,12 +453,61 @@ pub struct PlaylistSnapshotEntry {
     pub parent_persistent_id: Option<String>,
     pub name: String,
     pub is_folder: bool,
+    /// Smart playlist: Music.app computes membership; TagDeck mirrors it read-only.
+    pub is_smart: bool,
     pub track_ids: Vec<String>,
 }
 
-/// Fetches a snapshot of ALL playlists from Music.app with their track lists.
-/// Used for Phase 3 of sync to detect playlist additions, renames, reordering, etc.
-pub fn get_playlist_snapshot() -> Result<Vec<PlaylistSnapshotEntry>> {
+/// Cheap per-playlist header: everything Music.app can hand back as batch
+/// property lists (one Apple event per property for all playlists), plus a
+/// `fingerprint()` that changes whenever the name, folder, parent, smart flag,
+/// total duration or total size changes — i.e. on any membership change that
+/// matters. Fetching this for ~650 playlists takes well under a second, versus
+/// minutes for `persistent ID of every track of p` across every playlist.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlaylistHeader {
+    #[serde(rename = "id")]
+    pub persistent_id: String,
+    pub name: String,
+    #[serde(rename = "parent_id", default)]
+    pub parent_persistent_id: Option<String>,
+    pub is_folder: bool,
+    pub is_smart: bool,
+    /// Music.app `special kind` as text: "none" for ordinary/smart user
+    /// playlists, "folder", or a system list ("Music", "Genius", "Movies", …).
+    pub special_kind: String,
+    #[serde(default)]
+    pub duration: f64,
+    #[serde(default)]
+    pub size: f64,
+}
+
+impl PlaylistHeader {
+    /// True for the lists TagDeck mirrors: ordinary and smart user playlists and
+    /// folders. System lists ("Music" = the whole library, Genius, Movies, …)
+    /// are excluded — the "Music" one alone is 20k+ tracks per fetch.
+    pub fn is_mirrored(&self) -> bool {
+        self.special_kind == "none" || self.special_kind == "folder" || self.is_folder
+    }
+
+    pub fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.name.hash(&mut h);
+        self.parent_persistent_id.hash(&mut h);
+        self.is_folder.hash(&mut h);
+        self.is_smart.hash(&mut h);
+        self.special_kind.hash(&mut h);
+        self.duration.to_bits().hash(&mut h);
+        self.size.to_bits().hash(&mut h);
+        h.finish()
+    }
+}
+
+/// Fetches headers for every user playlist and every folder playlist (smart
+/// lists included, the library playlist excluded) without touching track
+/// membership.
+pub fn get_playlist_headers() -> Result<Vec<PlaylistHeader>> {
     #[cfg(target_os = "macos")]
     {
         let script = r#"
@@ -436,93 +515,146 @@ pub fn get_playlist_snapshot() -> Result<Vec<PlaylistSnapshotEntry>> {
             use scripting additions
 
             tell application "Music"
-                set allPlaylists to every playlist
+                set pls to every user playlist
+                set ids to persistent ID of every user playlist
+                set nms to name of every user playlist
+                set sms to smart of every user playlist
+                set sks to special kind of every user playlist
+                set dus to duration of every user playlist
+                set szs to size of every user playlist
+                set cls to class of every user playlist
                 set resultList to {}
-
-                repeat with p in allPlaylists
+                set n to count of ids
+                repeat with i from 1 to n
+                    set parentId to missing value
                     try
-                        -- Skip the master Library playlist (special class)
-                        if class of p is library playlist then
-                            -- skip
-                        else
-                            set pName to name of p
-                            set pId to persistent ID of p
-                            set isFldr to false
-                            if class of p is folder playlist then
-                                set isFldr to true
-                            end if
-
-                            -- Parent persistent ID (if nested)
-                            set parentId to missing value
-                            try
-                                set parentPlaylist to parent of p
-                                if parentPlaylist is not missing value then
-                                    set parentId to persistent ID of parentPlaylist
-                                end if
-                            end try
-
-                            -- Track persistent IDs (folders have no tracks)
-                            set tIds to {}
-                            if not isFldr then
-                                try
-                                    set tIds to persistent ID of every track of p
-                                end try
-                            end if
-
-                            set entry to {|id|:pId, |name|:pName, |parent_id|:parentId, |is_folder|:isFldr, |track_ids|:tIds}
-                            copy entry to end of resultList
-                        end if
+                        set parentId to persistent ID of parent of (item i of pls)
                     end try
+                    set du to 0
+                    try
+                        set du to (item i of dus) as real
+                    end try
+                    set sz to 0
+                    try
+                        set sz to (item i of szs) as real
+                    end try
+                    set entry to {|id|:(item i of ids), |name|:(item i of nms), |parent_id|:parentId, |is_folder|:((item i of cls) is folder playlist), |is_smart|:(item i of sms), |special_kind|:((item i of sks) as text), |duration|:du, |size|:sz}
+                    copy entry to end of resultList
+                end repeat
+                -- Folders are NOT part of `every user playlist`; fetch them separately.
+                set fpls to every folder playlist
+                set fids to persistent ID of every folder playlist
+                set fnms to name of every folder playlist
+                repeat with i from 1 to count of fids
+                    set parentId to missing value
+                    try
+                        set parentId to persistent ID of parent of (item i of fpls)
+                    end try
+                    set entry to {|id|:(item i of fids), |name|:(item i of fnms), |parent_id|:parentId, |is_folder|:true, |is_smart|:false, |special_kind|:"folder", |duration|:0, |size|:0}
+                    copy entry to end of resultList
                 end repeat
             end tell
 
-            -- JSON Stringify using ObjC bridge
             set ca to current application
             set jsonData to ca's NSJSONSerialization's dataWithJSONObject:resultList options:0 |error|:missing value
             set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
             return jsonString
         "#;
-
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg(script)
-            .output()?;
-
+        let output = Command::new("osascript").arg("-e").arg(script).output()?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow::anyhow!("AppleScript Playlist Snapshot Failed: {}", err));
+            return Err(anyhow::anyhow!("AppleScript Playlist Headers Failed: {}", err.trim()));
         }
-
         let stdout = String::from_utf8_lossy(&output.stdout);
-
-        #[derive(Deserialize)]
-        struct RawPlaylist {
-            id: String,
-            name: String,
-            parent_id: Option<String>,
-            is_folder: bool,
-            track_ids: Vec<String>,
-        }
-
-        let raw: Vec<RawPlaylist> = serde_json::from_str(&stdout)?;
-
-        let entries: Vec<PlaylistSnapshotEntry> = raw.into_iter()
-            .map(|p| PlaylistSnapshotEntry {
-                persistent_id: p.id,
-                parent_persistent_id: p.parent_id,
-                name: p.name,
-                is_folder: p.is_folder,
-                track_ids: p.track_ids,
-            })
-            .collect();
-
-        return Ok(entries);
+        let headers: Vec<PlaylistHeader> = serde_json::from_str(stdout.trim())?;
+        return Ok(headers);
     }
-
     #[cfg(not(target_os = "macos"))]
     {
         Ok(vec![])
     }
+}
+
+/// Fetches track membership (persistent IDs, in playlist order) for just the
+/// given playlists. One osascript spawn per 100 playlists.
+pub fn get_playlist_members(pids: &[String]) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let mut out = std::collections::HashMap::new();
+    if pids.is_empty() {
+        return Ok(out);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        for chunk in pids.chunks(100) {
+            let pid_list: Vec<String> = chunk.iter().map(|p| format!("\"{}\"", p)).collect();
+            let script = format!(
+                r#"
+                use framework "Foundation"
+                use scripting additions
+
+                set pidList to {{{}}}
+                set resultList to {{}}
+                tell application "Music"
+                    repeat with pid in pidList
+                        try
+                            set p to (first user playlist whose persistent ID is pid)
+                            set tIds to {{}}
+                            try
+                                set tIds to persistent ID of every track of p
+                            end try
+                            copy {{|id|:(pid as text), |track_ids|:tIds}} to end of resultList
+                        end try
+                    end repeat
+                end tell
+                set ca to current application
+                set jsonData to ca's NSJSONSerialization's dataWithJSONObject:resultList options:0 |error|:missing value
+                set jsonString to (ca's NSString's alloc()'s initWithData:jsonData encoding:4) as string
+                return jsonString
+                "#,
+                pid_list.join(", ")
+            );
+            let output = Command::new("osascript").arg("-e").arg(&script).output()?;
+            if !output.status.success() {
+                let err = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow::anyhow!("AppleScript Playlist Members Failed: {}", err.trim()));
+            }
+            #[derive(Deserialize)]
+            struct RawMembers { id: String, track_ids: Vec<String> }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let raw: Vec<RawMembers> = serde_json::from_str(stdout.trim())?;
+            for r in raw {
+                out.insert(r.id, r.track_ids);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Full snapshot of every mirrored playlist (see `PlaylistHeader::is_mirrored`)
+/// with track membership — headers plus one members fetch for all of them.
+/// Used by Sync Review; the live sync's Phase 3 fetches members only for
+/// playlists whose header fingerprint changed.
+pub fn get_playlist_snapshot() -> Result<Vec<PlaylistSnapshotEntry>> {
+    let headers: Vec<PlaylistHeader> = get_playlist_headers()?
+        .into_iter()
+        .filter(|h| h.is_mirrored())
+        .collect();
+    let pids: Vec<String> = headers
+        .iter()
+        .filter(|h| !h.is_folder)
+        .map(|h| h.persistent_id.clone())
+        .collect();
+    let mut members = get_playlist_members(&pids)?;
+    Ok(headers
+        .into_iter()
+        .map(|h| PlaylistSnapshotEntry {
+            track_ids: members.remove(&h.persistent_id).unwrap_or_default(),
+            persistent_id: h.persistent_id,
+            parent_persistent_id: h.parent_persistent_id,
+            name: h.name,
+            is_folder: h.is_folder,
+            is_smart: h.is_smart,
+        })
+        .collect())
 }
 
 /// Helper to "touch" a file, updating its modification time.
@@ -541,6 +673,7 @@ pub fn touch_file(path: &str) -> Result<()> {
 pub fn add_track_to_playlist(track_pid: &str, playlist_pid: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let script = format!(
             r#"
             if application "Music" is running then
@@ -570,6 +703,7 @@ pub fn add_track_to_playlist(track_pid: &str, playlist_pid: &str) -> Result<()> 
 pub fn remove_track_from_playlist(track_pid: &str, playlist_pid: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let script = format!(
             r#"
             if application "Music" is running then
@@ -604,6 +738,7 @@ pub fn reorder_playlist(playlist_pid: &str, track_pids: &[String]) -> Result<()>
 
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         // Build a comma-separated list of quoted PIDs for the AppleScript list literal.
         let pid_list: Vec<String> = track_pids.iter().map(|p| format!("\"{}\"", p)).collect();
         let pid_array = pid_list.join(", ");
@@ -720,6 +855,7 @@ pub fn get_play_count(track_pid: &str) -> Result<i64> {
 pub fn set_play_count(track_pid: &str, count: i64) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let script = format!(
             r#"
             if application "Music" is running then
@@ -915,6 +1051,7 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
 pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option<&str>, album: Option<&str>, bpm: Option<i64>) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let mut set_lines = Vec::new();
         if let Some(n) = name {
             let escaped = n.replace('\\', "\\\\").replace('"', "\\\"");
@@ -971,6 +1108,7 @@ pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option
 pub fn rename_playlist_in_music(persistent_id: &str, new_name: &str) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let escaped_name = new_name.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             r#"
@@ -1037,6 +1175,7 @@ pub fn playlist_exists_in_music(persistent_id: &str) -> Result<bool> {
 pub fn create_playlist_in_music(name: &str) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             r#"
@@ -1106,6 +1245,7 @@ fn build_create_in_folder_script(name: &str, folder_pid: Option<&str>) -> String
 pub fn create_playlist_in_folder(name: &str, folder_pid: Option<&str>) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let script = build_create_in_folder_script(name, folder_pid);
         let output = Command::new("osascript").arg("-e").arg(&script).output()?;
         if !output.status.success() {
@@ -1182,6 +1322,7 @@ pub fn find_track_in_music_by_path(file_path: &str) -> Result<Option<String>> {
 pub fn add_file_to_music_library_full(file_path: &str, playlist_pid: Option<&str>) -> Result<Track> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let escaped = file_path.replace('\\', "\\\\").replace('"', "\\\"");
         let playlist_block = match playlist_pid {
             Some(ppid) if !ppid.is_empty() => format!(
@@ -1303,6 +1444,7 @@ pub fn is_apple_music_available() -> bool {
 pub fn add_file_to_music_library(file_path: &str) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
+        note_music_write();
         let escaped = file_path.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             r#"

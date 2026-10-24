@@ -134,6 +134,8 @@ impl Database {
         let _ = conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_spotify_id ON tracks(spotify_id)", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_playlist_id TEXT", []);
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_snapshot_id TEXT", []);
+        // iTunes smart playlists: Music.app owns membership; mirrored read-only.
+        let _ = conn.execute("ALTER TABLE playlists ADD COLUMN is_smart BOOLEAN DEFAULT 0", []);
 
         // Heal ghosts already stamped with a bogus itunes_pid by the backfill
         // above before it excluded SP-% (they showed up in Sync Review as
@@ -612,7 +614,7 @@ impl Database {
                     COALESCE(origin, 'itunes'), COALESCE(itunes_sync_enabled, 0),
                     description, color, COALESCE(sort_position, 0),
                     COALESCE(created_at, 0), COALESCE(updated_at, 0),
-                    spotify_playlist_id, spotify_snapshot_id
+                    spotify_playlist_id, spotify_snapshot_id, COALESCE(is_smart, 0)
              FROM playlists WHERE name != 'Music' ORDER BY is_folder DESC, sort_position ASC, name ASC"
         )?;
         let playlists = stmt.query_map([], |row| {
@@ -632,6 +634,7 @@ impl Database {
                 updated_at: row.get(11)?,
                 spotify_playlist_id: row.get(12).unwrap_or(None),
                 spotify_snapshot_id: row.get(13).unwrap_or(None),
+                is_smart: row.get(14).unwrap_or(false),
             })
         })?.collect::<Result<Vec<_>, rusqlite::Error>>()?;
         Ok(playlists)
@@ -674,9 +677,9 @@ impl Database {
         // synced. The conflict clause deliberately leaves origin and
         // itunes_sync_enabled alone so a user's "stop syncing" choice survives.
         self.conn.execute(
-            "INSERT INTO playlists (persistent_id, parent_persistent_id, name, is_folder, origin, itunes_sync_enabled) VALUES (?1, ?2, ?3, ?4, 'itunes', 1)
-             ON CONFLICT(persistent_id) DO UPDATE SET name=excluded.name, is_folder=excluded.is_folder, parent_persistent_id=excluded.parent_persistent_id",
-            params![playlist.persistent_id, playlist.parent_persistent_id, playlist.name, playlist.is_folder],
+            "INSERT INTO playlists (persistent_id, parent_persistent_id, name, is_folder, origin, itunes_sync_enabled, is_smart) VALUES (?1, ?2, ?3, ?4, 'itunes', 1, ?5)
+             ON CONFLICT(persistent_id) DO UPDATE SET name=excluded.name, is_folder=excluded.is_folder, parent_persistent_id=excluded.parent_persistent_id, is_smart=excluded.is_smart",
+            params![playlist.persistent_id, playlist.parent_persistent_id, playlist.name, playlist.is_folder, playlist.is_smart],
         )?;
 
         let playlist_db_id: i64 = self.conn.query_row(
@@ -686,27 +689,22 @@ impl Database {
         )?;
 
         if let Some(track_pids) = &playlist.track_ids {
-            // Collect local-only track IDs (in DB but not in incoming iTunes list)
-            // so we can preserve manually-added tracks across syncs.
-            let itunes_pid_set: std::collections::HashSet<&str> =
-                track_pids.iter().map(|s| s.as_str()).collect();
+            // Preserve TagDeck-only members: tracks with no Music.app link
+            // (TagDeck-native or unlinked) can never appear in the incoming
+            // iTunes list, so they are re-appended after it. Linked tracks are
+            // NOT preserved — for them Music.app's membership is authoritative.
+            // (Preserving linked tracks that Music.app had dropped made the
+            // Phase 3 diff never converge: smart playlists that age tracks out
+            // re-synced on every run, forever.)
             let mut local_only_stmt = self.conn.prepare(
                 "SELECT pt.track_id FROM playlist_tracks pt
                  JOIN tracks t ON t.id = pt.track_id
-                 WHERE pt.playlist_id = ?1"
+                 WHERE pt.playlist_id = ?1 AND t.itunes_pid IS NULL
+                 ORDER BY pt.position ASC"
             )?;
             let local_only_ids: Vec<i64> = local_only_stmt
                 .query_map(params![playlist_db_id], |row| row.get(0))?
                 .filter_map(|r| r.ok())
-                .filter(|tid: &i64| {
-                    // Keep if not in the incoming iTunes list (unlinked/native
-                    // tracks match by their TagDeck ID, which never appears there)
-                    self.conn.query_row(
-                        "SELECT COALESCE(itunes_pid, persistent_id) FROM tracks WHERE id = ?1",
-                        params![tid],
-                        |r| r.get::<_, String>(0),
-                    ).ok().map_or(false, |pid| !itunes_pid_set.contains(pid.as_str()))
-                })
                 .collect();
 
             self.conn.execute(
@@ -797,6 +795,7 @@ impl Database {
             updated_at: now,
             spotify_playlist_id: None,
             spotify_snapshot_id: None,
+            is_smart: false,
         })
     }
 
@@ -863,7 +862,7 @@ impl Database {
              COALESCE(origin, 'itunes'), COALESCE(itunes_sync_enabled, 0),
              description, color, COALESCE(sort_position, 0),
              COALESCE(created_at, 0), COALESCE(updated_at, 0),
-             spotify_playlist_id, spotify_snapshot_id";
+             spotify_playlist_id, spotify_snapshot_id, COALESCE(is_smart, 0)";
 
         let target: crate::models::Playlist = self.conn.query_row(
             &format!("SELECT {} FROM playlists WHERE id = ?1", COLS),
@@ -1005,6 +1004,16 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(enabled)
+    }
+
+    /// True for iTunes smart playlists (membership computed by Music.app).
+    pub fn get_playlist_is_smart(&self, id: i64) -> Result<bool> {
+        let smart: bool = self.conn.query_row(
+            "SELECT COALESCE(is_smart, 0) FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(smart)
     }
 
     /// Sets the per-playlist iTunes sync flag.
@@ -2576,6 +2585,7 @@ fn row_to_playlist(row: &rusqlite::Row) -> rusqlite::Result<crate::models::Playl
         updated_at: row.get(11)?,
         spotify_playlist_id: row.get(12).unwrap_or(None),
         spotify_snapshot_id: row.get(13).unwrap_or(None),
+        is_smart: row.get(14).unwrap_or(false),
     })
 }
 
@@ -2628,6 +2638,58 @@ fn row_to_candidate(row: &rusqlite::Row) -> rusqlite::Result<crate::models::TagC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn itunes_playlist(pid: &str, track_pids: &[&str]) -> crate::models::Playlist {
+        crate::models::Playlist {
+            id: 0,
+            persistent_id: pid.to_string(),
+            parent_persistent_id: None,
+            name: "P".to_string(),
+            is_folder: false,
+            track_ids: Some(track_pids.iter().map(|s| s.to_string()).collect()),
+            origin: "itunes".to_string(),
+            itunes_sync_enabled: true,
+            description: None,
+            color: None,
+            sort_position: 0,
+            created_at: 0,
+            updated_at: 0,
+            spotify_playlist_id: None,
+            spotify_snapshot_id: None,
+            is_smart: false,
+        }
+    }
+
+    fn mk_track(db: &Database, id: i64, itunes_pid: Option<&str>) {
+        db.conn.execute(
+            "INSERT INTO tracks (id, persistent_id, itunes_pid, file_path, title) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, itunes_pid.map(|p| p.to_string()).unwrap_or_else(|| format!("TD-{}", id)), itunes_pid, format!("/x/{}.mp3", id), format!("t{}", id)],
+        ).unwrap();
+    }
+
+    /// Regression: a linked track Music.app dropped from the playlist must be
+    /// dropped here too (otherwise the Phase 3 diff never converges), while
+    /// TagDeck-only members (no itunes_pid) survive the upsert.
+    #[test]
+    fn insert_playlist_mirrors_linked_membership_but_keeps_unlinked_members() {
+        let db = Database::new(":memory:").unwrap();
+        mk_track(&db, 1, Some("A"));
+        mk_track(&db, 2, Some("B"));
+        mk_track(&db, 3, None); // TagDeck-native
+
+        db.insert_playlist(&itunes_playlist("PL", &["A", "B"])).unwrap();
+        let pl_id: i64 = db.conn.query_row("SELECT id FROM playlists WHERE persistent_id='PL'", [], |r| r.get(0)).unwrap();
+        db.add_track_to_playlist_db(pl_id, 3).unwrap();
+        assert_eq!(db.get_playlist_track_ids(pl_id).unwrap(), vec![1, 2, 3]);
+
+        // Music.app aged "B" out of the (smart) playlist.
+        db.insert_playlist(&itunes_playlist("PL", &["A"])).unwrap();
+        assert_eq!(db.get_playlist_track_ids(pl_id).unwrap(), vec![1, 3]);
+
+        // And the diff source now matches Music.app exactly → converges.
+        let snap = db.get_playlist_snapshot().unwrap();
+        assert_eq!(snap["PL"].3, vec!["A".to_string()]);
+    }
 
     fn ghost(spotify_id: &str) -> crate::models::Track {
         crate::models::Track {

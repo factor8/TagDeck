@@ -41,6 +41,8 @@ export interface Playlist {
     updated_at: number;
     spotify_playlist_id?: string | null;
     spotify_snapshot_id?: string | null;
+    /** iTunes smart playlist — Music.app decides membership; mirrored read-only. */
+    is_smart?: boolean;
 }
 
 export interface Tag {

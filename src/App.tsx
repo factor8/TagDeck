@@ -407,7 +407,8 @@ function App() {
         if (!isMounted) return;
         
         console.log("[App] music-library-changed event received!");
-        showSuccess('Library change detected. Syncing...');
+        // Quiet by design: most bursts are Music.app housekeeping. Only the
+        // result (if it changed anything) gets a toast.
         log('INFO', 'Library change detected, starting auto-sync');
         
         try {
@@ -433,6 +434,8 @@ function App() {
               pending_removals?: RemovedTrack[];
               /** iTunes changes NOT applied because the track was edited in TagDeck while sync was off. */
               conflicts_skipped?: number;
+              /** No sync ran (one was already in progress); a rerun is queued backend-side. */
+              skipped?: boolean;
           }
 
           const result = await invoke<SyncResult | number>('sync_recent_changes', {
@@ -449,6 +452,11 @@ function App() {
           let pendingRemovals: RemovedTrack[] = [];
           let conflictsSkipped = 0;
 
+          if (result && typeof result === 'object' && result.skipped) {
+              // Nothing ran — don't report "no changes" or advance the sync clock.
+              log('INFO', 'Auto-sync skipped: a sync was already running (rerun queued)');
+              return;
+          }
           if (typeof result === 'number') {
               tracksVal = result;
           } else if (result && typeof result === 'object') {
@@ -478,10 +486,11 @@ function App() {
             setRefreshTrigger(p => p + 1);
             localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
           } else {
-             // If nothing found, show feedback so user knows it finished
-             showSuccess(conflictsSkipped > 0
-                ? `Sync complete. ${conflictsSkipped} change${conflictsSkipped > 1 ? 's' : ''} skipped (edited in TagDeck — review needed).`
-                : "Sync complete. No changes detected.");
+             // Nothing changed: log it, no toast, no refresh.
+             if (conflictsSkipped > 0) {
+                 showToast(`Sync complete. ${conflictsSkipped} change${conflictsSkipped > 1 ? 's' : ''} skipped (edited in TagDeck — review needed).`, 'info');
+             }
+             log('INFO', 'Auto-sync complete: no changes');
              localStorage.setItem('app_last_sync_time', Math.floor(Date.now() / 1000).toString());
           }
 
