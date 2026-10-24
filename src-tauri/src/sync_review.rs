@@ -96,7 +96,7 @@ pub struct SyncDecisions {
     pub import_pids: Vec<String>,
     pub remove_keep_pids: Vec<String>,
     pub remove_delete_pids: Vec<String>,
-    /// Metadata items (title/artist/album/comment/grouping) where the iTunes
+    /// Metadata items (title/artist/album/genre/comment/grouping) where the iTunes
     /// version should be applied. Kept separate from rating/BPM so a track
     /// with changes in both categories can be resolved differently per
     /// category — applying metadata must not smuggle in a rejected rating.
@@ -241,6 +241,7 @@ pub async fn preview_sync(
                 field("title", &existing.title, &incoming.title);
                 field("artist", &existing.artist, &incoming.artist);
                 field("album", &existing.album, &incoming.album);
+                field("genre", &existing.genre, &incoming.genre);
                 if include_comment {
                     field("comment", &existing.comment_raw, &incoming.comment_raw);
                     field("grouping", &existing.grouping_raw, &incoming.grouping_raw);
@@ -506,6 +507,7 @@ pub async fn apply_sync_changes(
                         track.title.as_deref(),
                         track.artist.as_deref(),
                         track.album.as_deref(),
+                        track.genre.as_deref(),
                         None,
                     ) {
                         log(&app, "ERROR", &format!("Sync Review: push of track info for {} failed: {}", pid, e));
@@ -518,7 +520,7 @@ pub async fn apply_sync_changes(
                     if let Err(e) = update_track_rating(pid, track.rating.max(0) as u32) {
                         log(&app, "ERROR", &format!("Sync Review: push of rating for {} failed: {}", pid, e));
                     }
-                    if let Err(e) = apple_update_track_info(pid, None, None, None, Some(track.bpm)) {
+                    if let Err(e) = apple_update_track_info(pid, None, None, None, None, Some(track.bpm)) {
                         log(&app, "ERROR", &format!("Sync Review: push of BPM for {} failed: {}", pid, e));
                     }
                 }

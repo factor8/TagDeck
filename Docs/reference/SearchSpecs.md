@@ -18,8 +18,8 @@ The search bar supports advanced query syntax to allow precise filtering of the 
 *   **Behavior**: Terms separated by spaces are treated as an implicit **AND**.
 *   **Example**: `house party` matches tracks containing both "house" AND "party".
 *   **Searched fields**: free-text terms match against a concatenation of
-    **title, artist, album, comment/tags (`comment_raw`), grouping (`grouping_raw`), and BPM**.
-    Note there is no dedicated genre or key field on a track, so those are not searched.
+    **title, artist, album, genre, comment/tags (`comment_raw`), grouping (`grouping_raw`), and BPM**.
+    Note there is no key field on a track, so keys are not searched.
 
 ### 2. Exact Phrases
 *   **Syntax**: Double quotes `""`.
@@ -40,6 +40,7 @@ The search bar supports advanced query syntax to allow precise filtering of the 
     *   `artist:`
     *   `title:`
     *   `album:`
+    *   `genre:`
     *   `tag:` — matches the track's tags (stored in `comment_raw` after the ` && ` separator).
     *   `label:` — matches the **grouping** field (`grouping_raw`).
 *   **Example**: `artist:Prince title:"Purple Rain"`
@@ -68,10 +69,6 @@ them to any track data. Because an unmatched required filter fails the track, us
     `bpm`; the `year` branch is commented out and `Track` has no `year` property.
 *   **`key:`** — accepted as a string field, but the filter resolves it to `undefined`
     (no musical-key data on the track), so nothing matches.
-*   **`genre:`** — accepted as a string field, but there is no `genre` case in the filter
-    switch and no `genre` property on `Track`, so it falls through to no match.
-    (The in-app help panel still lists a `genre:` badge; that badge is aspirational and
-    does not currently filter.)
 
 ## Logic & Precedence
 1.  **Tokenization**: The query is split into tokens (words, quoted phrases, field filters).
@@ -83,7 +80,7 @@ them to any track data. Because an unmatched required filter fails the track, us
     *   Free-text terms check against the concatenated text fields listed in §1.
 
 ## Future Considerations
-*   Wire up `genre:`, `key:`, and `year:` (currently parsed-only).
+*   Wire up `key:` and `year:` (currently parsed-only; `genre:` works since the Genre field shipped).
 *   Explicit grouped `OR` operator, e.g. `(house OR techno)`, across arbitrary fields.
     (Only comma-OR within `tag:` ships today.)
 *   Regular expressions `regex:`.

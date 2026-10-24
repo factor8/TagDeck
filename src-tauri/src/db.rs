@@ -136,6 +136,7 @@ impl Database {
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN spotify_snapshot_id TEXT", []);
         // iTunes smart playlists: Music.app owns membership; mirrored read-only.
         let _ = conn.execute("ALTER TABLE playlists ADD COLUMN is_smart BOOLEAN DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE tracks ADD COLUMN genre TEXT", []);
 
         // Heal ghosts already stamped with a bogus itunes_pid by the backfill
         // above before it excluded SP-% (they showed up in Sync Review as
@@ -312,7 +313,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id, genre
              FROM tracks WHERE itunes_pid = ?1")?;
         for pid in pids {
             let mut rows = stmt.query(params![pid])?;
@@ -339,6 +340,7 @@ impl Database {
                     unlinked_at: row.get(18).unwrap_or(None),
                     source: row.get(19).unwrap_or_else(|_| "local".to_string()),
                     spotify_id: row.get(20).unwrap_or(None),
+                    genre: row.get(21).unwrap_or(None),
                 });
             }
         }
@@ -430,13 +432,14 @@ impl Database {
             "INSERT INTO tracks (
                 persistent_id, file_path, artist, title, album,
                 comment_raw, grouping_raw, duration_secs, format,
-                size_bytes, bit_rate, modified_date, rating, date_added, bpm, itunes_pid
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                size_bytes, bit_rate, modified_date, rating, date_added, bpm, itunes_pid, genre
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             ON CONFLICT(persistent_id) DO UPDATE SET
                 file_path=CASE WHEN excluded.file_path = '' THEN tracks.file_path ELSE excluded.file_path END,
                 artist=excluded.artist,
                 title=excluded.title,
                 album=excluded.album,
+                genre=excluded.genre,
                 comment_raw={comment_set},
                 grouping_raw={grouping_set},
                 duration_secs=excluded.duration_secs,
@@ -473,7 +476,8 @@ impl Database {
                 track.rating,
                 track.date_added,
                 track.bpm,
-                track.itunes_pid
+                track.itunes_pid,
+                track.genre
             ],
         )?;
         Ok(())
@@ -483,7 +487,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id, genre
              FROM tracks WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
 
@@ -510,6 +514,7 @@ impl Database {
                 unlinked_at: row.get(18).unwrap_or(None),
                 source: row.get(19).unwrap_or_else(|_| "local".to_string()),
                 spotify_id: row.get(20).unwrap_or(None),
+                genre: row.get(21).unwrap_or(None),
             }))
         } else {
             Ok(None)
@@ -1139,7 +1144,28 @@ impl Database {
         Ok(())
     }
 
-    /// Updates track info fields (title, artist, album, bpm, comment_raw) in the database.
+    /// One-time genre fill for rows created before the `genre` column existed:
+    /// sets genre by iTunes PID only where it is still NULL, so a genre the
+    /// user has since typed in TagDeck is never overwritten. Returns rows changed.
+    pub fn backfill_genres_by_itunes_pid(&self, genres: &[(String, String)]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut changed = 0usize;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE tracks SET genre = ?1 WHERE itunes_pid = ?2 AND genre IS NULL",
+            )?;
+            for (pid, genre) in genres {
+                if genre.is_empty() {
+                    continue;
+                }
+                changed += stmt.execute(params![genre, pid])?;
+            }
+        }
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    /// Updates track info fields (title, artist, album, genre, bpm, comment_raw) in the database.
     /// Only updates fields that are Some; leaves existing values for None fields.
     pub fn update_track_info(
         &self,
@@ -1147,6 +1173,7 @@ impl Database {
         title: Option<&str>,
         artist: Option<&str>,
         album: Option<&str>,
+        genre: Option<&str>,
         bpm: Option<i64>,
         comment_raw: Option<&str>,
     ) -> Result<()> {
@@ -1164,6 +1191,10 @@ impl Database {
         if let Some(al) = album {
             sets.push("album = ?");
             params_vec.push(Box::new(al.to_string()));
+        }
+        if let Some(g) = genre {
+            sets.push("genre = ?");
+            params_vec.push(Box::new(g.to_string()));
         }
         if let Some(b) = bpm {
             sets.push("bpm = ?");
@@ -1197,7 +1228,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id, genre
              FROM tracks",
         )?;
 
@@ -1224,6 +1255,7 @@ impl Database {
                 unlinked_at: row.get(18).unwrap_or(None),
                 source: row.get(19).unwrap_or_else(|_| "local".to_string()),
                 spotify_id: row.get(20).unwrap_or(None),
+                genre: row.get(21).unwrap_or(None),
             })
         })?;
 
@@ -1240,7 +1272,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT t.id, t.persistent_id, t.file_path, t.artist, t.title, t.album,
              t.comment_raw, t.grouping_raw, t.duration_secs, t.format, t.size_bytes, t.bit_rate, t.modified_date,
-             t.rating, t.date_added, t.bpm, t.missing, t.itunes_pid, t.unlinked_at, t.source, t.spotify_id
+             t.rating, t.date_added, t.bpm, t.missing, t.itunes_pid, t.unlinked_at, t.source, t.spotify_id, t.genre
              FROM play_queue q JOIN tracks t ON t.id = q.track_id
              ORDER BY q.position",
         )?;
@@ -1268,6 +1300,7 @@ impl Database {
                 unlinked_at: row.get(18).unwrap_or(None),
                 source: row.get(19).unwrap_or_else(|_| "local".to_string()),
                 spotify_id: row.get(20).unwrap_or(None),
+                genre: row.get(21).unwrap_or(None),
             })
         })?;
 
@@ -1931,8 +1964,8 @@ impl Database {
                 persistent_id, file_path, artist, title, album,
                 comment_raw, grouping_raw, duration_secs, format,
                 size_bytes, bit_rate, modified_date, rating, date_added, bpm,
-                original_path, import_date, file_hash, source, spotify_id
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                original_path, import_date, file_hash, source, spotify_id, genre
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 track.persistent_id,
                 track.file_path,
@@ -1954,6 +1987,7 @@ impl Database {
                 file_hash,
                 track.source,
                 track.spotify_id,
+                track.genre,
             ],
         )?;
 
@@ -2332,7 +2366,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, persistent_id, file_path, artist, title, album,
              comment_raw, grouping_raw, duration_secs, format, size_bytes, bit_rate, modified_date,
-             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id
+             rating, date_added, bpm, missing, itunes_pid, unlinked_at, source, spotify_id, genre
              FROM tracks WHERE source = 'spotify'",
         )?;
 
@@ -2359,6 +2393,7 @@ impl Database {
                 unlinked_at: row.get(18).unwrap_or(None),
                 source: row.get(19).unwrap_or_else(|_| "local".to_string()),
                 spotify_id: row.get(20).unwrap_or(None),
+                genre: row.get(21).unwrap_or(None),
             })
         })?;
 
@@ -2729,6 +2764,32 @@ mod tests {
         assert_eq!(snap["PL"].3, vec!["A".to_string()]);
     }
 
+    #[test]
+    fn genre_round_trips_and_backfill_fills_only_null_rows() {
+        let db = Database::new(":memory:").unwrap();
+        mk_track(&db, 1, Some("A"));
+        mk_track(&db, 2, Some("B"));
+        mk_track(&db, 3, None);
+        let genre_of = |id: i64| -> Option<String> {
+            db.conn.query_row("SELECT genre FROM tracks WHERE id = ?1", params![id], |r| r.get(0)).unwrap()
+        };
+
+        // User-typed genre is stored and read back.
+        db.update_track_info(1, None, None, None, Some("House"), None, None).unwrap();
+        assert_eq!(genre_of(1).as_deref(), Some("House"));
+
+        // Backfill from Music.app: fills B (NULL), never overwrites A, skips unknown PIDs.
+        let changed = db.backfill_genres_by_itunes_pid(&[
+            ("A".into(), "Techno".into()),
+            ("B".into(), "Soul".into()),
+            ("Z".into(), "Unknown PID".into()),
+        ]).unwrap();
+        assert_eq!(changed, 1);
+        assert_eq!(genre_of(1).as_deref(), Some("House"));
+        assert_eq!(genre_of(2).as_deref(), Some("Soul"));
+        assert_eq!(genre_of(3), None);
+    }
+
     fn ghost(spotify_id: &str) -> crate::models::Track {
         crate::models::Track {
             id: 0,
@@ -2737,6 +2798,7 @@ mod tests {
             artist: Some("Artist".into()),
             title: Some("Title".into()),
             album: Some("Album".into()),
+            genre: None,
             comment_raw: None,
             grouping_raw: None,
             duration_secs: 200.0,

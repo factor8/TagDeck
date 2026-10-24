@@ -540,7 +540,7 @@ mod tests {
         std::fs::write(&tmp, b"").unwrap();
         let local = dbm.insert_imported_track(&crate::models::Track {
             id: 0, persistent_id: "TD-x".into(), file_path: tmp.to_string_lossy().into_owned(),
-            artist: Some("Artist".into()), title: Some("Title".into()), album: None,
+            artist: Some("Artist".into()), title: Some("Title".into()), album: None, genre: None,
             comment_raw: None, grouping_raw: None, duration_secs: 200.0, format: "MP3".into(),
             size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
             missing: false, itunes_pid: None, unlinked_at: None,
@@ -573,7 +573,7 @@ mod tests {
         std::fs::write(&tmp, b"").unwrap();
         let local = dbm.insert_imported_track(&crate::models::Track {
             id: 0, persistent_id: "TD-linked".into(), file_path: tmp.to_string_lossy().into_owned(),
-            artist: Some("Artist".into()), title: Some("Title".into()), album: None,
+            artist: Some("Artist".into()), title: Some("Title".into()), album: None, genre: None,
             comment_raw: Some("keep-me".into()), grouping_raw: None, duration_secs: 200.0, format: "MP3".into(),
             size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
             missing: false, itunes_pid: None, unlinked_at: None,
@@ -594,7 +594,7 @@ mod tests {
         std::fs::write(&tmp, b"").unwrap();
         dbm.insert_imported_track(&crate::models::Track {
             id: 0, persistent_id: pid.into(), file_path: tmp.to_string_lossy().into_owned(),
-            artist: Some("Artist".into()), title: Some("Title".into()), album: None,
+            artist: Some("Artist".into()), title: Some("Title".into()), album: None, genre: None,
             comment_raw: comment.map(|c| c.to_string()), grouping_raw: None,
             duration_secs: 200.0, format: "MP3".into(),
             size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
@@ -753,7 +753,7 @@ mod tests {
         let journal = |local: i64, ghost_rating: i64| {
             let ghost = crate::models::Track {
                 id: 0, persistent_id: String::new(), file_path: String::new(),
-                artist: None, title: None, album: None, comment_raw: None, grouping_raw: None,
+                artist: None, title: None, album: None, genre: None, comment_raw: None, grouping_raw: None,
                 duration_secs: 0.0, format: String::new(), size_bytes: 0, bit_rate: 0,
                 modified_date: 0, rating: ghost_rating, date_added: 0, bpm: 0, missing: false,
                 itunes_pid: None, unlinked_at: None, source: "spotify".into(),
@@ -811,7 +811,7 @@ mod tests {
 
         let base = crate::models::Track {
             id: 0, persistent_id: "TD-x".into(), file_path: "/tmp/x.mp3".into(),
-            artist: Some("A".into()), title: Some("T".into()), album: None,
+            artist: Some("A".into()), title: Some("T".into()), album: None, genre: None,
             comment_raw: None, grouping_raw: None, duration_secs: 200.0, format: "MP3".into(),
             size_bytes: 0, bit_rate: 0, modified_date: 0, rating: 0, date_added: 0, bpm: 0,
             missing: false, itunes_pid: None, unlinked_at: None,

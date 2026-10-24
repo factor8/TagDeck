@@ -67,7 +67,7 @@ pub enum Action {
     },
 }
 
-/// Stores old and new values for a track info edit (title, artist, album, bpm, comment).
+/// Stores old and new values for a track info edit (title, artist, album, genre, bpm, comment).
 /// Only fields that changed will have Some values.
 #[derive(Debug, Clone)]
 pub struct TrackInfoState {
@@ -80,6 +80,8 @@ pub struct TrackInfoState {
     pub new_artist: Option<String>,
     pub old_album: Option<String>,
     pub new_album: Option<String>,
+    pub old_genre: Option<String>,
+    pub new_genre: Option<String>,
     pub old_bpm: Option<i64>,
     pub new_bpm: Option<i64>,
     pub old_comment_raw: Option<String>,
@@ -519,11 +521,12 @@ fn apply_rating(db: &Database, track_id: i64, persistent_id: &str, rating: u32) 
 /// Applies track info changes for undo/redo.
 /// If `revert` is true, applies old values (undo); otherwise applies new values (redo).
 fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
-    let (title, artist, album, bpm, comment_raw) = if revert {
+    let (title, artist, album, genre, bpm, comment_raw) = if revert {
         (
             track.old_title.as_deref(),
             track.old_artist.as_deref(),
             track.old_album.as_deref(),
+            track.old_genre.as_deref(),
             track.old_bpm,
             track.old_comment_raw.as_deref(),
         )
@@ -532,19 +535,21 @@ fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
             track.new_title.as_deref(),
             track.new_artist.as_deref(),
             track.new_album.as_deref(),
+            track.new_genre.as_deref(),
             track.new_bpm,
             track.new_comment_raw.as_deref(),
         )
     };
+    let info_changed = title.is_some() || artist.is_some() || album.is_some() || genre.is_some() || bpm.is_some();
 
     // 1. DB
-    if let Err(e) = db.update_track_info(track.id, title, artist, album, bpm, comment_raw) {
+    if let Err(e) = db.update_track_info(track.id, title, artist, album, genre, bpm, comment_raw) {
         eprintln!("Undo/Redo DB Error: {}", e);
     }
 
-    // 2. File metadata (title/artist/album/bpm)
-    if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
-        if let Err(e) = write_track_info(&track.file_path, title, artist, album, bpm) {
+    // 2. File metadata (title/artist/album/genre/bpm)
+    if info_changed {
+        if let Err(e) = write_track_info(&track.file_path, title, artist, album, genre, bpm) {
             eprintln!("Undo/Redo File Write Error: {}", e);
         }
     }
@@ -561,9 +566,9 @@ fn apply_track_info(db: &Database, track: &TrackInfoState, revert: bool) {
     // back to Music.app)
     let push_enabled = crate::file_manager::LibraryConfig::sync_mode(db).push_enabled();
     if push_enabled && !track.persistent_id.is_empty() {
-        // Sync title/artist/album/bpm
-        if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
-            let _ = apple_update_track_info(&track.persistent_id, title, artist, album, bpm);
+        // Sync title/artist/album/genre/bpm
+        if info_changed {
+            let _ = apple_update_track_info(&track.persistent_id, title, artist, album, genre, bpm);
         }
         // Sync comment
         if let Some(c) = comment_raw {

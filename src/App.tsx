@@ -570,13 +570,18 @@ function App() {
         if (pending > 0) showToast(`${pending} possible Spotify match${pending === 1 ? '' : 'es'} to review`, 'info');
         handleRefresh();
     });
+    // One-time startup fill of the Genre column from Music.app.
+    const unGenre = listen<{ updated: number }>('genre-backfill-completed', (e) => {
+        showToast(`Genre loaded from iTunes for ${e.payload.updated.toLocaleString()} tracks`, 'info');
+        handleRefresh();
+    });
     // One-time startup repair: ratings that earlier Spotify links dropped.
     const unRepair = listen<{ repaired: number }>('spotify-ratings-repaired', (e) => {
         const n = e.payload.repaired;
         showSuccess(`Restored Spotify ratings on ${n} linked track${n === 1 ? '' : 's'}`);
         handleRefresh();
     });
-    return () => { un.then(f => f()); unRepair.then(f => f()); };
+    return () => { un.then(f => f()); unRepair.then(f => f()); unGenre.then(f => f()); };
   }, []);
 
   useEffect(() => {

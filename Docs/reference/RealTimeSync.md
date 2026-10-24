@@ -86,7 +86,7 @@ phases pick it up then.
 ### 3. Four-Phase Delta Sync
 
 > **Key Discovery**: Apple Music's `modification date` property is only updated for metadata
-> changes (title, artist, album, comment, grouping). It is **NOT** updated for rating, BPM,
+> changes (title, artist, album, genre, comment, grouping). It is **NOT** updated for rating, BPM,
 > play count, or other "library" fields. This means a single query strategy can never
 > catch all change types.
 
@@ -110,7 +110,7 @@ Compares the set of persistent IDs in Music.app against TagDeck's linked tracks.
 
 **Phase 1 — Date-Based Query (Metadata)**
 Uses AppleScript `whose modification date >= sinceDate` to find tracks with changed metadata.
-Good for: title, artist, album, comment, grouping, file path changes.
+Good for: title, artist, album, genre, comment, grouping, file path changes.
 Returns full track objects for upsert into the DB.
 
 **Phase 2 — Snapshot Diff (Rating & BPM)**

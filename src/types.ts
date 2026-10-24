@@ -5,6 +5,7 @@ export interface Track {
     artist?: string;
     title?: string;
     album?: string;
+    genre?: string;
     comment_raw?: string;
     grouping_raw?: string;
     duration_secs: number;

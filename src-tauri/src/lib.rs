@@ -147,6 +147,8 @@ pub fn run() {
             // One-time repair: Spotify links made before merges carried the
             // ghost's rating over (see spotify::merge::apply_lost_merge_ratings).
             spotify::merge::backfill_lost_merge_ratings(app.handle().clone());
+            // One-time fill of the new genre column from Music.app.
+            system_library::backfill_genres_from_music(app.handle().clone());
 
             Ok(())
         })

@@ -54,6 +54,9 @@ pub fn build_rekordbox_xml(
         push_attr(&mut xml, "Name", &name);
         push_attr(&mut xml, "Artist", t.artist.as_deref().unwrap_or(""));
         push_attr(&mut xml, "Album", t.album.as_deref().unwrap_or(""));
+        if let Some(g) = t.genre.as_deref().filter(|g| !g.is_empty()) {
+            push_attr(&mut xml, "Genre", g);
+        }
         push_attr(&mut xml, "Kind", &kind_for_format(&t.format));
         push_attr(&mut xml, "Size", &t.size_bytes.max(0).to_string());
         push_attr(&mut xml, "TotalTime", &(t.duration_secs.round().max(0.0) as i64).to_string());
@@ -226,6 +229,7 @@ mod tests {
             artist: Some("Artist & Co".to_string()),
             title: Some(title.to_string()),
             album: None,
+            genre: None,
             comment_raw: Some("#house #\"peak\"".to_string()),
             grouping_raw: None,
             duration_secs: 245.6,

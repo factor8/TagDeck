@@ -125,7 +125,7 @@ interface ContextMenuState {
 // Editing state: which cell is being edited
 interface EditingCell {
     trackId: number;
-    field: 'title' | 'artist' | 'album' | 'bpm' | 'comment';
+    field: 'title' | 'artist' | 'album' | 'genre' | 'bpm' | 'comment';
 }
 
 // ── EditableCell ───────────────────────────────────────────────
@@ -145,7 +145,7 @@ const EditableCell = ({
 }: {
     value: string;
     trackId: number;
-    field: 'title' | 'artist' | 'album' | 'bpm' | 'comment';
+    field: 'title' | 'artist' | 'album' | 'genre' | 'bpm' | 'comment';
     isSelected: boolean;
     editingCell: EditingCell | null;
     onStartEdit: (trackId: number, field: EditingCell['field']) => void;
@@ -216,7 +216,7 @@ const EditableCell = ({
             e.preventDefault();
             onCommitEdit(trackId, field, localValue);
             // Tab to next editable field
-            const fields: EditingCell['field'][] = ['title', 'artist', 'album', 'comment', 'bpm'];
+            const fields: EditingCell['field'][] = ['title', 'artist', 'album', 'genre', 'comment', 'bpm'];
             const idx = fields.indexOf(field);
             if (idx < fields.length - 1) {
                 onStartEdit(trackId, fields[idx + 1]);
@@ -863,7 +863,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
         }));
 
         // Build the update payload — only send the changed field
-        const payload: { trackId: number; title?: string; artist?: string; album?: string; bpm?: number; comment?: string } = { trackId };
+        const payload: { trackId: number; title?: string; artist?: string; album?: string; genre?: string; bpm?: number; comment?: string } = { trackId };
         if (field === 'bpm') {
             payload.bpm = parseInt(newValue) || 0;
         } else if (field === 'comment') {
@@ -1003,6 +1003,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         track.title, 
                         track.artist, 
                         track.album, 
+                        track.genre,
                         track.comment_raw,
                         track.grouping_raw,
                         track.bpm ? track.bpm.toString() : ''
@@ -1019,6 +1020,7 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                         case 'artist': fieldValue = track.artist; break;
                         case 'title': fieldValue = track.title; break;
                         case 'album': fieldValue = track.album; break;
+                        case 'genre': fieldValue = track.genre; break;
                         case 'tag': 
                             // Tags are stored in comment_raw after " && " separator
                             // Support comma-separated tag search with OR logic: tag:Ambient,Chill
@@ -1233,15 +1235,19 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
     const [columnOrder, setColumnOrder] = useState<string[]>(() => {
         const saved = loadState<string[]>('table_order_v3', []);
         const defaultOrder = [
-            'position', 'artist', 'title', 'album', 'bpm', 'comment', 'tags', 
+            'position', 'artist', 'title', 'album', 'genre', 'bpm', 'comment', 'tags', 
             'rating', 'duration_secs', 'format', 'bit_rate', 'size_bytes', 'modified_date', 'date_added', 'actions'
         ];
         
         if (saved && saved.length > 0) {
-            if (!saved.includes('position')) {
-                return ['position', ...saved];
+            let order = saved.includes('position') ? saved : ['position', ...saved];
+            // Columns added after the order was saved slot in next to their neighbour
+            // instead of landing at the far right.
+            if (!order.includes('genre')) {
+                const after = order.indexOf('album');
+                order = after === -1 ? [...order, 'genre'] : [...order.slice(0, after + 1), 'genre', ...order.slice(after + 1)];
             }
-            return saved;
+            return order;
         }
         return defaultOrder;
     });
@@ -1471,6 +1477,26 @@ export const TrackList = forwardRef<TrackListHandle, Props>(({ refreshTrigger, o
                 );
             },
             size: 150,
+        }),
+        columnHelper.accessor('genre', {
+            id: 'genre',
+            header: 'Genre',
+            cell: info => {
+                const trackId = info.row.original.id;
+                return (
+                    <EditableCell
+                        value={info.getValue() || ''}
+                        trackId={trackId}
+                        field="genre"
+                        isSelected={selectedTrackIds.has(trackId)}
+                        editingCell={editingCell}
+                        onStartEdit={handleStartEdit}
+                        onCommitEdit={handleCommitEdit}
+                        onCancelEdit={handleCancelEdit}
+                    />
+                );
+            },
+            size: 120,
         }),
         columnHelper.accessor('comment_raw', {
             id: 'comment',

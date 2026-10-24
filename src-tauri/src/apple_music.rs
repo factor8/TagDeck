@@ -11,6 +11,8 @@ struct JxaTrack {
     name: String,
     artist: String,
     album: String,
+    #[serde(default)]
+    genre: String,
     comment: String,
     grouping: String,
     duration: f64,
@@ -98,6 +100,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                        set tName to name of t
                        set tArtist to artist of t
                        set tAlbum to album of t
+                       set tGenre to genre of t
                        set tComment to comment of t
                        set tGrouping to grouping of t
                        set tDuration to duration of t
@@ -124,7 +127,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                            end try
                        end try
                        
-                       set entry to {{ |id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc }}
+                       set entry to {{ |id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |genre|:tGenre, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc }}
                        copy entry to end of jsonList
                    end try
                 end repeat
@@ -170,6 +173,7 @@ pub fn get_changes_since(since_epoch_seconds: i64) -> Result<Vec<Track>> {
                 artist: Some(jt.artist),
                 title: Some(jt.name),
                 album: Some(jt.album),
+                genre: Some(jt.genre),
                 comment_raw: Some(jt.comment),
                 grouping_raw: Some(jt.grouping),
                 duration_secs: jt.duration,
@@ -953,6 +957,7 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
                             set tName to name of t
                             set tArtist to artist of t
                             set tAlbum to album of t
+                            set tGenre to genre of t
                             set tComment to comment of t
                             set tGrouping to grouping of t
                             set tDuration to duration of t
@@ -975,7 +980,7 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
                                 end try
                             end try
 
-                            set entry to {{|id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc}}
+                            set entry to {{|id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |genre|:tGenre, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc}}
                             copy entry to end of resultList
                         end try
                     end repeat
@@ -1019,6 +1024,7 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
                     artist: Some(jt.artist),
                     title: Some(jt.name),
                     album: Some(jt.album),
+                    genre: Some(jt.genre),
                     comment_raw: Some(jt.comment),
                     grouping_raw: Some(jt.grouping),
                     duration_secs: jt.duration,
@@ -1046,9 +1052,9 @@ pub fn get_tracks_by_persistent_ids(pids: &[String]) -> Result<Vec<Track>> {
     }
 }
 
-/// Updates a track's metadata fields (name, artist, album, BPM) in Apple Music via a single AppleScript call.
+/// Updates a track's metadata fields (name, artist, album, genre, BPM) in Apple Music via a single AppleScript call.
 /// Only sets fields that are provided (Some). Skips None fields.
-pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option<&str>, album: Option<&str>, bpm: Option<i64>) -> Result<()> {
+pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option<&str>, album: Option<&str>, genre: Option<&str>, bpm: Option<i64>) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         note_music_write();
@@ -1064,6 +1070,10 @@ pub fn update_track_info(persistent_id: &str, name: Option<&str>, artist: Option
         if let Some(al) = album {
             let escaped = al.replace('\\', "\\\\").replace('"', "\\\"");
             set_lines.push(format!("set album of myTrack to \"{}\"", escaped));
+        }
+        if let Some(g) = genre {
+            let escaped = g.replace('\\', "\\\\").replace('"', "\\\"");
+            set_lines.push(format!("set genre of myTrack to \"{}\"", escaped));
         }
         if let Some(b) = bpm {
             set_lines.push(format!("set bpm of myTrack to {}", b));
@@ -1345,6 +1355,7 @@ pub fn add_file_to_music_library_full(file_path: &str, playlist_pid: Option<&str
                 set tName to name of t
                 set tArtist to artist of t
                 set tAlbum to album of t
+                set tGenre to genre of t
                 set tComment to comment of t
                 set tGrouping to grouping of t
                 set tDuration to duration of t
@@ -1365,7 +1376,7 @@ pub fn add_file_to_music_library_full(file_path: &str, playlist_pid: Option<&str
                         set tLoc to ""
                     end try
                 end try
-                set entry to {{|id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc}}
+                set entry to {{|id|:tId, |name|:tName, |artist|:tArtist, |album|:tAlbum, |genre|:tGenre, |comment|:tComment, |grouping|:tGrouping, |duration|:tDuration, |kind|:tKind, |size|:tSize, |bitRate|:tBitRate, |rating|:tRating, |bpm|:tBpm, |location|:tLoc}}
             end tell
 
             set ca to current application
@@ -1400,6 +1411,7 @@ pub fn add_file_to_music_library_full(file_path: &str, playlist_pid: Option<&str
             artist: Some(jt.artist),
             title: Some(jt.name),
             album: Some(jt.album),
+            genre: Some(jt.genre),
             comment_raw: Some(jt.comment),
             grouping_raw: Some(jt.grouping),
             duration_secs: jt.duration,

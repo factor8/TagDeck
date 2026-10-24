@@ -1127,7 +1127,7 @@ pub async fn sync_recent_changes(app: tauri::AppHandle, state: State<'_, AppStat
         }
     }
 
-    // --- Phase 1: Date-based query for metadata changes (title, artist, album, comment, grouping) ---
+    // --- Phase 1: Date-based query for metadata changes (title, artist, album, genre, comment, grouping) ---
     // `modification date` in Music.app covers these fields.
     let tracks = get_changes_since(since_timestamp).map_err(|e| {
         let msg = format!("Failed to fetch date-based changes: {}", e);
@@ -2400,6 +2400,7 @@ pub async fn update_track_info(
     title: Option<String>,
     artist: Option<String>,
     album: Option<String>,
+    genre: Option<String>,
     bpm: Option<i64>,
     comment: Option<String>,
     state: State<'_, AppState>,
@@ -2449,6 +2450,8 @@ pub async fn update_track_info(
         new_artist: artist.clone(),
         old_album: if album.is_some() { track.album.clone() } else { None },
         new_album: album.clone(),
+        old_genre: if genre.is_some() { track.genre.clone() } else { None },
+        new_genre: genre.clone(),
         old_bpm: if bpm.is_some() { Some(track.bpm as i64) } else { None },
         new_bpm: bpm,
         old_comment_raw: if new_comment_raw.is_some() { track.comment_raw.clone() } else { None },
@@ -2461,19 +2464,22 @@ pub async fn update_track_info(
         title.as_deref(),
         artist.as_deref(),
         album.as_deref(),
+        genre.as_deref(),
         bpm,
         new_comment_raw.as_deref(),
     ).map_err(|e| e.to_string())?;
 
     drop(db); // Release lock before IO
 
-    // 5. Write to file metadata (title/artist/album/bpm)
-    if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+    // 5. Write to file metadata (title/artist/album/genre/bpm)
+    let info_changed = title.is_some() || artist.is_some() || album.is_some() || genre.is_some() || bpm.is_some();
+    if info_changed {
         if let Err(e) = write_track_info(
             &track.file_path,
             title.as_deref(),
             artist.as_deref(),
             album.as_deref(),
+            genre.as_deref(),
             bpm,
         ) {
             let msg = format!("Warning: Failed to write track info to file: {}", e);
@@ -2500,12 +2506,13 @@ pub async fn update_track_info(
     // allows pushing TagDeck edits back to Music.app)
     if mode.push_enabled() {
         if let Some(itunes_pid) = &track.itunes_pid {
-            if title.is_some() || artist.is_some() || album.is_some() || bpm.is_some() {
+            if info_changed {
                 if let Err(e) = apple_update_track_info(
                     itunes_pid,
                     title.as_deref(),
                     artist.as_deref(),
                     album.as_deref(),
+                    genre.as_deref(),
                     bpm,
                 ) {
                     let msg = format!("Warning: Failed to update Apple Music: {}", e);
@@ -2974,6 +2981,7 @@ pub async fn import_files(
                     artist: meta.artist.clone(),
                     title: meta.title.clone(),
                     album: meta.album.clone(),
+                    genre: meta.genre.clone(),
                     comment_raw: meta.comment.clone(),
                     grouping_raw: meta.grouping.clone(),
                     duration_secs: meta.duration_secs,
@@ -3816,6 +3824,7 @@ mod tests {
             artist: Some("Artist".into()),
             title: Some("Title".into()),
             album: Some("Album".into()),
+            genre: None,
             comment_raw: None,
             grouping_raw: None,
             duration_secs: 200.0,
@@ -3842,6 +3851,7 @@ mod tests {
             artist: Some("Artist".into()),
             title: Some("Title".into()),
             album: Some("Album".into()),
+            genre: None,
             comment_raw: None,
             grouping_raw: None,
             duration_secs: 200.0,

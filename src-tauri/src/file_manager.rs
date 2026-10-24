@@ -307,6 +307,7 @@ pub struct TrackImportMeta {
     pub artist: Option<String>,
     pub title: Option<String>,
     pub album: Option<String>,
+    pub genre: Option<String>,
     pub track_number: Option<u32>,
     pub duration_secs: f64,
     pub bpm: Option<i64>,

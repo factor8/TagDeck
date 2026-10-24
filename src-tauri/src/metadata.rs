@@ -211,13 +211,14 @@ pub fn get_artwork<P: AsRef<Path>>(path: P) -> Result<Option<Vec<u8>>> {
     Ok(None)
 }
 
-/// Writes track info fields (title, artist, album, BPM) to the audio file's metadata tags.
+/// Writes track info fields (title, artist, album, genre, BPM) to the audio file's metadata tags.
 /// Only updates fields that are Some; leaves existing values for None fields.
 pub fn write_track_info<P: AsRef<Path>>(
     path: P,
     title: Option<&str>,
     artist: Option<&str>,
     album: Option<&str>,
+    genre: Option<&str>,
     bpm: Option<i64>,
 ) -> Result<()> {
     let path_ref = path.as_ref();
@@ -262,6 +263,13 @@ pub fn write_track_info<P: AsRef<Path>>(
         }
     }
 
+    if let Some(g) = genre {
+        tag.remove_key(&ItemKey::Genre);
+        if !g.is_empty() {
+            tag.insert_text(ItemKey::Genre, g.to_string());
+        }
+    }
+
     if let Some(b) = bpm {
         tag.remove_key(&ItemKey::Bpm);
         if b > 0 {
@@ -301,6 +309,7 @@ pub fn read_full_metadata<P: AsRef<Path>>(path: P) -> Result<TrackImportMeta> {
     let artist = get(&ItemKey::TrackArtist);
     let title = get(&ItemKey::TrackTitle);
     let album = get(&ItemKey::AlbumTitle);
+    let genre = get(&ItemKey::Genre);
     let comment = get(&ItemKey::Comment);
     let grouping = get(&ItemKey::ContentGroup);
     let bpm = get(&ItemKey::Bpm).and_then(|s| s.trim().parse::<i64>().ok());
@@ -323,6 +332,7 @@ pub fn read_full_metadata<P: AsRef<Path>>(path: P) -> Result<TrackImportMeta> {
         artist,
         title,
         album,
+        genre,
         track_number,
         duration_secs,
         bpm,

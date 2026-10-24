@@ -41,6 +41,7 @@ export const MetadataViewer: React.FC<Props> = ({ track }) => {
           <Label>Title</Label> <Value>{track.title || '-'}</Value>
           <Label>Artist</Label> <Value>{track.artist || '-'}</Value>
           <Label>Album</Label> <Value>{track.album || '-'}</Value>
+          <Label>Genre</Label> <Value>{track.genre || '-'}</Value>
           <Label>Grouping</Label> <Value>{track.grouping_raw || '-'}</Value>
           <Label>Rating</Label> <Value>{track.rating || 0}</Value>
           <Label>Duration</Label> <Value>{Math.floor(track.duration_secs / 60)}:{(track.duration_secs % 60).toFixed(0).padStart(2, '0')}</Value>

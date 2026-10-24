@@ -21,6 +21,7 @@ struct ExportTrack: Encodable {
     let artist: String?
     let title: String?
     let album: String?
+    let genre: String?
     let comment_raw: String?
     let grouping_raw: String?
     let duration_secs: Double
@@ -53,6 +54,7 @@ func main() {
             let artist = item.artist?.name
             let title = item.title
             let album = item.album.title
+            let genre: String? = item.genre.isEmpty ? nil : item.genre
             
             // Comments & User Grouping
             let comment = item.comments
@@ -97,6 +99,7 @@ func main() {
                 artist: artist,
                 title: title,
                 album: album,
+                genre: genre,
                 comment_raw: comment,
                 grouping_raw: grouping,
                 duration_secs: duration,

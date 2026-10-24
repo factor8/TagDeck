@@ -304,6 +304,7 @@ mod tests {
             artist: Some("Artist & Co".to_string()),
             title: Some(format!("Track {}", id)),
             album: None,
+            genre: None,
             comment_raw: Some("#house #\"peak\"".to_string()),
             grouping_raw: None,
             duration_secs: 245.6,

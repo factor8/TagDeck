@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 
 use crate::models::{Track, Playlist};
@@ -28,6 +28,8 @@ struct ExternalTrack {
     pub artist: Option<String>,
     pub title: Option<String>,
     pub album: Option<String>,
+    #[serde(default)]
+    pub genre: Option<String>,
     pub comment_raw: Option<String>,
     pub grouping_raw: Option<String>,
     pub duration_secs: f64,
@@ -50,6 +52,7 @@ impl ExternalTrack {
             artist: self.artist,
             title: self.title,
             album: self.album,
+            genre: self.genre,
             comment_raw: self.comment_raw,
             grouping_raw: self.grouping_raw,
             duration_secs: self.duration_secs,
@@ -115,4 +118,67 @@ pub async fn fetch_system_library(app: &AppHandle) -> Result<(Vec<Track>, Vec<Pl
         .collect();
 
     Ok((tracks, playlists))
+}
+
+const GENRE_BACKFILL_KEY: &str = "genre_backfill_done";
+
+/// One-time fill of the `genre` column for libraries imported before TagDeck
+/// stored genres. Reads the whole Music.app library once via the sidecar and
+/// sets genre on linked tracks that still have none (see
+/// `Database::backfill_genres_by_itunes_pid`), then flags the library so this
+/// never runs again. Emits "genre-backfill-completed" so the UI refreshes.
+pub fn backfill_genres_from_music(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<crate::commands::AppState>();
+        let log = |level: &str, msg: &str| {
+            app.state::<crate::logging::LogState>().add_log(level, msg, &app);
+        };
+        {
+            let Ok(db) = state.db.lock() else { return };
+            if db.get_config(GENRE_BACKFILL_KEY).ok().flatten().is_some() {
+                return;
+            }
+            let linked: i64 = db.conn
+                .query_row("SELECT COUNT(*) FROM tracks WHERE itunes_pid IS NOT NULL", [], |r| r.get(0))
+                .unwrap_or(0);
+            if linked == 0 {
+                let _ = db.set_config(GENRE_BACKFILL_KEY, "1");
+                return;
+            }
+        }
+        if !crate::apple_music::is_apple_music_available() {
+            // Try again next launch; nothing to read from yet.
+            return;
+        }
+        let tracks = match fetch_system_library(&app).await {
+            Ok((tracks, _)) => tracks,
+            Err(e) => {
+                log("WARN", &format!("Genre backfill: could not read the Music app library: {}", e));
+                return;
+            }
+        };
+        let genres: Vec<(String, String)> = tracks
+            .into_iter()
+            .filter_map(|t| Some((t.itunes_pid?, t.genre?)))
+            .filter(|(_, g)| !g.is_empty())
+            .collect();
+        let changed = {
+            let Ok(db) = state.db.lock() else { return };
+            match db.backfill_genres_by_itunes_pid(&genres) {
+                Ok(n) => {
+                    let _ = db.set_config(GENRE_BACKFILL_KEY, "1");
+                    n
+                }
+                Err(e) => {
+                    log("ERROR", &format!("Genre backfill failed: {}", e));
+                    return;
+                }
+            }
+        };
+        log("INFO", &format!("Genre backfill: filled genre on {} of {} linked tracks from Music.app", changed, genres.len()));
+        if changed > 0 {
+            state.rekordbox_dirty.mark();
+            let _ = app.emit("genre-backfill-completed", serde_json::json!({ "updated": changed }));
+        }
+    });
 }

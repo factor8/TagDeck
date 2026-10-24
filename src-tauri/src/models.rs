@@ -8,6 +8,10 @@ pub struct Track {
     pub artist: Option<String>,
     pub title: Option<String>,
     pub album: Option<String>,
+    /// Genre, as iTunes / the file tag store it. Editable; pushed to Music.app
+    /// and written to the file like title/artist/album.
+    #[serde(default)]
+    pub genre: Option<String>,
     pub comment_raw: Option<String>,
     pub grouping_raw: Option<String>,
     pub duration_secs: f64,

@@ -54,6 +54,10 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             .get("Album")
             .and_then(|v| v.as_string())
             .map(|s| s.to_string());
+        let genre = track_info
+            .get("Genre")
+            .and_then(|v| v.as_string())
+            .map(|s| s.to_string());
         let comments = track_info
             .get("Comments")
             .and_then(|v| v.as_string())
@@ -131,6 +135,7 @@ pub fn parse_library<P: AsRef<Path>>(path: P) -> Result<Vec<Track>> {
             artist,
             title: name,
             album,
+            genre,
             comment_raw: comments,
             grouping_raw: grouping,
             duration_secs: (total_time_ms as f64) / 1000.0,
